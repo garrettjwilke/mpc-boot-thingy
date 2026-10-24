@@ -66,14 +66,7 @@ jobs:
           mkdir -p dist/mpc-boot-thingy-sd
           ./setup.sh --SD dist/mpc-boot-thingy-sd
           cat > dist/mpc-boot-thingy-sd/CARD.txt <<'EOF'
-          Copy the contents of this folder onto the root of the SD card.
-          The card should then contain autorun/ and os_tools/.
-
-          SSH, no key file. The password is empty (press Enter):
-            ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1
-
-          Web page:
-            http://192.168.155.1:8080
+          Copy the contents of this folder to the root of your SD card.
           EOF
 
       - name: Check the card tree
@@ -122,26 +115,7 @@ jobs:
           TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          fp=$(ssh-keygen -lf dist/mpc-boot-thingy-sd/autorun/ssh_host_ed25519_key.pub)
-          notes=$(mktemp)
-          cat > "$notes" <<EOF
-          Copy the contents of \`mpc-boot-thingy-sd/\` onto the root of the SD card. The card should then contain \`autorun/\` and \`os_tools/\`.
-
-          SSH, no key file. The password is empty (press Enter):
-
-          \`\`\`
-          ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1
-          \`\`\`
-
-          Web page: http://192.168.155.1:8080
-
-          This download's SSH host fingerprint:
-
-          \`\`\`
-          ${fp}
-          \`\`\`
-          EOF
           gh release create "$TAG" dist/mpc-boot-thingy-sd.zip \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --notes-file "$notes"
+            --notes "Copy the contents of \`mpc-boot-thingy-sd/\` to the root of your SD card."
