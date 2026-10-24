@@ -22,7 +22,9 @@ Usage:
   ./setup.sh -h
   ./setup.sh --help
   ./setup.sh --SD "/path/to/mounted/SD"
+  ./setup.sh --SD "/path/to/mounted/SD" --tools
   ./setup.sh --ssh
+  ./setup.sh --ssh --tools
   ./setup.sh --reboot
   ./setup.sh --ssh -r
 
@@ -93,10 +95,19 @@ From the computer:
 The password is empty: press Enter. The first connection asks you to
 trust this MPC. Plug in the USB cable before you turn the MPC on.
 
-SSH and the web terminal both start bash. Aliases and exports belong in
-os_tools/.bashrc on the card. Setup keeps that file when it updates the
-tools. bash, vim, nano, rsync, curl, htop, and the others are on PATH
-from os_tools/bin. They are not boot-menu apps.
+SSH and the web terminal both start bash from os_tools/bin. Aliases and
+exports belong in os_tools/.bashrc on the card. Setup keeps that file
+when it updates the shell.
+
+--tools
+  Also install vim, nano, busybox-full, rsync, curl, htop, and the
+  other shell utilities into os_tools/bin. Pass this when setting up
+  a dev card. The GitHub release runs setup without this flag, so the
+  published card has bash and omits these utilities. They are not
+  boot-menu apps.
+
+  ./setup.sh --SD "/path/to/mounted/SD" --tools
+  ./setup.sh --ssh --tools
 
 The web page is on that same USB link:
 
@@ -313,28 +324,55 @@ install_app() {
 }
 
 ensure_toolkit() {
-  if [ -n "${MPC_TOOLKIT_SRC:-}" ]; then
-    return
-  fi
-  dest=$ROOT/.mpc-cache/os_tools
-  if [ -x "$dest/bin/vim" ] && [ -f "$dest/toolkit/lib/ld-musl-aarch64.so.1" ] &&
-     [ -f "$dest/bin/bash" ] && grep -q 'set -- -l -i' "$dest/bin/bash"; then
-    return
+  if [ -n "$TOOLS" ]; then
+    if [ -n "${MPC_TOOLKIT_TOOLS_SRC:-}" ]; then
+      return
+    fi
+    dest=$ROOT/.mpc-cache/os_tools-dev
+    if [ -x "$dest/bin/vim" ] && [ -x "$dest/bin/nano" ] && [ -x "$dest/bin/busybox-full" ] &&
+       [ -x "$dest/bin/bash" ] && [ -f "$dest/toolkit/lib/ld-musl-aarch64.so.1" ] &&
+       grep -q 'set -- -l -i' "$dest/bin/bash"; then
+      return
+    fi
+    fetch_args=--tools
+    fetch_msg="Fetching dev tools into $dest"
+  else
+    if [ -n "${MPC_TOOLKIT_SRC:-}" ]; then
+      return
+    fi
+    dest=$ROOT/.mpc-cache/os_tools
+    if [ -x "$dest/bin/bash" ] && [ -f "$dest/toolkit/lib/ld-musl-aarch64.so.1" ] &&
+       grep -q 'set -- -l -i' "$dest/bin/bash" &&
+       [ ! -e "$dest/bin/vim" ] && [ ! -e "$dest/bin/nano" ] &&
+       [ ! -e "$dest/bin/busybox-full" ]; then
+      return
+    fi
+    fetch_args=
+    fetch_msg="Fetching bash into $dest"
   fi
   if ! command -v python3 >/dev/null 2>&1; then
-    echo "ERROR: python3 is required to fetch the SSH tools" >&2
+    echo "ERROR: python3 is required to fetch the shell tools" >&2
     exit 1
   fi
-  echo "Fetching SSH tools into $dest"
-  python3 "$ROOT/fetch-toolkit.py" "$dest"
+  echo "$fetch_msg"
+  # fetch_args is empty unless --tools was passed.
+  python3 "$ROOT/fetch-toolkit.py" $fetch_args "$dest"
 }
 
 toolkit_src() {
+  if [ -n "$TOOLS" ]; then
+    if [ -n "${MPC_TOOLKIT_TOOLS_SRC:-}" ]; then
+      printf '%s\n' "$MPC_TOOLKIT_TOOLS_SRC"
+      return
+    fi
+    printf '%s\n' "$ROOT/.mpc-cache/os_tools-dev"
+    return
+  fi
   if [ -n "${MPC_TOOLKIT_SRC:-}" ]; then
     printf '%s\n' "$MPC_TOOLKIT_SRC"
-  else
-    printf '%s\n' "$ROOT/.mpc-cache/os_tools"
+    return
   fi
+  printf '%s\n' "$ROOT/.mpc-cache/os_tools"
 }
 
 copy_toolkit() {
@@ -640,7 +678,10 @@ EOF
   echo "Installed mpc-boot-thingy in $A"
   echo "SSH, no key file. Password is empty (press Enter):"
   echo "  ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1"
-  echo "SSH tools are in $sd/os_tools/bin"
+  echo "Bash is in $sd/os_tools/bin"
+  if [ -n "$TOOLS" ]; then
+    echo "Dev tools are in $sd/os_tools/bin"
+  fi
   echo "Web page:"
   echo "  http://192.168.155.1:8080"
   if command -v ssh-keygen >/dev/null 2>&1 && [ -s "$A/ssh_host_ed25519_key.pub" ]; then
@@ -728,7 +769,10 @@ install_over_ssh() {
     tar -C "$stage" --format ustar -cf - autorun os_tools
   } | ssh_mpc "$ask" 'IFS= read -r dest; mkdir -p "$dest"; hold=$(mktemp -d); for n in .bashrc .bash_profile; do if [ -f "$dest/os_tools/$n" ]; then cp "$dest/os_tools/$n" "$hold/$n"; fi; done; rm -rf "$dest/os_tools"; tar -C "$dest" -xf -; mkdir -p "$dest/os_tools"; for n in .bashrc .bash_profile; do if [ -f "$hold/$n" ]; then cp "$hold/$n" "$dest/os_tools/$n"; fi; done; rm -rf "$hold"'
   echo "Updated $media over SSH. Menu entries are kept."
-  echo "SSH tools are in $media/os_tools/bin"
+  echo "Bash is in $media/os_tools/bin"
+  if [ -n "$TOOLS" ]; then
+    echo "Dev tools are in $media/os_tools/bin"
+  fi
   if [ "$keep_key" = 0 ] && command -v ssh-keygen >/dev/null 2>&1 && [ -s "$stage/autorun/ssh_host_ed25519_key.pub" ]; then
     echo "This MPC's fingerprint:"
     ssh-keygen -lf "$stage/autorun/ssh_host_ed25519_key.pub"
@@ -755,6 +799,7 @@ ADD=
 TITLE=
 SSH_MODE=
 REBOOT=
+TOOLS=
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)
@@ -791,6 +836,9 @@ while [ $# -gt 0 ]; do
     -r|--reboot)
       REBOOT=1
       ;;
+    --tools)
+      TOOLS=1
+      ;;
     *)
       usage >&2
       exit 1
@@ -798,6 +846,15 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ -n "$TOOLS" ] && [ -n "$ADD" ]; then
+  echo "ERROR: --tools is not used with --add" >&2
+  exit 1
+fi
+if [ -n "$TOOLS" ] && [ -z "$SD" ] && [ -z "$SSH_MODE" ]; then
+  echo "ERROR: --tools needs --SD or --ssh" >&2
+  exit 1
+fi
 
 if [ -n "$REBOOT" ] && { [ -n "$SD" ] || [ -n "$ADD" ] || [ -n "$TITLE" ]; }; then
   echo "ERROR: --reboot only works alone or with --ssh" >&2

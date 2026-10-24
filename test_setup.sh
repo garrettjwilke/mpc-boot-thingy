@@ -58,6 +58,19 @@ printf '%s\n' "$out" | grep -q -- '--ssh' || fail "help missing --ssh"
 printf '%s\n' "$out" | grep -q -- '--reboot' || fail "help missing --reboot"
 printf '%s\n' "$out" | grep -q 'os_tools/bin' || fail "help missing os_tools"
 printf '%s\n' "$out" | grep -q 'os_tools/.bashrc' || fail "help missing bashrc"
+printf '%s\n' "$out" | grep -q -- '--tools' || fail "help missing --tools"
+if python3 ./fetch-toolkit.py >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
+  fail "fetch-toolkit without a directory should fail"
+fi
+grep -q -- '--tools' /tmp/mpc-boot-err || fail "fetch-toolkit usage should mention --tools"
+if ./setup.sh --tools >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--tools alone should fail"; fi
+grep -q 'needs --SD or --ssh' /tmp/mpc-boot-err || fail "--tools alone should explain itself"
+if ./setup.sh --reboot --tools >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--tools --reboot should fail"; fi
+grep -q 'needs --SD or --ssh' /tmp/mpc-boot-err || fail "--tools --reboot should explain itself"
+if ./setup.sh --SD /tmp --add /tmp/x --tools >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--tools --add should fail"; fi
+grep -q 'not used with --add' /tmp/mpc-boot-err || fail "--tools --add should explain itself"
+if ./setup.sh --ssh --add /tmp/x --tools >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--ssh --tools --add should fail"; fi
+grep -q 'not used with --add' /tmp/mpc-boot-err || fail "--ssh --tools --add should explain itself"
 ./setup.sh -h >/dev/null
 ./setup.sh >/dev/null
 
@@ -70,24 +83,40 @@ if ./setup.sh --SD "/no/such/mpc-boot-thingy-$$" >/tmp/mpc-boot-out 2>/tmp/mpc-b
 work=$(mktemp -d "${TMPDIR:-/tmp}/mpc-boot-thingy-setup.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-# Fixture stands in for the downloaded toolkit so these checks stay offline.
+# Fixtures stand in for the downloaded toolkit so these checks stay offline.
+# The default tree is bash. --tools copies the dev tree.
 fix=$work/toolkit-src
 mkdir -p "$fix/bin" "$fix/toolkit/bin" "$fix/toolkit/lib"
-printf '#!/bin/sh\necho vim\n' > "$fix/bin/vim"
-chmod 755 "$fix/bin/vim"
-printf 'real-vim\n' > "$fix/toolkit/bin/vim"
+printf '#!/bin/sh\necho bash\n' > "$fix/bin/bash"
+chmod 755 "$fix/bin/bash"
+printf 'real-bash\n' > "$fix/toolkit/bin/bash"
 printf 'ld\n' > "$fix/toolkit/lib/ld-musl-aarch64.so.1"
-printf 'marker\n' > "$fix/toolkit/marker"
+printf 'bash-marker\n' > "$fix/toolkit/marker"
 export MPC_TOOLKIT_SRC=$fix
+devfix=$work/toolkit-dev
+mkdir -p "$devfix/bin" "$devfix/toolkit/bin" "$devfix/toolkit/lib"
+printf '#!/bin/sh\necho bash\n' > "$devfix/bin/bash"
+chmod 755 "$devfix/bin/bash"
+printf '#!/bin/sh\necho vim\n' > "$devfix/bin/vim"
+chmod 755 "$devfix/bin/vim"
+printf '#!/bin/sh\necho busybox\n' > "$devfix/bin/busybox-full"
+chmod 755 "$devfix/bin/busybox-full"
+printf 'real-vim\n' > "$devfix/toolkit/bin/vim"
+printf 'ld\n' > "$devfix/toolkit/lib/ld-musl-aarch64.so.1"
+printf 'dev-marker\n' > "$devfix/toolkit/marker"
+export MPC_TOOLKIT_TOOLS_SRC=$devfix
 
 # Empty card: no prompt, installs, check matches, script does not mention a backup.
 empty=$work/empty
 mkdir "$empty"
 ./setup.sh --SD "$empty" >/tmp/mpc-boot-out
 grep -q 'os_tools/bin' /tmp/mpc-boot-out || fail "install did not name os_tools"
-test -x "$empty/os_tools/bin/vim"
-cmp "$fix/bin/vim" "$empty/os_tools/bin/vim"
+if grep -q 'Dev tools are in' /tmp/mpc-boot-out; then fail "default install announced dev tools"; fi
+test -x "$empty/os_tools/bin/bash"
+cmp "$fix/bin/bash" "$empty/os_tools/bin/bash"
 cmp "$fix/toolkit/marker" "$empty/os_tools/toolkit/marker"
+test ! -e "$empty/os_tools/bin/vim"
+test ! -e "$empty/os_tools/bin/busybox-full"
 test -f "$empty/os_tools/.bashrc"
 grep -q 'BASH_SOURCE' "$empty/os_tools/.bashrc"
 grep -q 'PATH' "$empty/os_tools/.bashrc"
@@ -149,7 +178,8 @@ printf '\nalias ll="ls -l"\n' >> "$empty/os_tools/.bashrc"
 grep -q 'Updating it' /tmp/mpc-boot-out || fail "reinstall should update without asking"
 test ! -e "$empty/os_tools/stray" || fail "reinstall left a file in os_tools"
 grep -q 'alias ll=' "$empty/os_tools/.bashrc" || fail "reinstall replaced .bashrc"
-test -x "$empty/os_tools/bin/vim"
+test -x "$empty/os_tools/bin/bash"
+test ! -e "$empty/os_tools/bin/vim"
 cmp "$fix/toolkit/marker" "$empty/os_tools/toolkit/marker"
 grep -q 'title=Snake' "$empty/autorun/boot-menu/30-snake.entry" || fail "reinstall removed a menu entry"
 test "$(shasum -a 256 "$empty/autorun/ssh_host_ed25519_key" | awk '{print $1}')" = "$hostkey" || fail "reinstall replaced the server identity"
@@ -186,7 +216,8 @@ test ! -d "$ssh/os_tools"
 pty_setup y "$ssh" >/tmp/mpc-boot-out
 test -d "$ssh"/autorun-backup-*
 test -f "$ssh/autorun/mpc-boot-thingy.mark"
-test -x "$ssh/os_tools/bin/vim"
+test -x "$ssh/os_tools/bin/bash"
+test ! -e "$ssh/os_tools/bin/vim"
 test ! -e "$ssh/bin"
 test ! -e "$ssh/toolkit"
 test ! -d "$ssh/apps"
@@ -241,7 +272,8 @@ test ! -e "$empty/apps/lab-firmware/extra.c"
 ./setup.sh --SD "$empty" >/tmp/mpc-boot-out
 cmp "$proj/mpcfw" "$empty/apps/lab-firmware/mpcfw"
 grep -q 'title=Snake' "$empty/autorun/boot-menu/30-snake.entry"
-test -x "$empty/os_tools/bin/vim"
+test -x "$empty/os_tools/bin/bash"
+test ! -e "$empty/os_tools/bin/vim"
 test ! -e "$empty/apps/os_tools"
 
 # --ssh finds the one /media directory and overwrites without a backup prompt.
@@ -327,8 +359,16 @@ grep -q 'systemd-run --unit=mpc-boot-web' "$card/autorun/autorun.sh"
 test -f "$card/autorun/web/index.html"
 test ! -e "$card/os_tools/stray" || fail "ssh install left a file in os_tools"
 grep -q 'alias kept=yes' "$card/os_tools/.bashrc" || fail "ssh install replaced .bashrc"
-test -x "$card/os_tools/bin/vim"
+test -x "$card/os_tools/bin/bash"
+test ! -e "$card/os_tools/bin/vim"
 cmp "$fix/toolkit/marker" "$card/os_tools/toolkit/marker"
+PATH="$bin:$PATH" FAKE_ROOT=$remote ./setup.sh --ssh --tools >/tmp/mpc-boot-out
+grep -q 'Dev tools are in /media/Lab Card/os_tools/bin' /tmp/mpc-boot-out || fail "ssh --tools did not name the dev tools"
+test -x "$card/os_tools/bin/vim"
+test -x "$card/os_tools/bin/busybox-full"
+test -x "$card/os_tools/bin/bash"
+cmp "$devfix/toolkit/marker" "$card/os_tools/toolkit/marker"
+grep -q 'alias kept=yes' "$card/os_tools/.bashrc" || fail "ssh --tools replaced .bashrc"
 test ! -e "$card/bin"
 test ! -e "$card/toolkit"
 test ! -d "$card/apps"
@@ -392,7 +432,28 @@ EOF
   mkdir "$xcard"
   PATH="$cpx:$PATH" ./setup.sh --SD "$xcard" >/tmp/mpc-boot-out
   test -f "$xcard/autorun/mpc-boot-web" || fail "attribute failure stopped the copy"
-  test -x "$xcard/os_tools/bin/vim" || fail "attribute failure stopped the tools"
+  test -x "$xcard/os_tools/bin/bash" || fail "attribute failure stopped bash"
+  test ! -e "$xcard/os_tools/bin/vim" || fail "attribute copy included vim"
 fi
+
+# --tools installs vim and busybox-full. Updating without the flag
+# returns the card to bash and keeps .bashrc.
+devcard=$work/dev
+mkdir "$devcard"
+./setup.sh --SD "$devcard" --tools >/tmp/mpc-boot-out
+grep -q 'Dev tools are in' /tmp/mpc-boot-out || fail "tools install did not name the dev tools"
+test -x "$devcard/os_tools/bin/bash"
+test -x "$devcard/os_tools/bin/vim"
+test -x "$devcard/os_tools/bin/busybox-full"
+cmp "$devfix/bin/vim" "$devcard/os_tools/bin/vim"
+cmp "$devfix/toolkit/marker" "$devcard/os_tools/toolkit/marker"
+printf '\nalias ll="ls -l"\n' >> "$devcard/os_tools/.bashrc"
+./setup.sh --SD "$devcard" >/tmp/mpc-boot-out
+test ! -e "$devcard/os_tools/bin/vim" || fail "update without --tools left vim"
+test ! -e "$devcard/os_tools/bin/busybox-full" || fail "update without --tools left busybox-full"
+test -x "$devcard/os_tools/bin/bash"
+cmp "$fix/bin/bash" "$devcard/os_tools/bin/bash"
+cmp "$fix/toolkit/marker" "$devcard/os_tools/toolkit/marker"
+grep -q 'alias ll=' "$devcard/os_tools/.bashrc" || fail "update without --tools replaced .bashrc"
 
 echo "setup fixtures ok"
