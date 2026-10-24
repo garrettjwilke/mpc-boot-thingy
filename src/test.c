@@ -73,6 +73,23 @@ int main(void) {
     assert(strcmp(m.items[2].title, "Snake") == 0);
     assert(strcmp(m.items[2].run, "apps/snake") == 0);
     assert(strcmp(m.items[2].base, dir) == 0);
+    assert(strcmp(m.items[0].id, "stock") == 0);
+    assert(strcmp(m.items[1].id, "app:20-lab") == 0);
+    assert(strcmp(m.items[2].id, "entry:30-snake.entry") == 0);
+    assert(menu_default_index(&m, dir) == 0);
+    assert(menu_default_index(NULL, dir) == 0);
+
+    snprintf(path, sizeof path, "%s/autorun/boot-default", dir);
+    write_file(path, "app:20-lab\n");
+    assert(menu_default_index(&m, dir) == 1);
+    write_file(path, "  entry:30-snake.entry\r\n");
+    assert(menu_default_index(&m, dir) == 2);
+    write_file(path, "stock\n");
+    assert(menu_default_index(&m, dir) == 0);
+    write_file(path, "\n");
+    assert(menu_default_index(&m, dir) == 0);
+    write_file(path, "app:missing\n");
+    assert(menu_default_index(&m, dir) == 0);
 
     char buf[64];
     char *av[8];
@@ -84,7 +101,10 @@ int main(void) {
 
     struct menu empty;
     assert(menu_load(&empty, NULL) == 1 && empty.items[0].stock);
+    assert(strcmp(empty.items[0].id, "stock") == 0);
+    assert(menu_default_index(&empty, NULL) == 0);
     assert(menu_load(&empty, "/no/such/boot-menu") == 1 && empty.items[0].stock);
+    assert(menu_default_index(&empty, "/no/such/boot-menu") == 0);
 
     puts("selftest ok");
     return 0;

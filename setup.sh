@@ -4,6 +4,16 @@ set -eu
 
 ROOT=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd)
 SALT='f7bed1c9-7e90-4731-9194-c996666b4331'
+
+# exFAT has nowhere to put macOS extended attributes. cp still exits 1
+# after writing the file, which would stop setup on the first binary.
+card_cp() {
+  if [ "$(uname -s)" = Darwin ]; then
+    cp -X "$@"
+  else
+    cp "$@"
+  fi
+}
 SSH_CHECK='e5a0adf36e44a7872bf991dc5e110daf702445a15735aefa067411cfb979d128'
 
 usage() {
@@ -59,8 +69,10 @@ copies the executable into apps/ and writes boot.entry. It does not
 change autorun/:
 
   ./setup.sh --SD "/path/to/mounted/SD" --add /path/to/program --title "Lab firmware"
+  ./setup.sh --ssh --add /path/to/program
 
 --title is optional. Without it, the file name is the menu label.
+With --ssh, the card is the one directory under /media on the MPC.
 If --add is a project folder that already contains boot.entry, only
 that file and the program it names are copied. Other files in the
 project stay where they are.
@@ -81,11 +93,24 @@ From the computer:
 The password is empty: press Enter. The first connection asks you to
 trust this MPC. Plug in the USB cable before you turn the MPC on.
 
+SSH and the web terminal both start bash. Aliases and exports belong in
+os_tools/.bashrc on the card. Setup keeps that file when it updates the
+tools. bash, vim, nano, rsync, curl, htop, and the others are on PATH
+from os_tools/bin. They are not boot-menu apps.
+
+The web page is on that same USB link:
+
+  http://192.168.155.1:8080
+
+From the page you can install a boot program, choose the program that
+starts when SHIFT is not held, reboot the MPC, and open a shell.
+
 --ssh
   Update the card already mounted on the MPC. This is for a machine
   that already runs this boot setup. There is no backup question.
   The card is the one directory under /media, whatever its name is.
   Menu entries and an existing server identity are left in place.
+  With --add, only that program is copied. The boot menu is not replaced.
 
 -r, --reboot
   Reboot the MPC over SSH. Alone, it only reboots. With --ssh, it
@@ -163,7 +188,7 @@ backup_autorun() {
     dest=$sd/autorun-backup-$ts-$n
     n=$((n + 1))
   done
-  cp -a "$sd/autorun" "$dest"
+  card_cp -a "$sd/autorun" "$dest"
   echo "Backed up to $dest"
 }
 
@@ -245,13 +270,13 @@ install_app() {
       extra=$(entry_field args "$src/boot.entry" || true)
       if [ -n "$extra" ]; then printf 'args=%s\n' "$extra" >> "$dest/boot.entry"; fi
     else
-      cp "$src/boot.entry" "$dest/boot.entry"
+      card_cp "$src/boot.entry" "$dest/boot.entry"
     fi
     case "$run" in
       /*) ;;
       *)
         mkdir -p "$dest/$(dirname -- "$run")"
-        cp "$src/$run" "$dest/$run"
+        card_cp "$src/$run" "$dest/$run"
         chmod 755 "$dest/$run"
         ;;
     esac
@@ -281,10 +306,97 @@ install_app() {
   esac
   dest=$sd/apps/$name
   mkdir -p "$dest"
-  cp "$src" "$dest/$bin"
+  card_cp "$src" "$dest/$bin"
   chmod 755 "$dest/$bin"
   printf 'title=%s\nrun=%s\n' "$title" "$bin" > "$dest/boot.entry"
   echo "Installed $title in $dest"
+}
+
+ensure_toolkit() {
+  if [ -n "${MPC_TOOLKIT_SRC:-}" ]; then
+    return
+  fi
+  dest=$ROOT/.mpc-cache/os_tools
+  if [ -x "$dest/bin/vim" ] && [ -f "$dest/toolkit/lib/ld-musl-aarch64.so.1" ] &&
+     [ -f "$dest/bin/bash" ] && grep -q 'set -- -l -i' "$dest/bin/bash"; then
+    return
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 is required to fetch the SSH tools" >&2
+    exit 1
+  fi
+  echo "Fetching SSH tools into $dest"
+  python3 "$ROOT/fetch-toolkit.py" "$dest"
+}
+
+toolkit_src() {
+  if [ -n "${MPC_TOOLKIT_SRC:-}" ]; then
+    printf '%s\n' "$MPC_TOOLKIT_SRC"
+  else
+    printf '%s\n' "$ROOT/.mpc-cache/os_tools"
+  fi
+}
+
+copy_toolkit() {
+  sd=$1
+  if [ -z "$sd" ] || [ "$sd" = / ]; then
+    echo "ERROR: refusing to write tools onto $sd" >&2
+    exit 1
+  fi
+  src=$(toolkit_src)
+  if [ ! -d "$src/bin" ] || [ ! -d "$src/toolkit" ]; then
+    echo "ERROR: toolkit is missing: $src" >&2
+    exit 1
+  fi
+  hold=$(mktemp -d)
+  for name in .bashrc .bash_profile; do
+    if [ -f "$sd/os_tools/$name" ]; then
+      card_cp "$sd/os_tools/$name" "$hold/$name"
+    fi
+  done
+  rm -rf "$sd/os_tools"
+  mkdir -p "$sd/os_tools"
+  card_cp -R "$src/bin" "$src/toolkit" "$sd/os_tools/"
+  for name in .bashrc .bash_profile; do
+    if [ -f "$hold/$name" ]; then
+      card_cp "$hold/$name" "$sd/os_tools/$name"
+    fi
+  done
+  rm -rf "$hold"
+  write_shell_rc "$sd/os_tools"
+}
+
+write_shell_rc() {
+  dest=$1
+  if [ ! -f "$dest/.bashrc" ]; then
+    cat > "$dest/.bashrc" <<'RC'
+# Shell settings for this card. Add aliases and exports below.
+# Setup keeps this file when it updates os_tools.
+
+_src=${BASH_SOURCE[0]}
+if command -v readlink >/dev/null 2>&1; then
+  _real=$(readlink -f "$_src" 2>/dev/null || true)
+  if [ -n "$_real" ]; then
+    _src=$_real
+  fi
+fi
+_os=$(CDPATH= cd -- "$(dirname -- "$_src")" && pwd)
+case ":${PATH}:" in
+  *":${_os}/bin:"*) ;;
+  *) PATH="${_os}/bin:${PATH}" ;;
+esac
+export PATH
+unset _src _real _os
+RC
+  fi
+  if [ ! -f "$dest/.bash_profile" ]; then
+    cat > "$dest/.bash_profile" <<'RC'
+# Login shells read this file. Aliases and exports belong in .bashrc.
+if [ -f "$HOME/.bashrc" ]; then
+  . "$HOME/.bashrc"
+fi
+RC
+  fi
 }
 
 write_autorun() {
@@ -309,12 +421,23 @@ write_autorun() {
 EOF
   cat > "$A/autorun.sh" <<'EOF'
 #!/bin/sh
-# mpc-boot-thingy. Starts the boot menu and a keyless USB SSH shell.
+# mpc-boot-thingy. Starts the boot menu, the web page, and a keyless USB SSH shell.
+# edisksd mounts the card noexec on boot and again when the card is inserted.
+# This script runs for both, so unlock execution before starting anything.
 set -eu
 D=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
+if mount -o remount,exec "$card"; then
+  echo "remount exec $card"
+else
+  echo "WARN: could not remount exec $card"
+fi
 cp "$D/mpc-boot-thingy" /run/mpc-boot-thingy
 chmod 755 /run/mpc-boot-thingy
 systemd-run --unit=mpc-boot-thingy --collect --no-block /run/mpc-boot-thingy "$D"
+if ! systemctl is-active --quiet mpc-boot-web.service; then
+  systemd-run --unit=mpc-boot-web --collect --no-block /bin/sh "$D/web.sh"
+fi
 if systemctl is-active --quiet mpc-boot-ssh.service; then
   exit 0
 fi
@@ -391,11 +514,94 @@ while ! grep -q '192.168.155.1' /proc/net/fib_trie 2>/dev/null; do
   usb_wait=$((usb_wait + 1))
 done
 echo "USB_IP_READY waited_seconds=$usb_wait"
+card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
+mkdir -p /root
+if [ -f "$card/os_tools/.bashrc" ]; then
+  ln -sfn "$card/os_tools/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
+else
+  echo 'WARN: os_tools/.bashrc is missing'
+fi
+if [ -f "$card/os_tools/.bash_profile" ]; then
+  ln -sfn "$card/os_tools/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
+fi
+if [ -x "$card/os_tools/bin/bash" ] && [ -r /etc/passwd ]; then
+  awk -F: -v shell="$card/os_tools/bin/bash" 'BEGIN{OFS=":"} $1=="root" {$7=shell} {print}' /etc/passwd > "$RAM/passwd"
+  chmod 644 "$RAM/passwd"
+  if mount --bind "$RAM/passwd" /etc/passwd; then
+    echo "SHELL_BASH $card/os_tools/bin/bash"
+  else
+    echo 'WARN: could not make bash the login shell'
+  fi
+else
+  echo 'WARN: bash is missing; login shell was not changed'
+fi
+if [ ! -d "$card/os_tools/bin" ]; then
+  echo 'WARN: os_tools/bin is missing; tools were not added to PATH'
+elif [ ! -r /etc/profile ]; then
+  echo 'WARN: /etc/profile is not readable; tools were not added to PATH'
+elif ! cp /etc/profile "$RAM/profile"; then
+  echo 'WARN: could not add os_tools to PATH'
+else
+  printf '\nexport PATH="%s:$PATH"\n' "$card/os_tools/bin" >> "$RAM/profile"
+  if mount --bind "$RAM/profile" /etc/profile; then
+    echo "PATH_TOOLS $card/os_tools/bin"
+  else
+    echo 'WARN: could not add os_tools to PATH'
+  fi
+fi
 /usr/sbin/sshd -t -f "$RAM/sshd_config"
 log_to_card
 exec /usr/sbin/sshd -D -e -f "$RAM/sshd_config"
 EOF
   chmod 755 "$A/ssh.sh"
+  cat > "$A/web.sh" <<'EOF'
+#!/bin/sh
+# Web page on the USB link.
+set -eu
+D=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+RAM=/run/mpc-boot-web
+mkdir -p "$RAM"
+: > "$RAM/web.log"
+exec >> "$RAM/web.log" 2>&1
+echo 'MPC_BOOT_WEB_START'
+remount_card() {
+  card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
+  if mount -o remount,exec "$card"; then
+    echo "remount exec $card"
+  else
+    echo "WARN: could not remount exec $card"
+  fi
+}
+remount_card
+bin=$D/mpc-boot-web
+if ! "$bin" --check >/dev/null 2>&1; then
+  echo 'card binary did not run, copying into /run'
+  cp "$D/mpc-boot-web" "$RAM/mpc-boot-web"
+  chmod 755 "$RAM/mpc-boot-web"
+  bin=$RAM/mpc-boot-web
+fi
+usb_wait=0
+while ! grep -q '192.168.155.1' /proc/net/fib_trie 2>/dev/null; do
+  if [ "$usb_wait" -ge 45 ]; then
+    echo 'ERROR: USB IP absent after 45 seconds'
+    exit 1
+  fi
+  sleep 1
+  usb_wait=$((usb_wait + 1))
+done
+echo "USB_IP_READY waited_seconds=$usb_wait"
+remount_card
+card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
+mkdir -p /root
+if [ -f "$card/os_tools/.bashrc" ]; then
+  ln -sfn "$card/os_tools/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
+fi
+if [ -f "$card/os_tools/.bash_profile" ]; then
+  ln -sfn "$card/os_tools/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
+fi
+exec "$bin" "$D" 8080 192.168.155.1
+EOF
+  chmod 755 "$A/web.sh"
   if [ ! -s "$A/ssh_host_ed25519_key" ]; then
     if ! command -v ssh-keygen >/dev/null 2>&1; then
       echo "ERROR: ssh-keygen is required to create the server identity" >&2
@@ -413,15 +619,30 @@ EOF
     exit 1
   fi
   printf '%s' "$digest" > "$A/autorun.check"
-  cp "$ROOT/build/mpc-boot-thingy" "$A/mpc-boot-thingy"
+  if [ ! -x "$ROOT/build/mpc-boot-web" ]; then
+    echo "ERROR: build did not produce $ROOT/build/mpc-boot-web" >&2
+    exit 1
+  fi
+  card_cp "$ROOT/build/mpc-boot-thingy" "$A/mpc-boot-thingy"
   chmod 755 "$A/mpc-boot-thingy"
+  card_cp "$ROOT/build/mpc-boot-web" "$A/mpc-boot-web"
+  chmod 755 "$A/mpc-boot-web"
+  mkdir -p "$A/web"
+  card_cp "$ROOT/webserver/index.html" "$ROOT/webserver/xterm.js" \
+    "$ROOT/webserver/xterm.css" "$ROOT/webserver/xterm-addon-fit.js" \
+    "$ROOT/webserver/xterm.LICENSE" "$A/web/"
   printf '%s\n' mpc-boot-thingy > "$A/mpc-boot-thingy.mark"
+  ensure_toolkit
+  copy_toolkit "$sd"
   if [ "${2:-}" = quiet ]; then
     return
   fi
   echo "Installed mpc-boot-thingy in $A"
   echo "SSH, no key file. Password is empty (press Enter):"
   echo "  ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1"
+  echo "SSH tools are in $sd/os_tools/bin"
+  echo "Web page:"
+  echo "  http://192.168.155.1:8080"
   if command -v ssh-keygen >/dev/null 2>&1 && [ -s "$A/ssh_host_ed25519_key.pub" ]; then
     echo "This MPC's fingerprint:"
     ssh-keygen -lf "$A/ssh_host_ed25519_key.pub"
@@ -444,18 +665,13 @@ ssh_mpc() {
     "$MPC_HOST" "$@"
 }
 
-install_over_ssh() {
-  if [ ! -x "$ROOT/build/mpc-boot-thingy" ]; then
-    make -C "$ROOT"
-  fi
-  if [ ! -x "$ROOT/build/mpc-boot-thingy" ]; then
-    echo "ERROR: build did not produce $ROOT/build/mpc-boot-thingy" >&2
-    exit 1
-  fi
+ssh_ask_begin() {
   ask=$(mktemp)
   printf '#!/bin/sh\nexit 0\n' > "$ask"
   chmod 755 "$ask"
-  trap 'rm -f "$ask"' EXIT
+}
+
+mpc_media_path() {
   media=$(ssh_mpc "$ask" 'find /media -mindepth 1 -maxdepth 1 -type d') || {
     echo "ERROR: could not reach the MPC over SSH" >&2
     exit 1
@@ -470,6 +686,33 @@ install_over_ssh() {
     printf '%s\n' "$media" >&2
     exit 1
   fi
+  printf '%s\n' "$media"
+}
+
+add_over_ssh() {
+  ssh_ask_begin
+  stage=$(mktemp -d)
+  trap 'rm -f "$ask"; rm -rf "$stage"' EXIT
+  media=$(mpc_media_path) || exit 1
+  install_app "$stage" "$ADD" "$TITLE"
+  {
+    printf '%s\n' "$media"
+    tar -C "$stage" --format ustar -cf - apps
+  } | ssh_mpc "$ask" 'IFS= read -r dest; tar -C "$dest" -xf -'
+  echo "Updated the app on $media over SSH."
+}
+
+install_over_ssh() {
+  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ]; then
+    make -C "$ROOT"
+  fi
+  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ]; then
+    echo "ERROR: build did not produce the boot and web binaries" >&2
+    exit 1
+  fi
+  ssh_ask_begin
+  trap 'rm -f "$ask"' EXIT
+  media=$(mpc_media_path) || exit 1
   stage=$(mktemp -d)
   trap 'rm -f "$ask"; rm -rf "$stage"' EXIT
   keep_key=0
@@ -482,9 +725,10 @@ install_over_ssh() {
   fi
   {
     printf '%s\n' "$media"
-    tar -C "$stage" --format ustar -cf - autorun
-  } | ssh_mpc "$ask" 'IFS= read -r dest; mkdir -p "$dest"; tar -C "$dest" -xf -'
+    tar -C "$stage" --format ustar -cf - autorun os_tools
+  } | ssh_mpc "$ask" 'IFS= read -r dest; mkdir -p "$dest"; hold=$(mktemp -d); for n in .bashrc .bash_profile; do if [ -f "$dest/os_tools/$n" ]; then cp "$dest/os_tools/$n" "$hold/$n"; fi; done; rm -rf "$dest/os_tools"; tar -C "$dest" -xf -; mkdir -p "$dest/os_tools"; for n in .bashrc .bash_profile; do if [ -f "$hold/$n" ]; then cp "$hold/$n" "$dest/os_tools/$n"; fi; done; rm -rf "$hold"'
   echo "Updated $media over SSH. Menu entries are kept."
+  echo "SSH tools are in $media/os_tools/bin"
   if [ "$keep_key" = 0 ] && command -v ssh-keygen >/dev/null 2>&1 && [ -s "$stage/autorun/ssh_host_ed25519_key.pub" ]; then
     echo "This MPC's fingerprint:"
     ssh-keygen -lf "$stage/autorun/ssh_host_ed25519_key.pub"
@@ -566,9 +810,17 @@ if [ -n "$REBOOT" ] && [ -z "$SSH_MODE" ]; then
 fi
 
 if [ -n "$SSH_MODE" ]; then
-  if [ -n "$SD" ] || [ -n "$ADD" ] || [ -n "$TITLE" ]; then
-    echo "ERROR: --ssh does not take --SD, --add, or --title" >&2
+  if [ -n "$SD" ]; then
+    echo "ERROR: --ssh does not take --SD" >&2
     exit 1
+  fi
+  if [ -n "$TITLE" ] && [ -z "$ADD" ]; then
+    echo "ERROR: --title needs --add" >&2
+    exit 1
+  fi
+  if [ -n "$ADD" ]; then
+    add_over_ssh
+    exit 0
   fi
   install_over_ssh
   if [ -n "$REBOOT" ]; then
@@ -613,11 +865,11 @@ if [ -n "$ADD" ]; then
   exit 0
 fi
 
-if [ ! -x "$ROOT/build/mpc-boot-thingy" ]; then
+if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ]; then
   make -C "$ROOT"
 fi
-if [ ! -x "$ROOT/build/mpc-boot-thingy" ]; then
-  echo "ERROR: build did not produce $ROOT/build/mpc-boot-thingy" >&2
+if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ]; then
+  echo "ERROR: build did not produce the boot and web binaries" >&2
   exit 1
 fi
 

@@ -46,18 +46,21 @@ struct found {
     char key[256];
     char path[512];
     char base[512];
+    char id[MENU_ID];
 };
 
 static int found_cmp(const void *a, const void *b) {
     return strcmp(((const struct found *)a)->key, ((const struct found *)b)->key);
 }
 
-static int push_found(struct found *f, int n, int max, const char *key, const char *path, const char *base) {
+static int push_found(struct found *f, int n, int max, const char *key, const char *path, const char *base, const char *id) {
     if (n >= max) return n;
     if (strlen(key) >= sizeof f->key || strlen(path) >= sizeof f->path || strlen(base) >= sizeof f->base) return n;
+    if (strlen(id) >= sizeof f->id) return n;
     snprintf(f[n].key, sizeof f[n].key, "%s", key);
     snprintf(f[n].path, sizeof f[n].path, "%s", path);
     snprintf(f[n].base, sizeof f[n].base, "%s", base);
+    snprintf(f[n].id, sizeof f[n].id, "%s", id);
     return n + 1;
 }
 
@@ -74,9 +77,10 @@ static int collect_entries(struct found *f, int n, int max, const char *dir, con
     while ((de = readdir(d)) != NULL && n < max) {
         if (de->d_name[0] == '.') continue;
         if (!ends_with(de->d_name, ".entry")) continue;
-        char path[512];
+        char path[512], id[MENU_ID];
         if (join2(path, sizeof path, dir, de->d_name) != 0) continue;
-        n = push_found(f, n, max, de->d_name, path, base);
+        if (snprintf(id, sizeof id, "entry:%s", de->d_name) >= (int)sizeof id) continue;
+        n = push_found(f, n, max, de->d_name, path, base, id);
     }
     closedir(d);
     return n;
@@ -95,7 +99,9 @@ static int collect_apps(struct found *f, int n, int max, const char *apps) {
         if (stat(folder, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
         if (join2(path, sizeof path, folder, "boot.entry") != 0) continue;
         if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
-        n = push_found(f, n, max, de->d_name, path, folder);
+        char id[MENU_ID];
+        if (snprintf(id, sizeof id, "app:%s", de->d_name) >= (int)sizeof id) continue;
+        n = push_found(f, n, max, de->d_name, path, folder, id);
     }
     closedir(d);
     return n;
@@ -104,6 +110,7 @@ static int collect_apps(struct found *f, int n, int max, const char *apps) {
 int menu_load(struct menu *m, const char *card) {
     memset(m, 0, sizeof *m);
     snprintf(m->items[0].title, sizeof m->items[0].title, "Stock");
+    snprintf(m->items[0].id, sizeof m->items[0].id, "stock");
     m->items[0].stock = 1;
     m->n = 1;
     if (!card || !card[0]) return m->n;
@@ -122,9 +129,33 @@ int menu_load(struct menu *m, const char *card) {
         struct menu_entry e;
         if (parse_entry(found[i].path, &e) != 0) continue;
         snprintf(e.base, sizeof e.base, "%s", found[i].base);
+        snprintf(e.id, sizeof e.id, "%s", found[i].id);
         m->items[m->n++] = e;
     }
     return m->n;
+}
+
+int menu_default_index(const struct menu *m, const char *card) {
+    if (!m || m->n < 1 || !card || !card[0]) return 0;
+    char path[512];
+    int wr = snprintf(path, sizeof path, "%s/autorun/boot-default", card);
+    if (wr < 0 || (size_t)wr >= sizeof path) return 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char line[MENU_ID];
+    if (!fgets(line, sizeof line, f)) {
+        fclose(f);
+        return 0;
+    }
+    int truncated = strchr(line, '\n') == NULL && !feof(f);
+    fclose(f);
+    if (truncated) return 0;
+    trim(line);
+    if (!line[0] || strcmp(line, "stock") == 0) return 0;
+    for (int i = 0; i < m->n; i++) {
+        if (strcmp(m->items[i].id, line) == 0) return i;
+    }
+    return 0;
 }
 
 int menu_split_args(const char *args, char *buf, size_t buf_n, char **out, int max) {

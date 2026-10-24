@@ -1,4 +1,5 @@
-/* mpc-boot-thingy: after the splash, SHIFT opens the menu. Waiting starts the stock app. */
+/* mpc-boot-thingy: after the splash, SHIFT opens the menu.
+   Waiting starts the saved default, or Stock when none is saved. */
 #include "draw.h"
 #include "menu.h"
 #include "screen.h"
@@ -347,16 +348,30 @@ int main(int argc, char **argv) {
     show_prompt();
     printf("prompt: hold SHIFT for boot thingy\n");
     fflush(stdout);
-    if (!wait_shift(fd)) {
-        all_off(fd);
-        close(fd);
-        hw_screen_close();
-        restore_stock_if_stopped();
-        return 0;
-    }
-
+    int held = wait_shift(fd);
     struct menu menu;
     menu_load(&menu, card);
+    if (!held) {
+        int idx = menu_default_index(&menu, card);
+        if (idx <= 0) {
+            all_off(fd);
+            close(fd);
+            hw_screen_close();
+            restore_stock_if_stopped();
+            return 0;
+        }
+        int ran = launch(&fd, card, &menu.items[idx]);
+        if (ran == 1) return 0;
+        if (ran != 2) {
+            fd = reopen_after_app();
+            if (fd < 0) {
+                hw_screen_close();
+                restore_stock_if_stopped();
+                return 1;
+            }
+        }
+    }
+
     struct parser p = {0};
     struct listen k = {.n = menu.n};
     show(&menu, k.sel);
