@@ -20,7 +20,7 @@
 #define NOTE_PADBANK 35
 #define NOTE_ENCODER 111
 #define CC_ENCODER 100
-#define WINDOW_MS 5000
+#define WINDOW_MS 1000
 
 static int stopped_ac50;
 
