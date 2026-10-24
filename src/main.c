@@ -115,13 +115,21 @@ static int read_frame(struct surface *midi, struct parser *p, struct input_dev *
     }
 }
 
+static int poll_ms(int wake, double started) {
+    if (wake <= 0) return 200;
+    int spent = (int)(mono_ms() - started);
+    if (spent < 0) spent = 0;
+    if (spent >= wake) return 0;
+    return wake - spent;
+}
+
 static void present(struct screen *scr, const uint32_t *front, int rects[][4], int n) {
     for (int i = 0; i < n; i++) {
         int x0 = rects[i][0], y0 = rects[i][1], x1 = rects[i][2], y1 = rects[i][3];
         for (int y = y0; y < y1; y++)
             memcpy(scr->px + y * scr->stride + x0, front + y * UI_W + x0, (size_t)(x1 - x0) * 4);
-        screen_flush(scr, x0, y0, x1, y1);
     }
+    screen_flush(scr, rects, n);
 }
 
 static void draw_pixels(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi, struct ui *u) {
@@ -437,13 +445,14 @@ int main(int argc, char **argv) {
     boot_ui_init(&ui, &menu, theme, def);
     struct input quiet;
     input_begin(&quiet, &dev);
+    double started = mono_ms();
     int wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
     print_menu(&menu, ui.apps_ls.cursor);
 
     int rc = 1;
     for (;;) {
         struct pollfd pf = {.fd = midi.fd, .events = POLLIN};
-        int pr = poll(&pf, 1, wake > 0 ? wake : 200);
+        int pr = poll(&pf, 1, poll_ms(wake, started));
         if (pr < 0) {
             if (errno == EINTR) continue;
             break;
@@ -451,6 +460,7 @@ int main(int argc, char **argv) {
         if (pr == 0) {
             if (wake <= 0) continue;
             input_begin(&quiet, &dev);
+            started = mono_ms();
             wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             continue;
         }
@@ -458,6 +468,7 @@ int main(int argc, char **argv) {
         int got = read_frame(&midi, &parser, &dev, &in);
         if (got < 0) break;
         if (!got) continue;
+        started = mono_ms();
         wake = draw_menu_frame(&scr, back, front, &midi, &in, &ui);
 
         if (ui.action == BOOT_ACT_LAUNCH) {
@@ -475,6 +486,7 @@ int main(int argc, char **argv) {
                 dev = (struct input_dev){0};
             }
             input_begin(&quiet, &dev);
+            started = mono_ms();
             wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             continue;
         }
@@ -482,6 +494,7 @@ int main(int argc, char **argv) {
             int failed = persist(&ui, card) != 0;
             if (failed || ui.action == BOOT_ACT_SET_DEFAULT) {
                 input_begin(&quiet, &dev);
+                started = mono_ms();
                 wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             }
         }
