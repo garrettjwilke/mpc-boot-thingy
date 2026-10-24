@@ -886,28 +886,6 @@ static int body_id(const char *body, char *out, size_t n) {
     return out[0] ? 0 : -1;
 }
 
-static int write_default_file(const char *id) {
-    char path[PATH_MAX], tmp[PATH_MAX], line[MENU_ID + 2];
-    int fd, n;
-    if (snprintf(path, sizeof path, "%s/autorun/boot-default", g_card) >= (int)sizeof path ||
-        snprintf(tmp, sizeof tmp, "%s/autorun/boot-default.tmp", g_card) >= (int)sizeof tmp) {
-        return -1;
-    }
-    n = snprintf(line, sizeof line, "%s\n", id);
-    if (n < 0 || (size_t)n >= sizeof line) return -1;
-    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-    if (fd < 0 || write_full(fd, line, (size_t)n) != 0 || close(fd) != 0) {
-        if (fd >= 0) close(fd);
-        unlink(tmp);
-        return -1;
-    }
-    if (rename(tmp, path) != 0) {
-        unlink(tmp);
-        return -1;
-    }
-    return 0;
-}
-
 static void handle_default(int fd, struct io *io, int has_len, size_t content_len) {
     char raw[1024], id[MENU_ID];
     struct menu menu;
@@ -934,7 +912,7 @@ static void handle_default(int fd, struct io *io, int has_len, size_t content_le
         send_err(fd, 400, "Bad Request", "that id is not in the menu");
         return;
     }
-    if (write_default_file(id) != 0) {
+    if (menu_set_default(g_card, id) != 0) {
         send_err(fd, 500, "Internal Server Error", "could not save the default");
         return;
     }

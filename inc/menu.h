@@ -34,6 +34,9 @@ int menu_load(struct menu *m, const char *card);
    A missing file, a blank line, "stock", or an unknown id returns 0. */
 int menu_default_index(const struct menu *m, const char *card);
 
+/* Writes id and a newline to card/autorun/boot-default. 0 on success. */
+int menu_set_default(const char *card, const char *id);
+
 /* Split args on spaces into out[0..). Copies into buf, which must stay alive.
    Returns the number of words. */
 int menu_split_args(const char *args, char *buf, size_t buf_n, char **out, int max);

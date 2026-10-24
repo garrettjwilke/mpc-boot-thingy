@@ -1,5 +1,8 @@
 /* Host self-test: Stock first, drop-in apps and older boot-menu files, bad files skipped. */
+#include "boot_ui.h"
+#include "input.h"
 #include "menu.h"
+#include "theme.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -105,6 +108,130 @@ int main(void) {
     assert(menu_default_index(&empty, NULL) == 0);
     assert(menu_load(&empty, "/no/such/boot-menu") == 1 && empty.items[0].stock);
     assert(menu_default_index(&empty, "/no/such/boot-menu") == 0);
+
+    assert(menu_set_default(NULL, "stock") != 0);
+    assert(menu_set_default(dir, "") != 0);
+    assert(menu_set_default(dir, "app:20-lab") == 0);
+    assert(menu_default_index(&m, dir) == 1);
+    assert(menu_set_default(dir, "entry:30-snake.entry") == 0);
+    assert(menu_default_index(&m, dir) == 2);
+    assert(menu_set_default("/no/such/boot-menu", "stock") != 0);
+
+    assert(theme_count() == 4);
+    assert(strcmp(theme_at(0)->id, "amber") == 0);
+    assert(theme_at(0)->bg == 0x101014 && theme_at(0)->hl == 0xffb000);
+    assert(theme_load(dir) == 0);
+    assert(theme_load(NULL) == 0);
+    assert(theme_save(dir, 99) != 0);
+    assert(theme_save(NULL, 1) != 0);
+    assert(theme_save(dir, 2) == 0);
+    assert(theme_load(dir) == 2);
+    assert(strcmp(theme_at(theme_load(dir))->name, "Green") == 0);
+    snprintf(path, sizeof path, "%s/autorun/boot-theme", dir);
+    write_file(path, "nope\n");
+    assert(theme_load(dir) == 0);
+    write_file(path, "  blue\n");
+    assert(theme_load(dir) == 1);
+
+    static uint32_t px[UI_W * UI_H];
+    struct ui view = {.px = px};
+    struct boot_ui boot;
+    boot_ui_init(&boot, &m, 0, 0);
+    struct input in;
+    input_begin(&in, 0);
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_APPS);
+    in.down = 1u << IN_B3;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_SETTINGS);
+
+    boot_ui_init(&boot, &m, 0, 1);
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.apps_ls.cursor == 1);
+    assert(boot.action == BOOT_ACT_NONE);
+    input_begin(&in, 0);
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    boot_frame(&view, &in, &boot);
+    assert(boot.shift_menu.shown == 1);
+    assert(boot.shift_menu.n == 2);
+    assert(strcmp(boot.shift_menu.items[0].label, "Yes") == 0);
+    assert(strcmp(boot.shift_menu.items[1].label, "No") == 0);
+    assert(px[50 * UI_W + 262] == theme_at(0)->menu_fill);
+    input_begin(&in, 0);
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_SET_DEFAULT);
+    assert(strcmp(boot.action_id, "app:20-lab") == 0);
+
+    boot_ui_init(&boot, &m, 0, 0);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B3;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_SETTINGS);
+    assert(boot.settings_ls.cursor == 1);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_THEME);
+    assert(boot.theme == 0);
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.theme == 1);
+    assert(px[0] == theme_at(1)->bg);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_SETTINGS);
+    assert(boot.theme == 0);
+    assert(px[0] == theme_at(0)->bg);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_THEME);
+    input_begin(&in, 0);
+    in.encoder = 2;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_SAVE_THEME);
+    assert(boot.action_index == 2);
+    assert(boot.saved_theme == 2);
+    assert(boot.screen == BOOT_SCREEN_SETTINGS);
+
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_APPS);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B3;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.encoder = -1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.settings_ls.cursor == 0);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_DEFAULT);
+    input_begin(&in, 0);
+    in.encoder = 2;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_SET_DEFAULT);
+    assert(strcmp(boot.action_id, "entry:30-snake.entry") == 0);
+    assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
     puts("selftest ok");
     return 0;

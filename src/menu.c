@@ -1,10 +1,13 @@
 #include "menu.h"
 
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 static void trim(char *s) {
     char *a = s;
@@ -154,6 +157,44 @@ int menu_default_index(const struct menu *m, const char *card) {
     if (!line[0] || strcmp(line, "stock") == 0) return 0;
     for (int i = 0; i < m->n; i++) {
         if (strcmp(m->items[i].id, line) == 0) return i;
+    }
+    return 0;
+}
+
+static int write_all(int fd, const char *buf, size_t n) {
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, buf + off, n - off);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (w == 0) return -1;
+        off += (size_t)w;
+    }
+    return 0;
+}
+
+int menu_set_default(const char *card, const char *id) {
+    char path[512], tmp[512], line[MENU_ID + 2];
+    if (!card || !card[0] || !id || !id[0] || strlen(id) >= MENU_ID) return -1;
+    if (strchr(id, '\n') || strchr(id, '\r')) return -1;
+    int pw = snprintf(path, sizeof path, "%s/autorun/boot-default", card);
+    int tw = snprintf(tmp, sizeof tmp, "%s/autorun/boot-default.tmp", card);
+    if (pw < 0 || (size_t)pw >= sizeof path || tw < 0 || (size_t)tw >= sizeof tmp) return -1;
+    int n = snprintf(line, sizeof line, "%s\n", id);
+    if (n < 0 || (size_t)n >= sizeof line) return -1;
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (fd < 0) return -1;
+    int rc = write_all(fd, line, (size_t)n);
+    if (close(fd) != 0) rc = -1;
+    if (rc != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    if (rename(tmp, path) != 0) {
+        unlink(tmp);
+        return -1;
     }
     return 0;
 }

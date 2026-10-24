@@ -1,14 +1,17 @@
-/* mpc-boot-thingy: after the splash, SHIFT opens the menu.
+/* mpc-boot-thingy: after the splash, holding Shift opens the menu.
    Waiting starts the saved default, or Stock when none is saved. */
-#include "draw.h"
+#include "boot_ui.h"
+#include "input.h"
 #include "menu.h"
 #include "screen.h"
 #include "surface.h"
+#include "theme.h"
+#include "ui.h"
 
 #include <errno.h>
 #include <fcntl.h>
-#include <stdarg.h>
 #include <poll.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,10 +20,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#define NOTE_SHIFT 49
-#define NOTE_PADBANK 35
-#define NOTE_ENCODER 111
-#define CC_ENCODER 100
 #define WINDOW_MS 1000
 
 static int stopped_ac50;
@@ -50,108 +49,120 @@ static int systemctl_ac50(const char *verb) {
     return run_cmd(argv);
 }
 
-static int open_midi_raw(char *path, size_t path_n) {
-    path[0] = 0;
-    int card = card_by_path("/dev/snd/by-path/platform-fe670000.serial");
-    if (card < 0) {
-        fputs("control surface not found\n", stderr);
-        return -1;
-    }
-    snprintf(path, path_n, "/dev/snd/midiC%dD0", card);
-    return open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
-}
-
-/* Stop the stock app once so the panel port can be opened. */
-static int open_midi_claim(void) {
-    char path[40];
-    int fd = open_midi_raw(path, sizeof path);
-    if (fd >= 0) return fd;
-    if (!path[0]) return -1;
-    if (errno != EBUSY) {
-        fprintf(stderr, "%s: %s\n", path, strerror(errno));
-        return -1;
-    }
-    if (systemctl_ac50("stop") != 0) return -1;
-    stopped_ac50 = 1;
-    for (int i = 0; i < 40; i++) {
-        usleep(50 * 1000);
-        fd = open_midi_raw(path, sizeof path);
-        if (fd >= 0) return fd;
-        if (errno != EBUSY) {
-            fprintf(stderr, "%s: %s\n", path, strerror(errno));
-            return -1;
-        }
-    }
-    fprintf(stderr, "%s: %s\n", path, strerror(errno));
-    return -1;
-}
-
 static void restore_stock_if_stopped(void) {
     if (stopped_ac50) systemctl_ac50("start");
 }
 
-struct listen {
-    int shift;
-    int combo;
-    int sel;
-    int n;
-    int confirm;
-    int moved;
-};
-
-static void on_shift(const unsigned char *m, struct listen *k) {
-    int st = m[0] & 0xF0, ch = (m[0] & 0x0F) + 1;
-    if (ch != 1) return;
-    if (st == 0x90 && m[1] == NOTE_SHIFT && m[2] > 0) k->combo = 1;
+/* Quiet check used while ac50 is stopping. surface_open logs every failure. */
+static int probe_midi(void) {
+    char link[64];
+    ssize_t n = readlink("/dev/snd/by-path/platform-fe670000.serial", link, sizeof link - 1);
+    if (n <= 0) return -1;
+    link[n] = 0;
+    char *c = strstr(link, "controlC");
+    if (!c) return -1;
+    int card = 0;
+    for (c += 8; *c >= '0' && *c <= '9'; c++) card = card * 10 + (*c - '0');
+    char path[40];
+    snprintf(path, sizeof path, "/dev/snd/midiC%dD0", card);
+    int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return -1;
+    close(fd);
+    return 0;
 }
 
-static void on_menu(const unsigned char *m, struct listen *k) {
-    int st = m[0] & 0xF0, ch = (m[0] & 0x0F) + 1;
-    if (ch != 1 || k->n < 1) return;
-    if (st == 0xB0 && m[1] == CC_ENCODER) {
-        int step = m[2] > 64 ? (int)m[2] - 128 : (int)m[2];
-        if (step) {
-            int dir = step > 0 ? 1 : -1;
-            k->sel = (k->sel + dir + k->n) % k->n;
-            k->moved = 1;
+static int open_surface_claim(struct surface *midi) {
+    if (surface_open(midi) == 0) return 0;
+    /* surface_open logs, and that can clear errno, so probe the port again. */
+    if (probe_midi() == 0) return surface_open(midi);
+    if (errno != EBUSY) return -1;
+    if (systemctl_ac50("stop") != 0) return -1;
+    stopped_ac50 = 1;
+    for (int i = 0; i < 40; i++) {
+        usleep(50 * 1000);
+        if (probe_midi() == 0) return surface_open(midi);
+        if (errno != EBUSY) return -1;
+    }
+    return -1;
+}
+
+static void button_led(struct surface *s, int note, int value) {
+    unsigned char m[3] = {0xB0, (unsigned char)(note & 0x7f), (unsigned char)(value & 0x7f)};
+    if (!s || s->fd < 0) return;
+    size_t off = 0;
+    while (off < sizeof m) {
+        ssize_t w = write(s->fd, m + off, sizeof m - off);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return;
         }
-    } else if (st == 0x90 && m[1] == NOTE_ENCODER && m[2] > 0) {
-        k->confirm = 1;
+        if (w == 0) return;
+        off += (size_t)w;
     }
 }
 
-static int pump(int fd, struct parser *p, struct listen *k, void (*fn)(const unsigned char *, struct listen *)) {
-    unsigned char buf[128];
+static int read_frame(struct surface *midi, struct parser *p, struct input_dev *dev, struct input *in) {
+    input_begin(in, dev);
+    unsigned char buf[256];
+    int any = 0;
     for (;;) {
-        ssize_t n = read(fd, buf, sizeof buf);
-        if (n < 0) return errno == EAGAIN || errno == EINTR ? 0 : -1;
-        if (n == 0) return 0;
+        ssize_t n = read(midi->fd, buf, sizeof buf);
+        if (n < 0) return errno == EAGAIN || errno == EINTR ? any : -1;
+        if (n == 0) return any;
+        any = 1;
         for (ssize_t i = 0; i < n; i++)
-            if (feed(p, buf[i])) fn(p->msg, k);
+            if (parser_feed(p, buf[i])) input_push(dev, in, p->msg);
     }
 }
 
-static void show_prompt(void) {
-    if (!hw_fb) return;
-    draw_prompt(hw_fb, hw_stride, 320, 240);
-    hw_screen_flush(0, 0, 320, 240);
+static void present(struct screen *scr, const uint32_t *front, int rects[][4], int n) {
+    for (int i = 0; i < n; i++) {
+        int x0 = rects[i][0], y0 = rects[i][1], x1 = rects[i][2], y1 = rects[i][3];
+        for (int y = y0; y < y1; y++)
+            memcpy(scr->px + y * scr->stride + x0, front + y * UI_W + x0, (size_t)(x1 - x0) * 4);
+        screen_flush(scr, x0, y0, x1, y1);
+    }
 }
 
-static int wait_shift(int fd) {
-    struct parser p = {0};
-    struct listen k = {0};
-    led(fd, NOTE_SHIFT, 8);
+static void draw_pixels(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi, struct ui *u) {
+    int rects[UI_H][4];
+    int n = ui_changes(back, front, rects);
+    if (scr->px) present(scr, front, rects, n);
+    for (int i = 0; i < u->nled; i++)
+        surface_pad(midi, u->led[i].index, u->led[i].r, u->led[i].g, u->led[i].b);
+}
+
+static void draw_prompt(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi, int theme) {
+    struct ui u = {.px = back};
+    boot_draw_prompt(&u, theme);
+    draw_pixels(scr, back, front, midi, &u);
+}
+
+static void draw_menu_frame(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi,
+                            const struct input *in, struct boot_ui *ui) {
+    struct ui u = {.px = back};
+    boot_frame(&u, in, ui);
+    draw_pixels(scr, back, front, midi, &u);
+}
+
+static int wait_shift(struct surface *midi, struct parser *p, struct input_dev *dev) {
+    button_led(midi, INPUT_BUTTON_NOTE[IN_SHIFT], 8);
     double start = mono_ms();
+    int held = 0;
     while (mono_ms() - start < WINDOW_MS) {
-        struct pollfd pf = {.fd = fd, .events = POLLIN};
+        struct pollfd pf = {.fd = midi->fd, .events = POLLIN};
         int left = (int)(WINDOW_MS - (mono_ms() - start));
         if (left < 1) left = 1;
         if (poll(&pf, 1, left > 50 ? 50 : left) < 0 && errno != EINTR) break;
-        if (pump(fd, &p, &k, on_shift) < 0) break;
-        if (k.combo) break;
+        struct input in;
+        if (read_frame(midi, p, dev, &in) < 0) break;
+        if (dev->shift) {
+            held = 1;
+            break;
+        }
     }
-    led(fd, NOTE_SHIFT, 0);
-    return k.combo;
+    button_led(midi, INPUT_BUTTON_NOTE[IN_SHIFT], 0);
+    return held;
 }
 
 static void card_root_of(const char *autorun, char *out, size_t n) {
@@ -251,25 +262,13 @@ static void resolve_run(const char *card, const char *run, char *out, size_t n) 
     else snprintf(out, n, "%s/%s", card, run);
 }
 
-static void show(const struct menu *m, int sel) {
-    if (hw_fb) {
-        draw_menu(hw_fb, hw_stride, 320, 240, m, sel);
-        hw_screen_flush(0, 0, 320, 240);
-    }
-    printf("menu:\n");
-    for (int i = 0; i < m->n; i++) printf("%c %s\n", i == sel ? '>' : ' ', m->items[i].title);
-    fflush(stdout);
-}
-
-/* Run one entry. Stock starts ac50 and the caller should exit. Other apps return here. */
-static int launch(int *fd, const char *card, const struct menu_entry *e) {
+/* Run one entry. Stock starts ac50 and the caller should exit. Other apps return here.
+   2 means the panel and screen are still ours. */
+static int launch(struct surface *midi, struct screen *scr, const char *card, const struct menu_entry *e) {
     if (e->stock) {
-        if (*fd >= 0) {
-            all_off(*fd);
-            close(*fd);
-            *fd = -1;
-        }
-        hw_screen_close();
+        surface_all_off(midi);
+        surface_close(midi);
+        screen_close(scr);
         systemctl_ac50("start");
         stopped_ac50 = 0;
         return 1;
@@ -284,7 +283,7 @@ static int launch(int *fd, const char *card, const struct menu_entry *e) {
         if (copy_file(path, "/run/mpc-boot-app") != 0) {
             fprintf(stderr, "cannot run %s\n", path);
             app_log("cannot run %s\n", path);
-            return 2; /* panel and screen are still ours */
+            return 2;
         }
         snprintf(execpath, sizeof execpath, "/run/mpc-boot-app");
     }
@@ -295,12 +294,9 @@ static int launch(int *fd, const char *card, const struct menu_entry *e) {
     int na = menu_split_args(e->args, argbuf, sizeof argbuf, av + 1, 16);
     av[1 + na] = NULL;
 
-    if (*fd >= 0) {
-        all_off(*fd);
-        close(*fd);
-        *fd = -1;
-    }
-    hw_screen_close();
+    surface_all_off(midi);
+    surface_close(midi);
+    screen_close(scr);
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -328,10 +324,45 @@ static int launch(int *fd, const char *card, const struct menu_entry *e) {
     return 0;
 }
 
-static int reopen_after_app(void) {
-    hw_screen_open();
-    int fd = open_midi_claim();
-    return fd;
+static int reopen_after_app(struct surface *midi, struct screen *scr) {
+    if (screen_open(scr) != 0) return -1;
+    if (open_surface_claim(midi) != 0) {
+        screen_close(scr);
+        return -1;
+    }
+    return 0;
+}
+
+static void print_menu(const struct menu *m, int sel) {
+    printf("menu:\n");
+    for (int i = 0; i < m->n; i++) printf("%c %s\n", i == sel ? '>' : ' ', m->items[i].title);
+    fflush(stdout);
+}
+
+static int persist(struct boot_ui *ui, const char *card) {
+    if (ui->action == BOOT_ACT_SET_DEFAULT) {
+        if (menu_set_default(card, ui->action_id) != 0) {
+            ui->default_index = menu_default_index(ui->menu, card);
+            return -1;
+        }
+    } else if (ui->action == BOOT_ACT_SAVE_THEME) {
+        if (theme_save(card, ui->action_index) != 0) {
+            int t = theme_load(card);
+            ui->saved_theme = t;
+            ui->theme = t;
+            ui->theme_ls.cursor = t;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void release_devices(struct surface *midi, struct screen *scr) {
+    if (midi->fd >= 0) {
+        surface_all_off(midi);
+        surface_close(midi);
+    }
+    if (scr->px || scr->fd >= 0) screen_close(scr);
 }
 
 int main(int argc, char **argv) {
@@ -339,70 +370,122 @@ int main(int argc, char **argv) {
     char card[512];
     card_root_of(autorun, card, sizeof card);
 
-    int fd = open_midi_claim();
-    if (fd < 0) {
+    struct surface midi = {.fd = -1};
+    struct screen scr = {.fd = -1};
+    if (open_surface_claim(&midi) != 0) {
         restore_stock_if_stopped();
         return 1;
     }
-    hw_screen_open();
-    show_prompt();
-    printf("prompt: hold SHIFT for boot thingy\n");
-    fflush(stdout);
-    int held = wait_shift(fd);
+    if (screen_open(&scr) != 0) {
+        release_devices(&midi, &scr);
+        restore_stock_if_stopped();
+        return 1;
+    }
+
     struct menu menu;
     menu_load(&menu, card);
+    int theme = theme_load(card);
+    int def = menu_default_index(&menu, card);
+
+    uint32_t *back = calloc((size_t)UI_W * UI_H, sizeof(uint32_t));
+    uint32_t *front = calloc((size_t)UI_W * UI_H, sizeof(uint32_t));
+    if (!back || !front) {
+        free(back);
+        free(front);
+        release_devices(&midi, &scr);
+        restore_stock_if_stopped();
+        return 1;
+    }
+
+    draw_prompt(&scr, back, front, &midi, theme);
+    printf("prompt: hold SHIFT for boot thingy\n");
+    fflush(stdout);
+
+    struct parser parser = {0};
+    struct input_dev dev = {0};
+    int held = wait_shift(&midi, &parser, &dev);
     if (!held) {
-        int idx = menu_default_index(&menu, card);
-        if (idx <= 0) {
-            all_off(fd);
-            close(fd);
-            hw_screen_close();
+        if (def <= 0) {
+            release_devices(&midi, &scr);
             restore_stock_if_stopped();
+            free(back);
+            free(front);
             return 0;
         }
-        int ran = launch(&fd, card, &menu.items[idx]);
-        if (ran == 1) return 0;
+        int ran = launch(&midi, &scr, card, &menu.items[def]);
+        if (ran == 1) {
+            free(back);
+            free(front);
+            return 0;
+        }
         if (ran != 2) {
-            fd = reopen_after_app();
-            if (fd < 0) {
-                hw_screen_close();
+            memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
+            if (reopen_after_app(&midi, &scr) != 0) {
+                release_devices(&midi, &scr);
                 restore_stock_if_stopped();
+                free(back);
+                free(front);
                 return 1;
+            }
+            parser = (struct parser){0};
+            dev = (struct input_dev){0};
+        }
+    }
+
+    struct boot_ui ui;
+    boot_ui_init(&ui, &menu, theme, def);
+    struct input quiet;
+    input_begin(&quiet, &dev);
+    draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+    print_menu(&menu, ui.apps_ls.cursor);
+
+    int rc = 1;
+    for (;;) {
+        struct pollfd pf = {.fd = midi.fd, .events = POLLIN};
+        int pr = poll(&pf, 1, 200);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (pr == 0) continue;
+        struct input in;
+        int got = read_frame(&midi, &parser, &dev, &in);
+        if (got < 0) break;
+        if (!got) continue;
+        draw_menu_frame(&scr, back, front, &midi, &in, &ui);
+
+        if (ui.action == BOOT_ACT_LAUNCH) {
+            int sel = ui.action_index;
+            if (sel < 0 || sel >= menu.n) continue;
+            int ran = launch(&midi, &scr, card, &menu.items[sel]);
+            if (ran == 1) {
+                rc = 0;
+                break;
+            }
+            if (ran != 2) {
+                memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
+                if (reopen_after_app(&midi, &scr) != 0) break;
+                parser = (struct parser){0};
+                dev = (struct input_dev){0};
+            }
+            input_begin(&quiet, &dev);
+            draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            continue;
+        }
+        if (ui.action == BOOT_ACT_SET_DEFAULT || ui.action == BOOT_ACT_SAVE_THEME) {
+            int failed = persist(&ui, card) != 0;
+            if (failed || ui.action == BOOT_ACT_SET_DEFAULT) {
+                input_begin(&quiet, &dev);
+                draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             }
         }
     }
 
-    struct parser p = {0};
-    struct listen k = {.n = menu.n};
-    show(&menu, k.sel);
-
-    for (;;) {
-        k.n = menu.n;
-        k.moved = 0;
-        k.confirm = 0;
-        struct pollfd pf = {.fd = fd, .events = POLLIN};
-        if (poll(&pf, 1, 200) < 0 && errno != EINTR) break;
-        if (pump(fd, &p, &k, on_menu) < 0) break;
-        if (k.moved) show(&menu, k.sel);
-        if (!k.confirm) continue;
-        int ran = launch(&fd, card, &menu.items[k.sel]);
-        if (ran == 1) return 0;
-        if (ran == 2) {
-            show(&menu, k.sel);
-            continue;
-        }
-        fd = reopen_after_app();
-        if (fd < 0) {
-            hw_screen_close();
-            restore_stock_if_stopped();
-            return 1;
-        }
-        p = (struct parser){0};
-        k.confirm = 0;
-        show(&menu, k.sel);
+    if (rc != 0) {
+        release_devices(&midi, &scr);
+        restore_stock_if_stopped();
     }
-    if (fd >= 0) close(fd);
-    hw_screen_close();
-    restore_stock_if_stopped();
-    return 1;
+    free(back);
+    free(front);
+    return rc;
 }
