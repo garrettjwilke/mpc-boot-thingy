@@ -1,0 +1,143 @@
+#include "menu.h"
+
+#include <dirent.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+static void trim(char *s) {
+    char *a = s;
+    while (*a == ' ' || *a == '\t' || *a == '\r') a++;
+    if (a != s) memmove(s, a, strlen(a) + 1);
+    size_t n = strlen(s);
+    while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) s[--n] = 0;
+}
+
+static int ends_with(const char *s, const char *suf) {
+    size_t n = strlen(s), m = strlen(suf);
+    return n >= m && memcmp(s + n - m, suf, m) == 0;
+}
+
+static int parse_entry(const char *path, struct menu_entry *e) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    memset(e, 0, sizeof *e);
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        trim(line);
+        if (!line[0] || line[0] == '#') continue;
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char *key = line, *val = eq + 1;
+        trim(key);
+        trim(val);
+        if (strcmp(key, "title") == 0) snprintf(e->title, sizeof e->title, "%s", val);
+        else if (strcmp(key, "run") == 0) snprintf(e->run, sizeof e->run, "%s", val);
+        else if (strcmp(key, "args") == 0) snprintf(e->args, sizeof e->args, "%s", val);
+    }
+    fclose(f);
+    if (!e->title[0] || !e->run[0]) return -1;
+    return 0;
+}
+
+struct found {
+    char key[256];
+    char path[512];
+    char base[512];
+};
+
+static int found_cmp(const void *a, const void *b) {
+    return strcmp(((const struct found *)a)->key, ((const struct found *)b)->key);
+}
+
+static int push_found(struct found *f, int n, int max, const char *key, const char *path, const char *base) {
+    if (n >= max) return n;
+    if (strlen(key) >= sizeof f->key || strlen(path) >= sizeof f->path || strlen(base) >= sizeof f->base) return n;
+    snprintf(f[n].key, sizeof f[n].key, "%s", key);
+    snprintf(f[n].path, sizeof f[n].path, "%s", path);
+    snprintf(f[n].base, sizeof f[n].base, "%s", base);
+    return n + 1;
+}
+
+static int join2(char *out, size_t n, const char *a, const char *b) {
+    int wr = snprintf(out, n, "%s/%s", a, b);
+    return wr < 0 || (size_t)wr >= n ? -1 : 0;
+}
+
+/* *.entry files in dir. run is relative to base. key is the filename. */
+static int collect_entries(struct found *f, int n, int max, const char *dir, const char *base) {
+    DIR *d = opendir(dir);
+    if (!d) return n;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && n < max) {
+        if (de->d_name[0] == '.') continue;
+        if (!ends_with(de->d_name, ".entry")) continue;
+        char path[512];
+        if (join2(path, sizeof path, dir, de->d_name) != 0) continue;
+        n = push_found(f, n, max, de->d_name, path, base);
+    }
+    closedir(d);
+    return n;
+}
+
+/* apps/<name>/boot.entry. run is relative to that folder. key is the folder name. */
+static int collect_apps(struct found *f, int n, int max, const char *apps) {
+    DIR *d = opendir(apps);
+    if (!d) return n;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && n < max) {
+        if (de->d_name[0] == '.') continue;
+        char folder[512], path[512];
+        if (join2(folder, sizeof folder, apps, de->d_name) != 0) continue;
+        struct stat st;
+        if (stat(folder, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        if (join2(path, sizeof path, folder, "boot.entry") != 0) continue;
+        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        n = push_found(f, n, max, de->d_name, path, folder);
+    }
+    closedir(d);
+    return n;
+}
+
+int menu_load(struct menu *m, const char *card) {
+    memset(m, 0, sizeof *m);
+    snprintf(m->items[0].title, sizeof m->items[0].title, "Stock");
+    m->items[0].stock = 1;
+    m->n = 1;
+    if (!card || !card[0]) return m->n;
+
+    enum { MAX_FILES = 64 };
+    struct found found[MAX_FILES];
+    int nc = 0;
+    char bootmenu[512], apps[512];
+    if (join2(bootmenu, sizeof bootmenu, card, "autorun/boot-menu") == 0)
+        nc = collect_entries(found, nc, MAX_FILES, bootmenu, card);
+    if (join2(apps, sizeof apps, card, "apps") == 0)
+        nc = collect_apps(found, nc, MAX_FILES, apps);
+    qsort(found, (size_t)nc, sizeof found[0], found_cmp);
+
+    for (int i = 0; i < nc && m->n < MENU_MAX; i++) {
+        struct menu_entry e;
+        if (parse_entry(found[i].path, &e) != 0) continue;
+        snprintf(e.base, sizeof e.base, "%s", found[i].base);
+        m->items[m->n++] = e;
+    }
+    return m->n;
+}
+
+int menu_split_args(const char *args, char *buf, size_t buf_n, char **out, int max) {
+    if (!args || !buf || buf_n == 0 || max <= 0) return 0;
+    snprintf(buf, buf_n, "%s", args);
+    int n = 0;
+    char *p = buf;
+    while (*p && n < max) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        out[n++] = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+        if (*p) *p++ = 0;
+    }
+    return n;
+}
