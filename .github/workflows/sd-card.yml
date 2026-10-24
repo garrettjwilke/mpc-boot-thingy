@@ -1,0 +1,147 @@
+name: SD card release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (for example v1.0.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sd-card:
+    runs-on: ubuntu-latest
+    steps:
+      # act already mounts this repository, including the ui toolkit.
+      # Checking out again would replace that tree with GitHub's copy.
+      - uses: actions/checkout@v4
+        if: github.actor != 'nektos/act'
+        with:
+          submodules: recursive
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      # act's cleanup runs `node` without the tool-cache directory on PATH.
+      - name: Put node on the default PATH
+        if: github.actor == 'nektos/act'
+        run: |
+          node_bin=$(find /opt/acttoolcache/node -type f -name node | head -n 1)
+          if [ -z "$node_bin" ]; then
+            echo "node is missing from the act tool cache" >&2
+            exit 1
+          fi
+          ln -sfn "$node_bin" /usr/bin/node
+
+      - name: Check the tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.].+)?$'; then
+            echo "Tag must look like v1.2.3 or v1.2.3-beta" >&2
+            exit 1
+          fi
+
+      - name: Stop if this release already exists
+        if: github.actor != 'nektos/act'
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: make
+
+      - name: Assemble the card tree
+        run: |
+          rm -rf dist/mpc-boot-thingy-sd
+          mkdir -p dist/mpc-boot-thingy-sd
+          ./setup.sh --SD dist/mpc-boot-thingy-sd
+          cat > dist/mpc-boot-thingy-sd/CARD.txt <<'EOF'
+          Copy the contents of this folder onto the root of the SD card.
+          The card should then contain autorun/ and os_tools/.
+
+          SSH, no key file. The password is empty (press Enter):
+            ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1
+
+          Web page:
+            http://192.168.155.1:8080
+          EOF
+
+      - name: Check the card tree
+        run: |
+          card=dist/mpc-boot-thingy-sd
+          test -x "$card/autorun/mpc-boot-thingy"
+          test -x "$card/autorun/mpc-boot-web"
+          file "$card/autorun/mpc-boot-thingy" | grep -q aarch64
+          file "$card/autorun/mpc-boot-web" | grep -q aarch64
+          test -s "$card/os_tools/bin/bash"
+          test -s "$card/autorun/ssh_host_ed25519_key"
+          test -s "$card/autorun/autorun.check"
+          test -f "$card/autorun/web/index.html"
+          test -f "$card/CARD.txt"
+
+      - name: Zip the card tree
+        run: |
+          python3 - <<'PY'
+          import shutil
+          import zipfile
+          shutil.make_archive(
+              "dist/mpc-boot-thingy-sd",
+              "zip",
+              "dist",
+              "mpc-boot-thingy-sd",
+          )
+          need = [
+              "mpc-boot-thingy-sd/autorun/mpc-boot-thingy",
+              "mpc-boot-thingy-sd/autorun/mpc-boot-web",
+              "mpc-boot-thingy-sd/autorun/web/index.html",
+              "mpc-boot-thingy-sd/autorun/ssh_host_ed25519_key",
+              "mpc-boot-thingy-sd/autorun/autorun.check",
+              "mpc-boot-thingy-sd/os_tools/bin/bash",
+              "mpc-boot-thingy-sd/CARD.txt",
+          ]
+          with zipfile.ZipFile("dist/mpc-boot-thingy-sd.zip") as zf:
+              names = set(zf.namelist())
+          missing = [name for name in need if name not in names]
+          if missing:
+              raise SystemExit("zip missing: " + ", ".join(missing))
+          PY
+
+      - name: Publish the release
+        if: github.actor != 'nektos/act'
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          fp=$(ssh-keygen -lf dist/mpc-boot-thingy-sd/autorun/ssh_host_ed25519_key.pub)
+          notes=$(mktemp)
+          cat > "$notes" <<EOF
+          Copy the contents of \`mpc-boot-thingy-sd/\` onto the root of the SD card. The card should then contain \`autorun/\` and \`os_tools/\`.
+
+          SSH, no key file. The password is empty (press Enter):
+
+          \`\`\`
+          ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1
+          \`\`\`
+
+          Web page: http://192.168.155.1:8080
+
+          This download's SSH host fingerprint:
+
+          \`\`\`
+          ${fp}
+          \`\`\`
+          EOF
+          gh release create "$TAG" dist/mpc-boot-thingy-sd.zip \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file "$notes"
