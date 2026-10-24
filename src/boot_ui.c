@@ -40,6 +40,7 @@ static void row_label(char *dst, size_t n, const char *title, int mark) {
 static struct ui_soft_style soft_style(const struct boot_theme *th) {
     struct ui_soft_style st = {
         .fill = th->box, .text = th->text, .active_text = th->active_text, .highlight = th->hl, .gap = 4,
+        .feedback = UI_SOFT_FLASH, .flash_ms = 120,
     };
     return st;
 }
@@ -164,23 +165,18 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     ui_clear(u, th->bg);
 
     const char *labels[3];
-    int anchor;
     if (s->screen == BOOT_SCREEN_APPS) {
         labels[0] = "";
         labels[1] = "";
         labels[2] = "Settings";
-        anchor = 2;
     } else {
         labels[0] = "Back";
         labels[1] = "";
         labels[2] = "";
-        anchor = 0;
     }
-    s->soft_active = anchor;
     const struct input *widget_in = shift_open ? 0 : &ev;
     struct ui_soft_style soft = soft_style(th);
-    ui_soft_keys(u, 8, 4, 304, 28, labels, &s->soft_active, soft, widget_in);
-    s->soft_active = anchor;
+    ui_soft_keys(u, 8, 4, 304, 28, labels, &s->soft_active, soft, widget_in, &s->soft_ks);
 
     const char *title = "mpc-boot-thingy";
     const char *hint = "";

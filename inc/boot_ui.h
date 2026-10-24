@@ -33,6 +33,7 @@ struct boot_ui {
     struct ui_list_state default_ls;
     struct ui_list_state theme_ls;
     int soft_active;
+    struct ui_soft_state soft_ks;
 };
 
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int default_index);

@@ -138,11 +138,12 @@ static void draw_prompt(struct screen *scr, uint32_t *back, uint32_t *front, str
     draw_pixels(scr, back, front, midi, &u);
 }
 
-static void draw_menu_frame(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi,
-                            const struct input *in, struct boot_ui *ui) {
+static int draw_menu_frame(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi,
+                           const struct input *in, struct boot_ui *ui) {
     struct ui u = {.px = back};
     boot_frame(&u, in, ui);
     draw_pixels(scr, back, front, midi, &u);
+    return u.wake_ms;
 }
 
 static int wait_shift(struct surface *midi, struct parser *p, struct input_dev *dev) {
@@ -436,23 +437,28 @@ int main(int argc, char **argv) {
     boot_ui_init(&ui, &menu, theme, def);
     struct input quiet;
     input_begin(&quiet, &dev);
-    draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+    int wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
     print_menu(&menu, ui.apps_ls.cursor);
 
     int rc = 1;
     for (;;) {
         struct pollfd pf = {.fd = midi.fd, .events = POLLIN};
-        int pr = poll(&pf, 1, 200);
+        int pr = poll(&pf, 1, wake > 0 ? wake : 200);
         if (pr < 0) {
             if (errno == EINTR) continue;
             break;
         }
-        if (pr == 0) continue;
+        if (pr == 0) {
+            if (wake <= 0) continue;
+            input_begin(&quiet, &dev);
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            continue;
+        }
         struct input in;
         int got = read_frame(&midi, &parser, &dev, &in);
         if (got < 0) break;
         if (!got) continue;
-        draw_menu_frame(&scr, back, front, &midi, &in, &ui);
+        wake = draw_menu_frame(&scr, back, front, &midi, &in, &ui);
 
         if (ui.action == BOOT_ACT_LAUNCH) {
             int sel = ui.action_index;
@@ -469,14 +475,14 @@ int main(int argc, char **argv) {
                 dev = (struct input_dev){0};
             }
             input_begin(&quiet, &dev);
-            draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             continue;
         }
         if (ui.action == BOOT_ACT_SET_DEFAULT || ui.action == BOOT_ACT_SAVE_THEME) {
             int failed = persist(&ui, card) != 0;
             if (failed || ui.action == BOOT_ACT_SET_DEFAULT) {
                 input_begin(&quiet, &dev);
-                draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+                wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             }
         }
     }
