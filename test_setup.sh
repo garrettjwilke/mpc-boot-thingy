@@ -157,12 +157,22 @@ grep -q 'remount,exec' "$empty/autorun/autorun.sh"
 if grep -q 'boot-menu-apply' "$empty/autorun/autorun.sh"; then fail "autorun applies the stock patch"; fi
 if grep -q 'stock-os-patched' "$empty/autorun/autorun.sh"; then fail "autorun mounts the stock patch"; fi
 test -x "$empty/autorun/boot-menu-apply.sh"
-test -x "$empty/autorun/poke"
-test -s "$empty/autorun/patches.list"
-if grep -q 'conv=notrunc' "$empty/autorun/boot-menu-apply.sh"; then fail "device dd cannot use conv=notrunc"; fi
-grep -q 'menu-os' "$empty/autorun/boot-menu-apply.sh"
+test -s "$empty/autorun/loader.so"
+test -s "$empty/autorun/patches/boot-menu.list"
+if [ -e "$empty/autorun/poke" ]; then fail "poke is still installed"; fi
+if [ -e "$empty/autorun/patches.list" ]; then fail "patch list is still a single file"; fi
+if grep -q 'menu-os' "$empty/autorun/boot-menu-apply.sh"; then fail "apply still builds a binary copy"; fi
+if grep -q 'poke' "$empty/autorun/boot-menu-apply.sh"; then fail "apply still pokes the binary"; fi
+grep -q 'LD_PRELOAD' "$empty/autorun/boot-menu-apply.sh"
+grep -q 'cp "$LAUNCH" "$REAL"' "$empty/autorun/boot-menu-apply.sh"
+if grep -q 'mount --bind "$LAUNCH" "$REAL"' "$empty/autorun/boot-menu-apply.sh"; then
+  fail "stock launcher bind follows the wrapper"
+fi
+grep -q 'launch-ac50' "$empty/autorun/boot-menu-apply.sh"
+grep -q 'loader.so' "$empty/autorun/boot-menu-apply.sh"
 if grep -q '/tmp/mpc-stock-patched' "$empty/autorun/boot-menu-apply.sh"; then fail "patched app is rebuilt in /tmp"; fi
 grep -q 'boot-menu-apply.sh' "$ROOT/src/main.c"
+grep -q '/usr/bin/launch-ac50' "$ROOT/src/main.c"
 test -x "$empty/autorun/mpc-boot-web"
 strings "$empty/autorun/mpc-boot-web" | grep -q 'application/octet-stream' || fail "web server cannot serve built page files"
 test -x "$empty/autorun/web.sh"

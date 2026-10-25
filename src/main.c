@@ -52,45 +52,45 @@ static int systemctl_ac50(const char *verb) {
     return run_cmd(argv);
 }
 
-/* Bind the Shift+Pad 16 patch over /usr/bin/MPC Sample, then ac50 can start it.
+/* Mount the in-memory Shift+Pad 16 loader, then ac50 can start the stock app.
    The script lives next to this menu. A missing script still starts stock. */
 static void draw_pixels(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi, struct ui *u);
 
-static int sha_token(const char *path, const char *prefix, char *out, size_t n) {
-    FILE *f = fopen(path, "r");
-    if (!f) return -1;
-    char line[256];
-    size_t plen = prefix ? strlen(prefix) : 0;
-    int ok = -1;
+/* 1 when a bind mount already covers this path. mountinfo field 5 is the point. */
+static int mount_point_is(const char *target) {
+    FILE *f = fopen("/proc/self/mountinfo", "r");
+    char line[4096];
+    size_t n;
+    int found = 0;
+    if (!f || !target) {
+        if (f) fclose(f);
+        return 0;
+    }
+    n = strlen(target);
     while (fgets(line, sizeof line, f)) {
-        if (strncmp(line, prefix ? prefix : "", plen) != 0) continue;
-        char *s = line + plen;
-        while (*s == ' ') s++;
-        size_t len = strcspn(s, " \r\n");
-        if (len == 0 || len + 1 > n) break;
-        memcpy(out, s, len);
-        out[len] = 0;
-        ok = 0;
-        break;
+        char *p = line;
+        int i;
+        for (i = 0; i < 4; i++) {
+            while (*p && *p != ' ') p++;
+            if (*p == ' ') p++;
+        }
+        if (strncmp(p, target, n) == 0 && (p[n] == ' ' || p[n] == '\n' || p[n] == 0)) {
+            found = 1;
+            break;
+        }
     }
     fclose(f);
-    return ok;
+    return found;
 }
 
-/* 1 when autorun/menu-os already matches this patch set. A miss means the
-   next apply rebuilds the file, which is the slow part. */
+/* 1 when the preload wrapper is already mounted. A miss means the next apply
+   still has to install it, which is the moment worth a loading screen. */
 static int patch_current(const char *card) {
-    char path[512], want[80], have[80];
+    char path[512];
     if (!card || !card[0]) return 1;
     snprintf(path, sizeof path, "%s/autorun/boot-menu-apply.sh", card);
     if (access(path, R_OK) != 0) return 1;
-    snprintf(path, sizeof path, "%s/autorun/menu-os", card);
-    if (access(path, R_OK) != 0) return 0;
-    snprintf(path, sizeof path, "%s/autorun/patches.list", card);
-    if (sha_token(path, "#result-sha256", want, sizeof want) != 0) return 0;
-    snprintf(path, sizeof path, "%s/autorun/menu-os.sha", card);
-    if (sha_token(path, "", have, sizeof have) != 0) return 0;
-    return strcmp(want, have) == 0;
+    return mount_point_is("/usr/bin/launch-ac50");
 }
 
 static void show_loading(struct screen *scr, struct surface *midi, int theme) {
