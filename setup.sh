@@ -439,6 +439,21 @@ RC
   fi
 }
 
+build_web() {
+  src=$ROOT/webserver/source
+  out=$ROOT/webserver/content
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm is required to build the web page" >&2
+    exit 1
+  fi
+  echo "Building the web page"
+  (cd "$src" && npm install && npm run build)
+  if [ ! -f "$out/index.html" ] || [ ! -f "$out/xterm.js" ] || [ ! -d "$out/assets" ]; then
+    echo "ERROR: web build did not produce $out" >&2
+    exit 1
+  fi
+}
+
 write_autorun() {
   sd=$1
   A=$sd/autorun
@@ -671,10 +686,10 @@ EOF
     exit 1
   fi
   printf '%s' "$digest" > "$A/autorun.check"
-  if [ ! -x "$ROOT/build/mpc-boot-web" ]; then
-    echo "ERROR: build did not produce $ROOT/build/mpc-boot-web" >&2
-    exit 1
-  fi
+  # The page is built into several files. An older mpc-boot-web only
+  # serves a fixed list and answers the rest with JSON, which the
+  # browser will not run as a script.
+  make -C "$ROOT" build/mpc-boot-web
   card_cp "$ROOT/build/mpc-boot-thingy" "$A/mpc-boot-thingy"
   chmod 755 "$A/mpc-boot-thingy"
   card_cp "$ROOT/menu-patch/apply.sh" "$A/boot-menu-apply.sh"
@@ -683,10 +698,10 @@ EOF
   chmod 755 "$A/boot-menu-apply.sh" "$A/poke"
   card_cp "$ROOT/build/mpc-boot-web" "$A/mpc-boot-web"
   chmod 755 "$A/mpc-boot-web"
+  build_web
+  rm -rf "$A/web"
   mkdir -p "$A/web"
-  card_cp "$ROOT/webserver/index.html" "$ROOT/webserver/xterm.js" \
-    "$ROOT/webserver/xterm.css" "$ROOT/webserver/xterm-addon-fit.js" \
-    "$ROOT/webserver/xterm.LICENSE" "$A/web/"
+  card_cp -R "$ROOT/webserver/content/." "$A/web/"
   printf '%s\n' mpc-boot-thingy > "$A/mpc-boot-thingy.mark"
   ensure_toolkit
   copy_toolkit "$sd"

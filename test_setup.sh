@@ -8,6 +8,29 @@ SALT='f7bed1c9-7e90-4731-9194-c996666b4331'
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+web_page() {
+  dir=$1
+  test -f "$dir/index.html"
+  test -f "$dir/xterm.js"
+  test -f "$dir/xterm.css"
+  test -f "$dir/xterm-addon-fit.js"
+  test -f "$dir/xterm.LICENSE"
+  python3 - "$dir" <<'PY'
+import re, sys
+from pathlib import Path
+web = Path(sys.argv[1])
+html = (web / "index.html").read_text()
+refs = re.findall(r'(?:src|href)="(/[^"]+)"', html)
+built = [ref for ref in refs if ref.startswith("/assets/")]
+if not any(ref.endswith(".js") for ref in built) or not any(ref.endswith(".css") for ref in built):
+    sys.exit("page is missing its built script or stylesheet")
+for ref in refs:
+    path = web.joinpath(*ref.strip("/").split("/"))
+    if not path.is_file():
+        sys.exit("missing " + ref)
+PY
+}
+
 digest_of() {
   dir=$1
   if command -v shasum >/dev/null 2>&1; then
@@ -141,9 +164,9 @@ grep -q 'menu-os' "$empty/autorun/boot-menu-apply.sh"
 if grep -q '/tmp/mpc-stock-patched' "$empty/autorun/boot-menu-apply.sh"; then fail "patched app is rebuilt in /tmp"; fi
 grep -q 'boot-menu-apply.sh' "$ROOT/src/main.c"
 test -x "$empty/autorun/mpc-boot-web"
+strings "$empty/autorun/mpc-boot-web" | grep -q 'application/octet-stream' || fail "web server cannot serve built page files"
 test -x "$empty/autorun/web.sh"
-test -f "$empty/autorun/web/index.html"
-test -f "$empty/autorun/web/xterm.js"
+web_page "$empty/autorun/web"
 grep -q 'mpc-boot-web' "$empty/autorun/web.sh"
 grep -q '8080' "$empty/autorun/web.sh"
 grep -q 'remount,exec' "$empty/autorun/web.sh"
@@ -366,7 +389,7 @@ test "$(cat "$card/autorun/ssh_host_ed25519_key")" = keep-key || fail "ssh insta
 test -x "$card/autorun/mpc-boot-thingy" || test -f "$card/autorun/mpc-boot-thingy"
 grep -q 'systemd-run --unit=mpc-boot-ssh' "$card/autorun/autorun.sh"
 grep -q 'systemd-run --unit=mpc-boot-web' "$card/autorun/autorun.sh"
-test -f "$card/autorun/web/index.html"
+web_page "$card/autorun/web"
 test ! -e "$card/os_tools/stray" || fail "ssh install left a file in os_tools"
 grep -q 'alias kept=yes' "$card/os_tools/.bashrc" || fail "ssh install replaced .bashrc"
 test -x "$card/os_tools/bin/bash"

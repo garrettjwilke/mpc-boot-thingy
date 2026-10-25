@@ -583,6 +583,82 @@ static int ensure_dir(const char *path) {
     return mkdir(path, 0755);
 }
 
+static int path_inside(const char *root_real, const char *resolved) {
+    size_t n = strlen(root_real);
+    if (strncmp(resolved, root_real, n) != 0) return 0;
+    return resolved[n] == '/';
+}
+
+static const char *web_type(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return "application/octet-stream";
+    if (!strcmp(dot, ".html")) return "text/html; charset=utf-8";
+    if (!strcmp(dot, ".js") || !strcmp(dot, ".mjs")) return "text/javascript; charset=utf-8";
+    if (!strcmp(dot, ".css")) return "text/css; charset=utf-8";
+    if (!strcmp(dot, ".json")) return "application/json; charset=utf-8";
+    if (!strcmp(dot, ".svg")) return "image/svg+xml";
+    if (!strcmp(dot, ".png")) return "image/png";
+    if (!strcmp(dot, ".jpg") || !strcmp(dot, ".jpeg")) return "image/jpeg";
+    if (!strcmp(dot, ".gif")) return "image/gif";
+    if (!strcmp(dot, ".webp")) return "image/webp";
+    if (!strcmp(dot, ".ico")) return "image/x-icon";
+    if (!strcmp(dot, ".txt") || !strcmp(dot, ".map") || !strcmp(dot, ".LICENSE"))
+        return "text/plain; charset=utf-8";
+    if (!strcmp(dot, ".woff")) return "font/woff";
+    if (!strcmp(dot, ".woff2")) return "font/woff2";
+    return "application/octet-stream";
+}
+
+/* URL path under the card's web directory. "/" is index.html. */
+static int web_rel(const char *url_path, char *rel, size_t n) {
+    char decoded[1024];
+    const char *p;
+    size_t i;
+    if (!url_path || url_path[0] != '/') return -1;
+    url_decode(url_path, strlen(url_path), decoded, sizeof decoded);
+    if (strcmp(decoded, "/") == 0) {
+        if (n < 11) return -1;
+        memcpy(rel, "index.html", 11);
+        return 0;
+    }
+    p = decoded + 1;
+    if (!p[0]) return -1;
+    for (i = 0; p[i]; i++) {
+        unsigned char c = (unsigned char)p[i];
+        if (c < 0x20 || c == 0x7f || c == '\\') return -1;
+    }
+    if (p[0] == '/' || strstr(p, "..") || strstr(p, "//")) return -1;
+    {
+        const char *s = p;
+        while (*s) {
+            const char *slash = strchr(s, '/');
+            size_t len = slash ? (size_t)(slash - s) : strlen(s);
+            if (len == 0 || (len == 1 && s[0] == '.')) return -1;
+            if (!slash) break;
+            s = slash + 1;
+            if (!*s) return -1;
+        }
+    }
+    if (strlen(p) + 1 > n) return -1;
+    memcpy(rel, p, strlen(p) + 1);
+    return 0;
+}
+
+static int serve_web(int client, const char *url_path) {
+    char rel[1024];
+    char root[PATH_MAX], full[PATH_MAX], root_real[PATH_MAX], resolved[PATH_MAX];
+    struct stat st;
+    if (web_rel(url_path, rel, sizeof rel) != 0) return -1;
+    if (snprintf(root, sizeof root, "%s/web", g_autorun) >= (int)sizeof root ||
+        snprintf(full, sizeof full, "%s/web/%s", g_autorun, rel) >= (int)sizeof full) {
+        return -1;
+    }
+    if (!realpath(root, root_real)) return -1;
+    if (lstat(full, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode)) return -1;
+    if (!realpath(full, resolved) || !path_inside(root_real, resolved)) return -1;
+    return serve_file(client, resolved, web_type(rel));
+}
+
 static int is_one_child(const char *root_real, const char *resolved) {
     size_t n = strlen(root_real);
     const char *rest;
@@ -1335,30 +1411,6 @@ static void handle_client(int client) {
         handle_term(client, &io, headers);
         goto out;
     }
-    if (strcmp(method, "GET") == 0) {
-        const char *file = NULL, *ctype = NULL;
-        if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
-            file = "index.html";
-            ctype = "text/html; charset=utf-8";
-        } else if (strcmp(path, "/xterm.js") == 0) {
-            file = "xterm.js";
-            ctype = "text/javascript; charset=utf-8";
-        } else if (strcmp(path, "/xterm.css") == 0) {
-            file = "xterm.css";
-            ctype = "text/css; charset=utf-8";
-        } else if (strcmp(path, "/xterm-addon-fit.js") == 0) {
-            file = "xterm-addon-fit.js";
-            ctype = "text/javascript; charset=utf-8";
-        }
-        if (file) {
-            char full[PATH_MAX];
-            if (snprintf(full, sizeof full, "%s/web/%s", g_autorun, file) >= (int)sizeof full ||
-                serve_file(client, full, ctype) != 0) {
-                send_body(client, 404, "Not Found", "text/plain; charset=utf-8", "Not found\n", 10);
-            }
-            goto out;
-        }
-    }
     if (strcmp(method, "GET") == 0 && strcmp(path, "/api/status") == 0) {
         handle_status(client);
         goto out;
@@ -1378,6 +1430,12 @@ static void handle_client(int client) {
     if (strcmp(method, "POST") == 0 && strcmp(path, "/api/reboot") == 0) {
         if (reboot_device() != 0) send_err(client, 409, "Conflict", "bootcount node is absent");
         else send_json(client, 200, "OK", "{\"ok\":true}\n");
+        goto out;
+    }
+    if (strcmp(method, "GET") == 0 && strncmp(path, "/api/", 5) != 0) {
+        if (serve_web(client, path) != 0) {
+            send_body(client, 404, "Not Found", "text/plain; charset=utf-8", "Not found\n", 10);
+        }
         goto out;
     }
     send_err(client, 404, "Not Found", "not found");

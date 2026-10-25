@@ -81,6 +81,11 @@ jobs:
           test -s "$card/autorun/ssh_host_ed25519_key"
           test -s "$card/autorun/autorun.check"
           test -f "$card/autorun/web/index.html"
+          test -f "$card/autorun/web/xterm.js"
+          test -f "$card/autorun/web/xterm.css"
+          test -f "$card/autorun/web/xterm-addon-fit.js"
+          test -n "$(find "$card/autorun/web/assets" -name '*.js' -print -quit)"
+          test -n "$(find "$card/autorun/web/assets" -name '*.css' -print -quit)"
 
       - name: Zip the card tree
         run: |
@@ -97,6 +102,9 @@ jobs:
               "mpc-boot-thingy-sd/autorun/mpc-boot-thingy",
               "mpc-boot-thingy-sd/autorun/mpc-boot-web",
               "mpc-boot-thingy-sd/autorun/web/index.html",
+              "mpc-boot-thingy-sd/autorun/web/xterm.js",
+              "mpc-boot-thingy-sd/autorun/web/xterm.css",
+              "mpc-boot-thingy-sd/autorun/web/xterm-addon-fit.js",
               "mpc-boot-thingy-sd/autorun/ssh_host_ed25519_key",
               "mpc-boot-thingy-sd/autorun/autorun.check",
               "mpc-boot-thingy-sd/os_tools/bin/bash",
@@ -111,6 +119,9 @@ jobs:
           missing = [name for name in need if name not in names]
           if missing:
               raise SystemExit("zip missing: " + ", ".join(missing))
+          assets = [name for name in names if name.startswith("mpc-boot-thingy-sd/autorun/web/assets/")]
+          if not any(name.endswith(".js") for name in assets) or not any(name.endswith(".css") for name in assets):
+              raise SystemExit("zip missing the built page assets")
           extra = [name for name in banned if name in names]
           if extra:
               raise SystemExit("zip includes dev tools: " + ", ".join(extra))
