@@ -701,6 +701,7 @@ EOF
   card_cp "$ROOT/menu-patch/apply.sh" "$A/boot-menu-apply.sh"
   mkdir -p "$A/patches" "$A/patch-catalog" "$A/boot-edits"
   card_cp "$ROOT/menu-patch/patches.list" "$A/patches/boot-menu.list"
+  card_cp "$ROOT/menu-patch/shift-reboot.list" "$A/patch-catalog/shift-reboot.list"
   card_cp "$ROOT/build/loader.so" "$A/loader.so"
   chmod 755 "$A/boot-menu-apply.sh" "$A/loader.so"
   card_cp "$ROOT/build/mpc-boot-web" "$A/mpc-boot-web"

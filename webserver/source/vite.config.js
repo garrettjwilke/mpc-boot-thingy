@@ -62,6 +62,7 @@ function mockState() {
     patches: [
       { id: "wide-screen.list", title: "Wide screen" },
       { id: "extra-pads.list", title: "Extra pads" },
+      { id: "shift-reboot.list", title: "Reboot button" },
     ],
     apps: [
       { id: "stock", title: "Stock", run: "", args: "", stock: true, editable: false, patches: [] },

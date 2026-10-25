@@ -29,6 +29,9 @@ int boot_edit_save(const char *card, const char *id, const char *title,
                    const char *const *patch_ids, int npatches,
                    char *out_id, size_t out_n);
 
+/* Text for the last BOOT_EDIT_ERR. Not kept across threads. */
+const char *boot_edit_last_error(void);
+
 /* Removes autorun/boot-edits/<slug> when id names a boot=ac50 entry.
    0 when there is nothing to remove. Does not delete the .entry file. */
 int boot_edit_remove(const char *card, const char *id);

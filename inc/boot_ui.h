@@ -53,12 +53,14 @@ struct boot_ui {
     char save_title[MENU_TITLE];
     char save_patches[BOOT_PATCH_MAX][BOOT_PATCH_ID];
     int save_npatches;
+    char notice[96];
 };
 
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int default_index);
 void boot_ui_set_catalog(struct boot_ui *ui, const struct boot_patch *patches, int n);
 int boot_ui_dirty(const struct boot_ui *ui);
 void boot_ui_saved(struct boot_ui *ui);
+void boot_ui_notice(struct boot_ui *ui, const char *text);
 int boot_frame(struct ui *u, const struct input *in, void *state);
 void boot_draw_prompt(struct ui *u, int theme);
 void boot_draw_loading(struct ui *u, int theme);
