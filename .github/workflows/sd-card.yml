@@ -66,9 +66,6 @@ jobs:
           mkdir -p dist/mpc-boot-thingy-sd
           # Bash stays on the card. --tools would add vim, nano, and busybox-full.
           ./setup.sh --SD dist/mpc-boot-thingy-sd
-          cat > dist/mpc-boot-thingy-sd/CARD.txt <<'EOF'
-          Copy the contents of this folder to the root of your SD card.
-          EOF
 
       - name: Check the card tree
         run: |
@@ -84,7 +81,6 @@ jobs:
           test -s "$card/autorun/ssh_host_ed25519_key"
           test -s "$card/autorun/autorun.check"
           test -f "$card/autorun/web/index.html"
-          test -f "$card/CARD.txt"
 
       - name: Zip the card tree
         run: |
@@ -104,7 +100,6 @@ jobs:
               "mpc-boot-thingy-sd/autorun/ssh_host_ed25519_key",
               "mpc-boot-thingy-sd/autorun/autorun.check",
               "mpc-boot-thingy-sd/os_tools/bin/bash",
-              "mpc-boot-thingy-sd/CARD.txt",
           ]
           banned = [
               "mpc-boot-thingy-sd/os_tools/bin/vim",
