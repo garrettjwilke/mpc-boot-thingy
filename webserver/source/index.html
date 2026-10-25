@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- xterm.js 5.3.0 and xterm-addon-fit 0.8.0, MIT, see xterm.LICENSE -->
+  <title>MPC Boot</title>
+  <link rel="stylesheet" href="/xterm.css" />
+  <script>
+    (function () {
+      var saved = localStorage.getItem("mpc-boot-theme");
+      var theme = saved === "light" || saved === "dark" ? saved
+        : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+</head>
+<body>
+  <header>
+    <div class="brand">MPC Boot</div>
+    <div class="row">
+      <span id="hdr-default" class="badge">Default: …</span>
+      <span id="hdr-link" class="badge">…</span>
+      <button class="btn secondary sm" id="theme" type="button">Light</button>
+      <button class="btn secondary sm" id="refresh" type="button">Refresh</button>
+    </div>
+  </header>
+  <nav>
+    <button class="active" type="button" data-tab="boot">Boot</button>
+    <button type="button" data-tab="device">Device</button>
+    <button type="button" data-tab="terminal">Terminal</button>
+  </nav>
+  <main>
+    <section id="tab-boot" class="tab active">
+      <div class="card">
+        <h3>Boot programs</h3>
+        <p class="muted">Hold SHIFT during the prompt to open the menu on the MPC. Otherwise the default starts.</p>
+        <div id="apps"></div>
+      </div>
+      <div class="card">
+        <h3>Install a program</h3>
+        <p class="muted">The new program is used on the next boot when it is the default and SHIFT is not held.</p>
+        <div class="row">
+          <label class="field">Title
+            <input id="title" type="text" placeholder="Lab firmware" />
+          </label>
+          <label class="field">Args
+            <input id="args" type="text" placeholder="optional" />
+          </label>
+        </div>
+        <div class="row install-row">
+          <input id="file" type="file" />
+          <button class="btn" id="install" type="button">Install</button>
+        </div>
+      </div>
+    </section>
+    <section id="tab-device" class="tab">
+      <div class="grid">
+        <div class="card">
+          <h3>System</h3>
+          <pre id="sys">Loading…</pre>
+        </div>
+        <div class="card">
+          <h3>Memory</h3>
+          <pre id="mem">Loading…</pre>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Reboot</h3>
+        <p class="muted">Clears the boot counter so the updater stays closed, then reboots.</p>
+        <button class="btn" id="reboot" type="button">Reboot</button>
+      </div>
+    </section>
+    <section id="tab-terminal" class="tab">
+      <div class="card">
+        <h3>
+          <span>Shell</span>
+        </h3>
+        <div class="row term-tools">
+          <span id="term-status" class="badge">closed</span>
+          <button class="btn secondary sm" id="reconnect" type="button">Reconnect</button>
+        </div>
+        <div class="term-wrap"><div id="term"></div></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast"></div>
+  <script src="/xterm.js"></script>
+  <script src="/xterm-addon-fit.js"></script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

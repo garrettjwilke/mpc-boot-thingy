@@ -1,4 +1,6 @@
 build/
+webserver/source/node_modules/
+webserver/content/
 .mpc-cache/
 *__pycache__*
 dist/
