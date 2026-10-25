@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { programError } from "./src/program.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const contentDir = path.resolve(here, "../content");
@@ -83,6 +84,11 @@ async function handleMock(req, res, url, state) {
     let name = (url.searchParams.get("name") || "").trim();
     if (!body.length) {
       sendJson(res, 400, { error: "program body is empty" });
+      return;
+    }
+    const why = programError(body);
+    if (why) {
+      sendJson(res, 400, { error: why });
       return;
     }
     if (!oneLine(title) || !title || title.length >= 64) {

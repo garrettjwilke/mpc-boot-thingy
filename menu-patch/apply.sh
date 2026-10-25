@@ -1,36 +1,37 @@
 #!/bin/sh
 # Shift+Pad 16 "boot thingy" row, applied by mpc-boot-thingy.
 #
-# ac50 always starts /usr/bin/MPC Sample. The patched copy lives on the card.
-# The first boot, and any boot whose patch hash differs, builds that copy.
-# Every other boot bind-mounts the copy that is already there.
-# The card is remounted exec, so the mounted file can run.
-# Flash is not written. Reboot drops the mount. This does not restart ac50.
+# ac50 starts through /usr/bin/launch-ac50. This bind-mounts a small wrapper
+# over that script so the stock app gets LD_PRELOAD. The loader stores the
+# patch bytes in the process. /usr/bin/MPC Sample on disk is not modified.
+# Flash is not written. Reboot drops /run and the mounts. This does not
+# restart ac50.
 set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-CARD=$(CDPATH= cd -- "$(dirname -- "$HERE")" && pwd)
 STOCK="${MPC_STOCK:-/usr/bin/MPC Sample}"
-PATCH_LIST="$HERE/patches.list"
-OUT="$HERE/menu-os"
-STAGE="$HERE/menu-os.building"
-STAMP="$HERE/menu-os.sha"
-ORIG=/tmp/mpc-patch-orig
-NEW=/tmp/mpc-patch-new
+LAUNCH="${MPC_LAUNCH:-/usr/bin/launch-ac50}"
+PATCH_DIR="$HERE/patches"
+LOADER_SRC="$HERE/loader.so"
+LOADER=/run/mpc-patch-loader.so
+REAL=/run/launch-ac50.real
+WRAP=/run/launch-ac50.wrap
 
 log() { echo "[boot-menu] $*"; }
 die() { echo "[boot-menu] ERROR: $*" >&2; exit 1; }
 
-decode_b64() {
-    if command -v base64 >/dev/null 2>&1; then
-        printf '%s' "$1" | base64 -d > "$2"
-    else
-        printf '%s' "$1" | openssl base64 -d -A > "$2"
-    fi
+# mountinfo field 5 is the mount point. A hit means a bind is in place.
+mounted() {
+    target=$1
+    [ -r /proc/self/mountinfo ] || return 1
+    while read -r _ _ _ _ point _; do
+        [ "$point" = "$target" ] && return 0
+    done < /proc/self/mountinfo
+    return 1
 }
 
-# mountinfo escapes the space in "/usr/bin/MPC Sample" as \040. That line is
-# present only while a patched copy is bind-mounted over the stock app.
+# A leftover copy of the app is bind-mounted over the stock path. The space
+# in that path is escaped as \040. Drop it so the loader sees the stock file.
 unmount_stock() {
     if ! grep -q -F 'MPC\040Sample' /proc/self/mountinfo 2>/dev/null; then
         return 0
@@ -38,66 +39,53 @@ unmount_stock() {
     umount "$STOCK" || die "could not unmount the previous patched screen"
 }
 
-mount_out() {
-    mount -o remount,exec "$CARD" || die "could not remount the card exec"
-    unmount_stock
-    mount --bind "$OUT" "$STOCK" || die "bind-mount failed"
-    log "patched stock screen mounted from the card"
-    exit 0
+# Single-quote a string for the wrapper, including embedded quotes.
+sq() {
+    s=$1
+    printf "'"
+    while :; do
+        case $s in
+            *\'*)
+                printf '%s' "${s%%\'*}"
+                printf "'\\''"
+                s=${s#*\'}
+                ;;
+            *)
+                printf '%s' "$s"
+                break
+                ;;
+        esac
+    done
+    printf "'"
 }
 
-[ -r "$PATCH_LIST" ] || die "missing $PATCH_LIST"
-command -v sha256sum >/dev/null 2>&1 || die "sha256sum not found"
-[ -x "$HERE/poke" ] || die "missing $HERE/poke"
-if ! command -v base64 >/dev/null 2>&1 && ! command -v openssl >/dev/null 2>&1; then
-    die "base64 or openssl is required"
-fi
-
-TARGET_SHA=$(grep '^#target-sha256 ' "$PATCH_LIST" | cut -d' ' -f2)
-RESULT_SHA=$(grep '^#result-sha256 ' "$PATCH_LIST" | cut -d' ' -f2)
-[ -n "$TARGET_SHA" ] || die "patch list has no #target-sha256"
-[ -n "$RESULT_SHA" ] || die "patch list has no #result-sha256"
-
-if [ -f "$OUT" ] && [ -f "$STAMP" ]; then
-    stamp=$(cat "$STAMP")
-    if [ "$stamp" = "$RESULT_SHA" ]; then
-        mount_out
-    fi
-    log "card copy does not match this patch set, building it again"
-fi
+[ -d "$PATCH_DIR" ] || die "missing $PATCH_DIR"
+[ -r "$LOADER_SRC" ] || die "missing $LOADER_SRC"
+[ -r "$LAUNCH" ] || die "cannot read $LAUNCH"
 
 unmount_stock
-[ -r "$STOCK" ] || die "cannot read $STOCK"
-stock_sha=$(sha256sum "$STOCK" | cut -d' ' -f1)
-if [ "$stock_sha" = "$RESULT_SHA" ]; then
-    log "patched stock screen already mounted"
+if mounted "$LAUNCH"; then
+    log "patch loader already mounted"
     exit 0
 fi
-if [ "$stock_sha" != "$TARGET_SHA" ]; then
-    die "stock sha256 $stock_sha != target $TARGET_SHA"
+
+cp "$LOADER_SRC" "$LOADER"
+chmod 755 "$LOADER"
+
+# Copy the stock script. A bind of /usr/bin/launch-ac50 follows the shared
+# rootfs, so the later wrapper mount would land on the copy too and the
+# wrapper would exec itself.
+if ! mounted "$REAL"; then
+    cp "$LAUNCH" "$REAL" || die "could not keep the stock launcher"
+    chmod 755 "$REAL"
 fi
-log "building patched stock screen on the card"
 
-rm -f "$STAGE"
-cp "$STOCK" "$STAGE"
-while read -r off b64o b64p; do
-    case "$off" in ''|\#*) continue ;; esac
-    decode_b64 "$b64o" "$ORIG"
-    decode_b64 "$b64p" "$NEW"
-    len=$(wc -c < "$NEW")
-    len=${len##* }
-    cur=$(dd if="$STAGE" bs=1 skip="$off" count="$len" 2>/dev/null | sha256sum | cut -d' ' -f1)
-    exp=$(sha256sum "$ORIG" | cut -d' ' -f1)
-    [ "$cur" = "$exp" ] || die "patch at offset $off does not match"
-    "$HERE/poke" "$STAGE" "$off" < "$NEW" || die "could not write patch at offset $off"
-done < "$PATCH_LIST"
-rm -f "$ORIG" "$NEW"
-
-got=$(sha256sum "$STAGE" | cut -d' ' -f1)
-[ "$got" = "$RESULT_SHA" ] || die "patched result $got != $RESULT_SHA"
-chmod 755 "$STAGE"
-mv "$STAGE" "$OUT"
-printf '%s\n' "$RESULT_SHA" > "$STAMP"
-mount -o remount,exec "$CARD" || die "could not remount the card exec"
-mount --bind "$OUT" "$STOCK" || die "bind-mount failed"
-log "patched stock screen mounted from the card"
+{
+    printf '%s\n' '#!/bin/sh'
+    printf '%s\n' 'export LD_PRELOAD=/run/mpc-patch-loader.so'
+    printf 'export MPC_PATCH_DIR=%s\n' "$(sq "$PATCH_DIR")"
+    printf '%s\n' 'exec /run/launch-ac50.real "$@"'
+} > "$WRAP"
+chmod 755 "$WRAP"
+mount --bind "$WRAP" "$LAUNCH" || die "could not mount the patch loader"
+log "patch loader mounted"

@@ -693,9 +693,10 @@ EOF
   card_cp "$ROOT/build/mpc-boot-thingy" "$A/mpc-boot-thingy"
   chmod 755 "$A/mpc-boot-thingy"
   card_cp "$ROOT/menu-patch/apply.sh" "$A/boot-menu-apply.sh"
-  card_cp "$ROOT/menu-patch/patches.list" "$A/patches.list"
-  card_cp "$ROOT/build/poke" "$A/poke"
-  chmod 755 "$A/boot-menu-apply.sh" "$A/poke"
+  mkdir -p "$A/patches"
+  card_cp "$ROOT/menu-patch/patches.list" "$A/patches/boot-menu.list"
+  card_cp "$ROOT/build/loader.so" "$A/loader.so"
+  chmod 755 "$A/boot-menu-apply.sh" "$A/loader.so"
   card_cp "$ROOT/build/mpc-boot-web" "$A/mpc-boot-web"
   chmod 755 "$A/mpc-boot-web"
   build_web
@@ -777,11 +778,11 @@ add_over_ssh() {
 }
 
 install_over_ssh() {
-  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -x "$ROOT/build/poke" ]; then
+  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
     make -C "$ROOT"
   fi
-  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -x "$ROOT/build/poke" ]; then
-    echo "ERROR: build did not produce the boot and web binaries" >&2
+  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
+    echo "ERROR: build did not produce the boot, web, and loader binaries" >&2
     exit 1
   fi
   ssh_ask_begin
@@ -955,11 +956,11 @@ if [ -n "$ADD" ]; then
   exit 0
 fi
 
-if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -x "$ROOT/build/poke" ]; then
+if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
   make -C "$ROOT"
 fi
-if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -x "$ROOT/build/poke" ]; then
-  echo "ERROR: build did not produce the boot and web binaries" >&2
+if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
+  echo "ERROR: build did not produce the boot, web, and loader binaries" >&2
   exit 1
 fi
 

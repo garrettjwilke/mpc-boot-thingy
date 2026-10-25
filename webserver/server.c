@@ -198,6 +198,8 @@ static int dig_is(const unsigned char *d, const char *hex) {
     return 1;
 }
 
+static int runnable_program(const unsigned char *buf, size_t n);
+
 static int selftest(void) {
     unsigned char d[20];
     struct sha1 s;
@@ -219,6 +221,67 @@ static int selftest(void) {
     if (strcmp(acc, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != 0) {
         fprintf(stderr, "ws accept mismatch: %s\n", acc);
         return 1;
+    }
+    {
+        unsigned char elf[64];
+        static const char sh[] = "#!/bin/sh\necho hi\n";
+        static const char envbash[] = "#!/usr/bin/env bash\n";
+        static const char bashflag[] = "#!/bin/bash -e\n";
+        static const char python[] = "#!/usr/bin/python3\n";
+        static const char noshebang[] = "echo hi\n";
+        static const char crlf[] = "#!/bin/sh\r\n";
+        memset(elf, 0, sizeof elf);
+        elf[0] = 0x7f;
+        elf[1] = 'E';
+        elf[2] = 'L';
+        elf[3] = 'F';
+        elf[4] = 2;
+        elf[5] = 1;
+        elf[6] = 1;
+        elf[16] = 2;
+        elf[18] = 0xb7;
+        elf[24] = 0x40;
+        if (!runnable_program(elf, sizeof elf)) {
+            fprintf(stderr, "aarch64 exec rejected\n");
+            return 1;
+        }
+        elf[16] = 3;
+        if (!runnable_program(elf, sizeof elf)) {
+            fprintf(stderr, "aarch64 pie rejected\n");
+            return 1;
+        }
+        elf[24] = 0;
+        if (runnable_program(elf, sizeof elf)) {
+            fprintf(stderr, "aarch64 library accepted\n");
+            return 1;
+        }
+        elf[16] = 2;
+        elf[18] = 62;
+        elf[24] = 0x40;
+        if (runnable_program(elf, sizeof elf)) {
+            fprintf(stderr, "x86_64 accepted\n");
+            return 1;
+        }
+        elf[4] = 1;
+        elf[18] = 40;
+        elf[19] = 0;
+        if (runnable_program(elf, sizeof elf)) {
+            fprintf(stderr, "arm32 accepted\n");
+            return 1;
+        }
+        if (!runnable_program((const unsigned char *)sh, sizeof sh - 1) ||
+            !runnable_program((const unsigned char *)envbash, sizeof envbash - 1) ||
+            !runnable_program((const unsigned char *)bashflag, sizeof bashflag - 1)) {
+            fprintf(stderr, "shell script rejected\n");
+            return 1;
+        }
+        if (runnable_program((const unsigned char *)python, sizeof python - 1) ||
+            runnable_program((const unsigned char *)noshebang, sizeof noshebang - 1) ||
+            runnable_program((const unsigned char *)crlf, sizeof crlf - 1) ||
+            runnable_program((const unsigned char *)"", 0)) {
+            fprintf(stderr, "bad script accepted\n");
+            return 1;
+        }
     }
     puts("web-check ok");
     return 0;
@@ -774,6 +837,58 @@ static void handle_status(int fd) {
     free(mem_s);
 }
 
+static int sh_name(const unsigned char *s, size_t n) {
+    return (n == 2 && s[0] == 's' && s[1] == 'h') || (n == 4 && memcmp(s, "bash", 4) == 0);
+}
+
+/* The boot menu runs the file with exec. A script runs only when its first line names sh or bash. */
+static int shell_script(const unsigned char *buf, size_t n) {
+    size_t i = 2, start, end, path_end, base, arg;
+    if (n < 3 || buf[0] != '#' || buf[1] != '!') return 0;
+    if (buf[2] == ' ') i = 3;
+    start = i;
+    while (i < n && buf[i] != '\n') {
+        if (buf[i] == '\r' || buf[i] < 0x20 || buf[i] > 0x7e) return 0;
+        if (i - start > 128) return 0;
+        i++;
+    }
+    end = i;
+    while (start < end && buf[start] == ' ') start++;
+    path_end = start;
+    while (path_end < end && buf[path_end] != ' ') path_end++;
+    if (path_end == start) return 0;
+    base = path_end;
+    while (base > start && buf[base - 1] != '/') base--;
+    if (sh_name(buf + base, path_end - base)) return 1;
+    if (path_end - base == 3 && memcmp(buf + base, "env", 3) == 0) {
+        arg = path_end;
+        while (arg < end && buf[arg] == ' ') arg++;
+        base = arg;
+        while (arg < end && buf[arg] != ' ') arg++;
+        return sh_name(buf + base, arg - base);
+    }
+    return 0;
+}
+
+/* ELF64 little-endian AArch64 executable or PIE. A shared library has no entry point. */
+static int aarch64_exec(const unsigned char *b, size_t n) {
+    unsigned type, machine;
+    uint64_t entry = 0;
+    int i;
+    if (n < 32) return 0;
+    if (b[0] != 0x7f || b[1] != 'E' || b[2] != 'L' || b[3] != 'F') return 0;
+    if (b[4] != 2 || b[5] != 1 || b[6] != 1) return 0;
+    type = (unsigned)b[16] | ((unsigned)b[17] << 8);
+    machine = (unsigned)b[18] | ((unsigned)b[19] << 8);
+    if (machine != 183 || (type != 2 && type != 3)) return 0;
+    for (i = 0; i < 8; i++) entry |= (uint64_t)b[24 + i] << (8 * i);
+    return entry != 0;
+}
+
+static int runnable_program(const unsigned char *buf, size_t n) {
+    return aarch64_exec(buf, n) || shell_script(buf, n);
+}
+
 static void handle_upload(int fd, struct io *io, int has_len, size_t content_len, const char *query) {
     char title[512], args[512], name[256], slug[80];
     char dir[PATH_MAX], apps[PATH_MAX], part[PATH_MAX], dest[PATH_MAX], entry[PATH_MAX];
@@ -837,6 +952,24 @@ static void handle_upload(int fd, struct io *io, int has_len, size_t content_len
                 return;
             }
             left -= chunk;
+        }
+    }
+    {
+        unsigned char magic[512];
+        ssize_t got;
+        if (lseek(partfd, 0, SEEK_SET) < 0) {
+            close(partfd);
+            unlink(part);
+            send_err(fd, 500, "Internal Server Error", "could not store the program");
+            return;
+        }
+        got = read(partfd, magic, sizeof magic);
+        if (got < 0 || !runnable_program(magic, (size_t)got)) {
+            close(partfd);
+            unlink(part);
+            send_err(fd, 400, "Bad Request",
+                     "program must be an aarch64 Linux executable or a sh/bash script");
+            return;
         }
     }
     if (fchmod(partfd, 0755) != 0) {

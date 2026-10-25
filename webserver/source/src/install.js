@@ -1,4 +1,5 @@
 import { installProgram } from "./api.js";
+import { programError } from "./program.js";
 
 export function titleFromFilename(filename) {
   const base = String(filename || "").split(/[/\\]/).pop() || "";
@@ -21,6 +22,12 @@ export function bindInstall({ toast, refresh }) {
     const args = document.getElementById("args").value.trim();
     if (!file || !title) {
       toast("Choose a file and a title.");
+      return;
+    }
+    const head = new Uint8Array(await file.slice(0, 512).arrayBuffer());
+    const why = programError(head);
+    if (why) {
+      toast(why);
       return;
     }
     const name = (file.name || "app").split(/[/\\]/).pop();
