@@ -1,6 +1,7 @@
 /* mpc-boot-thingy. At power-on, holding Shift during the splash opens the menu.
    Waiting starts the saved default, or Stock when none is saved.
    --menu skips the splash and opens the menu. The stock Shift+Pad 16 row uses that. */
+#include "boot_edit.h"
 #include "boot_ui.h"
 #include "input.h"
 #include "menu.h"
@@ -83,14 +84,41 @@ static int mount_point_is(const char *target) {
     return found;
 }
 
-/* 1 when the preload wrapper is already mounted. A miss means the next apply
-   still has to install it, which is the moment worth a loading screen. */
-static int patch_current(const char *card) {
-    char path[512];
+static int read_stamp(char *out, size_t n) {
+    FILE *f = fopen("/run/mpc-patch-stamp", "r");
+    size_t len;
+    if (!f || n < 2) {
+        if (f) fclose(f);
+        return -1;
+    }
+    if (!fgets(out, (int)n, f)) {
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    len = strlen(out);
+    while (len && (out[len - 1] == '\n' || out[len - 1] == '\r')) out[--len] = 0;
+    return out[0] ? 0 : -1;
+}
+
+static int stamp_equals(const char *dir) {
+    char got[512];
+    if (!dir || !dir[0] || read_stamp(got, sizeof got) != 0) return 0;
+    return strcmp(got, dir) == 0;
+}
+
+/* 1 when Stock's patch directory is the one mounted on launch-ac50.
+   A Boot Edit entry leaves a different stamp, so Stock has to replace it. */
+static int stock_ready(const char *card) {
+    char script[512], dir[512];
+    int ns, nd;
     if (!card || !card[0]) return 1;
-    snprintf(path, sizeof path, "%s/autorun/boot-menu-apply.sh", card);
-    if (access(path, R_OK) != 0) return 1;
-    return mount_point_is("/usr/bin/launch-ac50");
+    ns = snprintf(script, sizeof script, "%s/autorun/boot-menu-apply.sh", card);
+    if (ns < 0 || (size_t)ns >= sizeof script || access(script, R_OK) != 0) return 1;
+    if (!mount_point_is("/usr/bin/launch-ac50")) return 0;
+    nd = snprintf(dir, sizeof dir, "%s/autorun/patches", card);
+    if (nd < 0 || (size_t)nd >= sizeof dir) return 0;
+    return stamp_equals(dir);
 }
 
 static void show_loading(struct screen *scr, struct surface *midi, int theme) {
@@ -125,7 +153,7 @@ static void restore_stock_if_stopped(const char *card) {
     struct screen scr = {.fd = -1};
     int opened = 0;
     if (!stopped_ac50) return;
-    if (!patch_current(card) && screen_open(&scr) == 0) {
+    if (!stock_ready(card) && screen_open(&scr) == 0) {
         show_loading(&scr, NULL, theme_load(card));
         opened = 1;
     }
@@ -353,12 +381,47 @@ static void resolve_run(const char *card, const char *run, char *out, size_t n) 
     else snprintf(out, n, "%s/%s", card, run);
 }
 
-/* Run one entry. Stock starts ac50 and the caller should exit. Other apps return here.
-   2 means the panel and screen are still ours. */
+static int entry_patch_dir(const char *card, const struct menu_entry *e, char *out, size_t n) {
+    char script[512];
+    char *slash;
+    int wr;
+    if (e->run[0] == '/') wr = snprintf(script, sizeof script, "%s", e->run);
+    else wr = snprintf(script, sizeof script, "%s/%s", e->base[0] ? e->base : card, e->run);
+    if (wr < 0 || (size_t)wr >= sizeof script) return -1;
+    slash = strrchr(script, '/');
+    if (!slash || slash == script) return -1;
+    *slash = 0;
+    wr = snprintf(out, n, "%s/patches", script);
+    return wr < 0 || (size_t)wr >= n ? -1 : 0;
+}
+
+static int run_boot_script(const char *card, const struct menu_entry *e) {
+    char path[512];
+    char *argv[3];
+    resolve_run(e->base[0] ? e->base : card, e->run, path, sizeof path);
+    remount_exec(card);
+    argv[0] = "sh";
+    argv[1] = path;
+    argv[2] = NULL;
+    return run_cmd(argv);
+}
+
+/* Run one entry. Stock and Boot Edit entries start ac50 and the caller should exit.
+   Other apps return here. 2 means the panel and screen are still ours. */
 static int launch(struct surface *midi, struct screen *scr, const char *card, const struct menu_entry *e) {
-    if (e->stock) {
-        if (!patch_current(card)) show_loading(scr, midi, theme_load(card));
-        mount_patched_stock(card);
+    if (e->stock || e->boot_ac50) {
+        int ready = 0;
+        if (e->stock) ready = stock_ready(card);
+        else {
+            char dir[512];
+            ready = entry_patch_dir(card, e, dir, sizeof dir) == 0 && stamp_equals(dir);
+        }
+        if (!ready) show_loading(scr, midi, theme_load(card));
+        if (e->stock) mount_patched_stock(card);
+        else if (run_boot_script(card, e) != 0) {
+            fprintf(stderr, "boot entry failed\n");
+            return 2;
+        }
         surface_all_off(midi);
         surface_close(midi);
         screen_close(scr);
@@ -514,7 +577,7 @@ int main(int argc, char **argv) {
     }
     if (!held) {
         if (def <= 0) {
-            if (!patch_current(card)) show_loading(&scr, &midi, theme);
+            if (!stock_ready(card)) show_loading(&scr, &midi, theme);
             mount_patched_stock(card);
             release_devices(&midi, &scr);
             if (stopped_ac50) {
@@ -546,7 +609,10 @@ int main(int argc, char **argv) {
     }
 
     struct boot_ui ui;
+    struct boot_patch catalog[BOOT_PATCH_MAX];
+    int npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
     boot_ui_init(&ui, &menu, theme, def);
+    boot_ui_set_catalog(&ui, catalog, npatches);
     struct input quiet;
     input_begin(&quiet, &dev);
     double started = mono_ms();
@@ -588,6 +654,23 @@ int main(int argc, char **argv) {
                 if (reopen_after_app(&midi, &scr) != 0) break;
                 parser = (struct parser){0};
                 dev = (struct input_dev){0};
+            }
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            continue;
+        }
+        if (ui.action == BOOT_ACT_SAVE_BOOT) {
+            const char *ids[BOOT_PATCH_MAX];
+            char out_id[MENU_ID];
+            int i, rc;
+            for (i = 0; i < ui.save_npatches && i < BOOT_PATCH_MAX; i++) ids[i] = ui.save_patches[i];
+            rc = boot_edit_save(card, ui.save_id[0] ? ui.save_id : NULL, ui.save_title[0] ? ui.save_title : NULL, ids,
+                                ui.save_npatches, out_id, sizeof out_id);
+            if (rc == 0) {
+                menu_load(&menu, card);
+                ui.default_index = menu_default_index(&menu, card);
+                boot_ui_saved(&ui);
             }
             input_begin(&quiet, &dev);
             started = mono_ms();

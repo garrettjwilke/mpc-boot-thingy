@@ -149,6 +149,8 @@ test ! -e "$empty/toolkit"
 test ! -d "$empty/apps"
 test -f "$empty/autorun/mpc-boot-thingy.mark"
 test -d "$empty/autorun/boot-menu"
+test -d "$empty/autorun/patch-catalog"
+test -d "$empty/autorun/boot-edits"
 test -x "$empty/autorun/mpc-boot-thingy"
 grep -q 'systemd-run --unit=mpc-boot-thingy' "$empty/autorun/autorun.sh"
 grep -q 'systemd-run --unit=mpc-boot-web' "$empty/autorun/autorun.sh"
@@ -170,6 +172,7 @@ if grep -q 'mount --bind "$LAUNCH" "$REAL"' "$empty/autorun/boot-menu-apply.sh";
 fi
 grep -q 'launch-ac50' "$empty/autorun/boot-menu-apply.sh"
 grep -q 'loader.so' "$empty/autorun/boot-menu-apply.sh"
+grep -q 'mpc-patch-stamp' "$empty/autorun/boot-menu-apply.sh"
 if grep -q '/tmp/mpc-stock-patched' "$empty/autorun/boot-menu-apply.sh"; then fail "patched app is rebuilt in /tmp"; fi
 grep -q 'boot-menu-apply.sh' "$ROOT/src/main.c"
 grep -q '/usr/bin/launch-ac50' "$ROOT/src/main.c"
@@ -215,6 +218,8 @@ test "$got" = "$have" || fail "autorun.check mismatch"
 
 # Re-run on our own install updates without a backup prompt and keeps menu entries.
 printf 'title=Snake\nrun=apps/snake\nargs=\n' > "$empty/autorun/boot-menu/30-snake.entry"
+mkdir -p "$empty/autorun/patch-catalog"
+printf '# title Wide\n' > "$empty/autorun/patch-catalog/wide.list"
 printf 'stray\n' > "$empty/os_tools/stray"
 printf '\nalias ll="ls -l"\n' >> "$empty/os_tools/.bashrc"
 ./setup.sh --SD "$empty" >/tmp/mpc-boot-out
@@ -225,6 +230,7 @@ test -x "$empty/os_tools/bin/bash"
 test ! -e "$empty/os_tools/bin/vim"
 cmp "$fix/toolkit/marker" "$empty/os_tools/toolkit/marker"
 grep -q 'title=Snake' "$empty/autorun/boot-menu/30-snake.entry" || fail "reinstall removed a menu entry"
+grep -q 'title Wide' "$empty/autorun/patch-catalog/wide.list" || fail "reinstall removed a catalog patch"
 test "$(shasum -a 256 "$empty/autorun/ssh_host_ed25519_key" | awk '{print $1}')" = "$hostkey" || fail "reinstall replaced the server identity"
 if find "$empty" -maxdepth 1 -type d -name 'autorun-backup-*' | grep -q .; then
   fail "reinstall of mpc-boot-thingy created a backup"

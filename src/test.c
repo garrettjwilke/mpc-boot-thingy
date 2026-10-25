@@ -31,6 +31,23 @@ static void mkdir_p(const char *path) {
     assert(mkdir(buf, 0755) == 0 || access(buf, F_OK) == 0);
 }
 
+static char *read_all(const char *path) {
+    FILE *f = fopen(path, "rb");
+    long n;
+    char *buf;
+    assert(f);
+    assert(fseek(f, 0, SEEK_END) == 0);
+    n = ftell(f);
+    assert(n >= 0);
+    assert(fseek(f, 0, SEEK_SET) == 0);
+    buf = malloc((size_t)n + 1);
+    assert(buf);
+    assert(n == 0 || fread(buf, 1, (size_t)n, f) == (size_t)n);
+    buf[n] = 0;
+    fclose(f);
+    return buf;
+}
+
 int main(void) {
     char dir[] = "/tmp/mpc-boot-thingy-XXXXXX";
     assert(mkdtemp(dir));
@@ -232,6 +249,203 @@ int main(void) {
     assert(boot.action == BOOT_ACT_SET_DEFAULT);
     assert(strcmp(boot.action_id, "entry:30-snake.entry") == 0);
     assert(boot.screen == BOOT_SCREEN_SETTINGS);
+
+    snprintf(path, sizeof path, "%s/autorun/patch-catalog", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/patch-catalog/wide-screen.list", dir);
+    write_file(path, "# title Wide screen\npatch\n");
+    snprintf(path, sizeof path, "%s/autorun/patch-catalog/extra-pads.list", dir);
+    write_file(path, "pads\n");
+    snprintf(path, sizeof path, "%s/autorun/patch-catalog/note.txt", dir);
+    write_file(path, "nope\n");
+    snprintf(path, sizeof path, "%s/autorun/patches", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/patches/boot-menu.list", dir);
+    write_file(path, "menu-bytes\n");
+
+    struct boot_patch catalog[8];
+    int nc = boot_edit_list(dir, catalog, 8);
+    assert(nc == 2);
+    assert(strcmp(catalog[0].id, "extra-pads.list") == 0);
+    assert(strcmp(catalog[0].title, "extra-pads.list") == 0);
+    assert(strcmp(catalog[1].id, "wide-screen.list") == 0);
+    assert(strcmp(catalog[1].title, "Wide screen") == 0);
+
+    const char *both[] = {"wide-screen.list", "extra-pads.list"};
+    char out_id[MENU_ID];
+    char saved_id[MENU_ID];
+    assert(boot_edit_save(dir, NULL, NULL, both, 2, out_id, sizeof out_id) == 0);
+    assert(strcmp(out_id, "entry:boot-1.entry") == 0);
+    snprintf(saved_id, sizeof saved_id, "%s", out_id);
+
+    struct menu again;
+    int found = -1;
+    assert(menu_load(&again, dir) == 4);
+    for (int i = 0; i < again.n; i++) {
+        if (strcmp(again.items[i].id, saved_id) == 0) found = i;
+    }
+    assert(found > 0);
+    assert(again.items[found].boot_ac50);
+    assert(!again.items[0].boot_ac50);
+    assert(strcmp(again.items[found].title, "Boot 1") == 0);
+    assert(strcmp(again.items[found].run, "autorun/boot-edits/boot-1/launch.sh") == 0);
+    assert(strcmp(again.items[found].patches, "wide-screen.list,extra-pads.list") == 0);
+
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1/patches/wide-screen.list", dir);
+    char *body = read_all(path);
+    assert(strcmp(body, "# title Wide screen\npatch\n") == 0);
+    free(body);
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1/patches/boot-menu.list", dir);
+    body = read_all(path);
+    assert(strcmp(body, "menu-bytes\n") == 0);
+    free(body);
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1/launch.sh", dir);
+    body = read_all(path);
+    assert(strncmp(body, "#!/bin/sh\n", 10) == 0);
+    assert(strstr(body, "MPC_PATCH_DIR"));
+    assert(strstr(body, "mpc-patch-stamp"));
+    assert(strstr(body, "could not replace the patch loader"));
+    assert(strstr(body, "wide-screen.list"));
+    assert(strstr(body, "extra-pads.list"));
+    free(body);
+    {
+        struct stat st;
+        assert(stat(path, &st) == 0);
+        assert(st.st_mode & 0111);
+    }
+
+    const char *only[] = {"wide-screen.list"};
+    const char *bad[] = {"missing.list"};
+    assert(boot_edit_save(dir, "entry:30-snake.entry", "Snake", only, 1, out_id, sizeof out_id) == BOOT_EDIT_BAD_ID);
+    assert(boot_edit_save(dir, saved_id, "", only, 1, out_id, sizeof out_id) == BOOT_EDIT_BAD_TITLE);
+    assert(boot_edit_save(dir, NULL, "Nope", bad, 1, out_id, sizeof out_id) == BOOT_EDIT_BAD_PATCH);
+    assert(boot_edit_save(dir, saved_id, "Lab mix", only, 1, out_id, sizeof out_id) == 0);
+    assert(strcmp(out_id, saved_id) == 0);
+    assert(menu_load(&again, dir) == 4);
+    found = -1;
+    for (int i = 0; i < again.n; i++) {
+        if (strcmp(again.items[i].id, saved_id) == 0) found = i;
+    }
+    assert(found > 0);
+    assert(strcmp(again.items[found].title, "Lab mix") == 0);
+    assert(strcmp(again.items[found].patches, "wide-screen.list") == 0);
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1/patches/extra-pads.list", dir);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1/patches/wide-screen.list", dir);
+    assert(access(path, F_OK) == 0);
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1/patches/boot-menu.list", dir);
+    assert(access(path, F_OK) == 0);
+
+    assert(boot_edit_save(dir, NULL, "Second", NULL, 0, out_id, sizeof out_id) == 0);
+    assert(strcmp(out_id, "entry:boot-2.entry") == 0);
+    assert(menu_load(&again, dir) == 5);
+
+    boot_ui_init(&boot, &again, 0, 0);
+    boot_ui_set_catalog(&boot, catalog, nc);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_EDIT);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ENTRY);
+    assert(strcmp(boot.edit_title, "") == 0);
+    assert(!boot_ui_dirty(&boot));
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_EDIT);
+    assert(boot.action == BOOT_ACT_NONE);
+
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ENTRY);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot_ui_dirty(&boot));
+    assert(boot.enabled[0] == 1);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_UNSAVED);
+    input_begin(&in, 0);
+    in.encoder = 2;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ENTRY);
+    assert(boot_ui_dirty(&boot));
+    assert(boot.enabled[0] == 1);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_UNSAVED);
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_EDIT);
+    assert(boot.action == BOOT_ACT_NONE);
+    assert(!boot_ui_dirty(&boot));
+
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ENTRY);
+    assert(strcmp(boot.edit_title, "Lab mix") == 0);
+    assert(strcmp(boot.edit_id, saved_id) == 0);
+    assert(boot.enabled[0] == 0);
+    assert(boot.enabled[1] == 1);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B3;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_SAVE_BOOT);
+    assert(strcmp(boot.save_id, saved_id) == 0);
+    assert(strcmp(boot.save_title, "Lab mix") == 0);
+    assert(boot.save_npatches == 1);
+    assert(strcmp(boot.save_patches[0], "wide-screen.list") == 0);
+    boot_ui_saved(&boot);
+    assert(boot.screen == BOOT_SCREEN_EDIT);
+
+    input_begin(&in, 0);
+    in.encoder = -1;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ENTRY);
+    assert(boot.edit_new);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_UNSAVED);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_SAVE_BOOT);
+    assert(boot.save_id[0] == 0);
+    assert(boot.save_npatches == 1);
+    assert(strcmp(boot.save_patches[0], "extra-pads.list") == 0);
+
+    assert(boot_edit_remove(dir, "entry:30-snake.entry") == 0);
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1", dir);
+    assert(access(path, F_OK) == 0);
+    assert(boot_edit_remove(dir, saved_id) == 0);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/autorun/boot-menu/boot-1.entry", dir);
+    assert(access(path, F_OK) == 0);
 
     puts("selftest ok");
     return 0;

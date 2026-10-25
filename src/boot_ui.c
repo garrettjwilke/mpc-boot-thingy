@@ -37,6 +37,14 @@ static void row_label(char *dst, size_t n, const char *title, int mark) {
     dst[len + suf] = 0;
 }
 
+static void fit_text(char *dst, size_t n, const char *src) {
+    size_t len = src ? strlen(src) : 0;
+    if (n == 0) return;
+    if (len >= n) len = n - 1;
+    if (len && src) memcpy(dst, src, len);
+    dst[len] = 0;
+}
+
 static struct ui_soft_style soft_style(const struct boot_theme *th) {
     struct ui_soft_style st = {
         .fill = th->box, .text = th->text, .active_text = th->active_text, .highlight = th->hl, .gap = 4,
@@ -74,6 +82,78 @@ static void note_default(struct boot_ui *s, int index) {
     snprintf(s->action_id, sizeof s->action_id, "%s", s->menu->items[index].id);
 }
 
+static int edit_count(const struct boot_ui *s) {
+    int n = 0;
+    if (!s->menu) return 0;
+    for (int i = 0; i < s->menu->n; i++) {
+        if (s->menu->items[i].boot_ac50) n++;
+    }
+    return n;
+}
+
+static void mark_enabled(struct boot_ui *s, const char *list) {
+    char buf[MENU_PATCHES];
+    char *p;
+    memset(s->enabled, 0, sizeof s->enabled);
+    if (!list || !list[0]) return;
+    snprintf(buf, sizeof buf, "%s", list);
+    p = buf;
+    while (*p) {
+        char *comma = strchr(p, ',');
+        if (comma) *comma = 0;
+        for (int i = 0; i < s->ncatalog; i++) {
+            if (strcmp(s->catalog[i].id, p) == 0) s->enabled[i] = 1;
+        }
+        if (!comma) break;
+        p = comma + 1;
+    }
+}
+
+static void open_entry(struct boot_ui *s, int cursor) {
+    int seen = 0;
+    memset(s->enabled, 0, sizeof s->enabled);
+    memset(s->saved_on, 0, sizeof s->saved_on);
+    s->entry_ls.cursor = 0;
+    s->edit_id[0] = 0;
+    s->edit_title[0] = 0;
+    s->edit_new = 1;
+    if (cursor > 0 && s->menu) {
+        for (int i = 0; i < s->menu->n; i++) {
+            if (!s->menu->items[i].boot_ac50) continue;
+            seen++;
+            if (seen != cursor) continue;
+            s->edit_new = 0;
+            snprintf(s->edit_id, sizeof s->edit_id, "%s", s->menu->items[i].id);
+            snprintf(s->edit_title, sizeof s->edit_title, "%s", s->menu->items[i].title);
+            mark_enabled(s, s->menu->items[i].patches);
+            memcpy(s->saved_on, s->enabled, sizeof s->enabled);
+            break;
+        }
+    }
+    s->screen = BOOT_SCREEN_ENTRY;
+}
+
+static void queue_save(struct boot_ui *s) {
+    s->action = BOOT_ACT_SAVE_BOOT;
+    s->save_id[0] = 0;
+    s->save_title[0] = 0;
+    if (!s->edit_new) {
+        snprintf(s->save_id, sizeof s->save_id, "%s", s->edit_id);
+        snprintf(s->save_title, sizeof s->save_title, "%s", s->edit_title);
+    }
+    s->save_npatches = 0;
+    for (int i = 0; i < s->ncatalog && s->save_npatches < BOOT_PATCH_MAX; i++) {
+        if (!s->enabled[i]) continue;
+        snprintf(s->save_patches[s->save_npatches], BOOT_PATCH_ID, "%s", s->catalog[i].id);
+        s->save_npatches++;
+    }
+}
+
+static void discard_entry(struct boot_ui *s) {
+    memcpy(s->enabled, s->saved_on, sizeof s->enabled);
+    s->screen = BOOT_SCREEN_EDIT;
+}
+
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int default_index) {
     if (!ui) return;
     memset(ui, 0, sizeof *ui);
@@ -85,6 +165,30 @@ void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int de
     ui->default_index = default_index;
     ui->default_ls.cursor = default_index;
     ui_menu_prepare(&ui->shift_menu, 1u << IN_SHIFT, "Set as default?", set_default_items, 2);
+}
+
+void boot_ui_set_catalog(struct boot_ui *ui, const struct boot_patch *patches, int n) {
+    if (!ui) return;
+    if (n < 0) n = 0;
+    if (n > BOOT_PATCH_MAX) n = BOOT_PATCH_MAX;
+    if (n > 0 && patches) memcpy(ui->catalog, patches, (size_t)n * sizeof *patches);
+    ui->ncatalog = n > 0 && patches ? n : 0;
+}
+
+int boot_ui_dirty(const struct boot_ui *ui) {
+    if (!ui) return 0;
+    return memcmp(ui->enabled, ui->saved_on, sizeof ui->enabled) != 0;
+}
+
+void boot_ui_saved(struct boot_ui *ui) {
+    if (!ui) return;
+    ui->screen = BOOT_SCREEN_EDIT;
+    memset(ui->enabled, 0, sizeof ui->enabled);
+    memset(ui->saved_on, 0, sizeof ui->saved_on);
+    ui->edit_new = 0;
+    ui->edit_id[0] = 0;
+    ui->edit_title[0] = 0;
+    ui->save_npatches = 0;
 }
 
 void boot_draw_prompt(struct ui *u, int theme) {
@@ -125,25 +229,48 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     if (!shift_open) {
         int screen = s->screen;
         int n = s->menu ? s->menu->n : 0;
+        int edits = 1 + edit_count(s);
+        if (edits > MENU_MAX) edits = MENU_MAX;
         if (screen == BOOT_SCREEN_SETTINGS) move_cursor(&s->settings_ls, 2, &ev);
         else if (screen == BOOT_SCREEN_DEFAULT) move_cursor(&s->default_ls, n, &ev);
         else if (screen == BOOT_SCREEN_THEME) {
             move_cursor(&s->theme_ls, theme_count(), &ev);
             s->theme = s->theme_ls.cursor;
-        }
+        } else if (screen == BOOT_SCREEN_EDIT) move_cursor(&s->edit_ls, edits, &ev);
+        else if (screen == BOOT_SCREEN_ENTRY) move_cursor(&s->entry_ls, s->ncatalog, &ev);
+        else if (screen == BOOT_SCREEN_UNSAVED) move_cursor(&s->unsaved_ls, 3, &ev);
 
         int left = 0;
-        if (screen != BOOT_SCREEN_APPS && input_down(&ev, IN_B1)) {
-            if (screen == BOOT_SCREEN_THEME) {
-                s->theme = s->saved_theme;
-                s->theme_ls.cursor = s->saved_theme;
-            }
-            s->screen = screen == BOOT_SCREEN_SETTINGS ? BOOT_SCREEN_APPS : BOOT_SCREEN_SETTINGS;
+        if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B1)) {
+            s->screen = BOOT_SCREEN_EDIT;
             left = 1;
         } else if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B3)) {
             s->screen = BOOT_SCREEN_SETTINGS;
             left = 1;
+        } else if (screen == BOOT_SCREEN_ENTRY && input_down(&ev, IN_B3)) {
+            queue_save(s);
+            left = 1;
+        } else if (screen != BOOT_SCREEN_APPS && input_down(&ev, IN_B1)) {
+            if (screen == BOOT_SCREEN_THEME) {
+                s->theme = s->saved_theme;
+                s->theme_ls.cursor = s->saved_theme;
+                s->screen = BOOT_SCREEN_SETTINGS;
+            } else if (screen == BOOT_SCREEN_ENTRY) {
+                s->screen = boot_ui_dirty(s) ? BOOT_SCREEN_UNSAVED : BOOT_SCREEN_EDIT;
+                if (s->screen == BOOT_SCREEN_UNSAVED) s->unsaved_ls.cursor = 0;
+            } else if (screen == BOOT_SCREEN_UNSAVED) {
+                s->screen = BOOT_SCREEN_ENTRY;
+            } else if (screen == BOOT_SCREEN_EDIT) {
+                s->screen = BOOT_SCREEN_APPS;
+            } else if (screen == BOOT_SCREEN_SETTINGS) {
+                s->screen = BOOT_SCREEN_APPS;
+            } else {
+                s->screen = BOOT_SCREEN_SETTINGS;
+            }
+            left = 1;
         }
+
+        if (left) ev.encoder_press = 0;
 
         if (!left && ev.encoder_press && !ev.shift) {
             if (screen == BOOT_SCREEN_SETTINGS) {
@@ -176,9 +303,13 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
 
     const char *labels[3];
     if (s->screen == BOOT_SCREEN_APPS) {
-        labels[0] = "";
+        labels[0] = "Boot Edit";
         labels[1] = "";
         labels[2] = "Settings";
+    } else if (s->screen == BOOT_SCREEN_ENTRY) {
+        labels[0] = "Back";
+        labels[1] = "";
+        labels[2] = "Save";
     } else {
         labels[0] = "Back";
         labels[1] = "";
@@ -190,10 +321,19 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
 
     const char *title = "mpc-boot-thingy";
     const char *hint = "";
+    char title_buf[48];
     if (s->screen == BOOT_SCREEN_SETTINGS) title = "Settings";
     else if (s->screen == BOOT_SCREEN_DEFAULT) title = "Default app";
     else if (s->screen == BOOT_SCREEN_THEME) title = "Theme";
-    else hint = "hold shift to set default";
+    else if (s->screen == BOOT_SCREEN_EDIT) title = "Boot Edit";
+    else if (s->screen == BOOT_SCREEN_ENTRY) {
+        fit_text(title_buf, sizeof title_buf, s->edit_new ? "New entry" : s->edit_title);
+        title = title_buf;
+        hint = "press to toggle";
+    } else if (s->screen == BOOT_SCREEN_UNSAVED) {
+        title = "Not saved yet";
+        hint = "this entry has changes";
+    } else hint = "hold shift to set default";
     ui_text(u, 12, 40, title, th->text, 1);
     if (hint[0]) ui_text(u, 12, 56, hint, th->dim, 1);
 
@@ -233,6 +373,39 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         if (tn > 8) tn = 8;
         for (int i = 0; i < tn; i++) rows[i] = theme_at(i)->name;
         ui_list(u, 8, list_y, 304, list_h, rows, tn, rows_st, widget_in, &s->theme_ls);
+    } else if (s->screen == BOOT_SCREEN_EDIT) {
+        char text[MENU_MAX][48];
+        const char *rows[MENU_MAX];
+        int shown = 0;
+        rows[shown++] = "New entry";
+        if (s->menu) {
+            for (int i = 0; i < s->menu->n && shown < MENU_MAX; i++) {
+                if (!s->menu->items[i].boot_ac50) continue;
+                fit_text(text[shown], sizeof text[shown], s->menu->items[i].title);
+                rows[shown] = text[shown];
+                shown++;
+            }
+        }
+        int hit = ui_list(u, 8, list_y, 304, list_h, rows, shown, rows_st, widget_in, &s->edit_ls);
+        if (hit >= 0) open_entry(s, hit);
+    } else if (s->screen == BOOT_SCREEN_ENTRY) {
+        char text[BOOT_PATCH_MAX][48];
+        const char *rows[BOOT_PATCH_MAX];
+        int pn = s->ncatalog;
+        if (pn > BOOT_PATCH_MAX) pn = BOOT_PATCH_MAX;
+        for (int i = 0; i < pn; i++) {
+            const char *name = s->catalog[i].title[0] ? s->catalog[i].title : s->catalog[i].id;
+            snprintf(text[i], sizeof text[i], "%s%s", s->enabled[i] ? "On  " : "    ", name);
+            rows[i] = text[i];
+        }
+        int hit = ui_list(u, 8, list_y, 304, list_h, rows, pn, rows_st, widget_in, &s->entry_ls);
+        if (hit >= 0 && hit < pn) s->enabled[hit] = !s->enabled[hit];
+    } else if (s->screen == BOOT_SCREEN_UNSAVED) {
+        const char *rows[] = {"Save", "Don't save", "Cancel"};
+        int hit = ui_list(u, 8, list_y, 304, list_h, rows, 3, rows_st, widget_in, &s->unsaved_ls);
+        if (hit == 0) queue_save(s);
+        else if (hit == 1) discard_entry(s);
+        else if (hit == 2) s->screen = BOOT_SCREEN_ENTRY;
     }
 
     if (s->screen == BOOT_SCREEN_APPS) {

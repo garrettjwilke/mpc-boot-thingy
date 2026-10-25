@@ -37,6 +37,20 @@ export async function installProgram({ title, args, name, file }) {
   return readBody(await fetch("/api/apps?" + q.toString(), { method: "POST", body: file }));
 }
 
+export async function fetchPatches() {
+  return readBody(await fetch("/api/patches"));
+}
+
+export async function saveBootEdit({ title, patches, id }) {
+  const body = { title, patches };
+  if (id) body.id = id;
+  return readBody(await fetch("/api/boot-edits", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  }));
+}
+
 export async function rebootDevice() {
   return readBody(await fetch("/api/reboot", { method: "POST" }));
 }

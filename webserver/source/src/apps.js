@@ -1,6 +1,6 @@
 import { postDefault, removeApp } from "./api.js";
 
-export function renderApps(apps, defaultId, { toast, refresh }) {
+export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
   const appsEl = document.getElementById("apps");
   const hdrDefault = document.getElementById("hdr-default");
   appsEl.textContent = "";
@@ -21,7 +21,9 @@ export function renderApps(apps, defaultId, { toast, refresh }) {
     }
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = app.stock ? app.id : (app.id + (app.run ? "  run " + app.run : "") + (app.args ? "  " + app.args : ""));
+    meta.textContent = app.editable
+      ? "boot entry" + (app.patches && app.patches.length ? "  " + app.patches.join(", ") : "")
+      : app.stock ? app.id : (app.id + (app.run ? "  run " + app.run : "") + (app.args ? "  " + app.args : ""));
     info.appendChild(meta);
     const actions = document.createElement("div");
     actions.className = "row";
@@ -32,6 +34,14 @@ export function renderApps(apps, defaultId, { toast, refresh }) {
       setBtn.textContent = "Set default";
       setBtn.addEventListener("click", () => changeDefault(app, toast, refresh));
       actions.appendChild(setBtn);
+    }
+    if (app.editable && onEdit) {
+      const editBtn = document.createElement("button");
+      editBtn.className = "btn secondary sm";
+      editBtn.type = "button";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", () => onEdit(app));
+      actions.appendChild(editBtn);
     }
     if (!app.stock) {
       const delBtn = document.createElement("button");
