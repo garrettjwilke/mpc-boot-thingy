@@ -131,6 +131,15 @@ grep -q 'systemd-run --unit=mpc-boot-thingy' "$empty/autorun/autorun.sh"
 grep -q 'systemd-run --unit=mpc-boot-web' "$empty/autorun/autorun.sh"
 grep -q 'systemd-run --unit=mpc-boot-ssh' "$empty/autorun/autorun.sh"
 grep -q 'remount,exec' "$empty/autorun/autorun.sh"
+if grep -q 'boot-menu-apply' "$empty/autorun/autorun.sh"; then fail "autorun applies the stock patch"; fi
+if grep -q 'stock-os-patched' "$empty/autorun/autorun.sh"; then fail "autorun mounts the stock patch"; fi
+test -x "$empty/autorun/boot-menu-apply.sh"
+test -x "$empty/autorun/poke"
+test -s "$empty/autorun/patches.list"
+if grep -q 'conv=notrunc' "$empty/autorun/boot-menu-apply.sh"; then fail "device dd cannot use conv=notrunc"; fi
+grep -q 'menu-os' "$empty/autorun/boot-menu-apply.sh"
+if grep -q '/tmp/mpc-stock-patched' "$empty/autorun/boot-menu-apply.sh"; then fail "patched app is rebuilt in /tmp"; fi
+grep -q 'boot-menu-apply.sh' "$ROOT/src/main.c"
 test -x "$empty/autorun/mpc-boot-web"
 test -x "$empty/autorun/web.sh"
 test -f "$empty/autorun/web/index.html"
@@ -165,6 +174,7 @@ if grep -Eq '^[[:space:]]*AuthenticationMethods' "$empty/autorun/ssh.sh"; then
 fi
 test -s "$empty/autorun/ssh_host_ed25519_key"
 test -s "$empty/autorun/ssh_host_ed25519_key.pub"
+cmp -s "$ROOT/ssh/ssh_host_ed25519_key" "$empty/autorun/ssh_host_ed25519_key" || fail "fresh install did not use the saved server identity"
 hostkey=$(shasum -a 256 "$empty/autorun/ssh_host_ed25519_key" | awk '{print $1}')
 got=$(digest_of "$empty/autorun")
 have=$(cat "$empty/autorun/autorun.check")

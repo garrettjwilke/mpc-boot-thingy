@@ -100,6 +100,16 @@ void boot_draw_prompt(struct ui *u, int theme) {
     ui_text(u, (UI_W - (int)strlen(b) * gw) / 2, y + gh + 12, b, th->text, scale);
 }
 
+void boot_draw_loading(struct ui *u, int theme) {
+    const struct boot_theme *th = theme_at(theme);
+    ui_clear(u, th->bg);
+    const char *a = "Loading Patches...";
+    int scale = 2;
+    int gw = FONT_L_W * scale;
+    int gh = FONT_L_H * scale;
+    ui_text(u, (UI_W - (int)strlen(a) * gw) / 2, (UI_H - gh) / 2, a, th->hl, scale);
+}
+
 int boot_frame(struct ui *u, const struct input *in, void *state) {
     struct boot_ui *s = state;
     if (!u || !s) return 0;

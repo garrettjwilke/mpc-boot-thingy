@@ -8,12 +8,16 @@ HOST_SRC = src/test.c src/menu.c src/theme.c src/boot_ui.c $(UI)/ui.c $(UI)/widg
 
 .PHONY: all test clean web-host
 
-all: build/mpc-boot-thingy build/mpc-boot-web
+all: build/mpc-boot-thingy build/mpc-boot-web build/poke
 
 build/mpc-boot-thingy: $(DEV_SRC) inc/menu.h inc/theme.h inc/boot_ui.h
 	mkdir -p build
 	zig cc -target aarch64-linux-musl -static -O2 -s -D_DEFAULT_SOURCE -std=c11 $(WARN) $(INC) \
 	  -o $@ $(DEV_SRC)
+
+build/poke: menu-patch/poke.c
+	mkdir -p build
+	zig cc -target aarch64-linux-musl -static -O2 -s -o $@ menu-patch/poke.c
 
 build/mpc-boot-web: webserver/server.c src/menu.c inc/menu.h
 	mkdir -p build
