@@ -1,5 +1,6 @@
-/* mpc-boot-thingy: after the splash, holding Shift opens the menu.
-   Waiting starts the saved default, or Stock when none is saved. */
+/* mpc-boot-thingy. At power-on, holding Shift during the splash opens the menu.
+   Waiting starts the saved default, or Stock when none is saved.
+   --menu skips the splash and opens the menu. The stock Shift+Pad 16 row uses that. */
 #include "boot_ui.h"
 #include "input.h"
 #include "menu.h"
@@ -44,13 +45,94 @@ static int run_cmd(char *const argv[]) {
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+static int remount_exec(const char *card);
+
 static int systemctl_ac50(const char *verb) {
     char *argv[] = {"systemctl", (char *)verb, "ac50.service", NULL};
     return run_cmd(argv);
 }
 
-static void restore_stock_if_stopped(void) {
-    if (stopped_ac50) systemctl_ac50("start");
+/* Bind the Shift+Pad 16 patch over /usr/bin/MPC Sample, then ac50 can start it.
+   The script lives next to this menu. A missing script still starts stock. */
+static void draw_pixels(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi, struct ui *u);
+
+static int sha_token(const char *path, const char *prefix, char *out, size_t n) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char line[256];
+    size_t plen = prefix ? strlen(prefix) : 0;
+    int ok = -1;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, prefix ? prefix : "", plen) != 0) continue;
+        char *s = line + plen;
+        while (*s == ' ') s++;
+        size_t len = strcspn(s, " \r\n");
+        if (len == 0 || len + 1 > n) break;
+        memcpy(out, s, len);
+        out[len] = 0;
+        ok = 0;
+        break;
+    }
+    fclose(f);
+    return ok;
+}
+
+/* 1 when autorun/menu-os already matches this patch set. A miss means the
+   next apply rebuilds the file, which is the slow part. */
+static int patch_current(const char *card) {
+    char path[512], want[80], have[80];
+    if (!card || !card[0]) return 1;
+    snprintf(path, sizeof path, "%s/autorun/boot-menu-apply.sh", card);
+    if (access(path, R_OK) != 0) return 1;
+    snprintf(path, sizeof path, "%s/autorun/menu-os", card);
+    if (access(path, R_OK) != 0) return 0;
+    snprintf(path, sizeof path, "%s/autorun/patches.list", card);
+    if (sha_token(path, "#result-sha256", want, sizeof want) != 0) return 0;
+    snprintf(path, sizeof path, "%s/autorun/menu-os.sha", card);
+    if (sha_token(path, "", have, sizeof have) != 0) return 0;
+    return strcmp(want, have) == 0;
+}
+
+static void show_loading(struct screen *scr, struct surface *midi, int theme) {
+    uint32_t *back = calloc((size_t)UI_W * UI_H, sizeof(uint32_t));
+    uint32_t *front = calloc((size_t)UI_W * UI_H, sizeof(uint32_t));
+    if (!back || !front) {
+        free(back);
+        free(front);
+        return;
+    }
+    if (midi && midi->fd >= 0) surface_all_off(midi);
+    struct ui u = {.px = back};
+    boot_draw_loading(&u, theme);
+    draw_pixels(scr, back, front, midi, &u);
+    free(back);
+    free(front);
+}
+
+static void mount_patched_stock(const char *card) {
+    char script[512];
+    if (!card || !card[0]) return;
+    int n = snprintf(script, sizeof script, "%s/autorun/boot-menu-apply.sh", card);
+    if (n < 0 || (size_t)n >= sizeof script) return;
+    if (access(script, R_OK) != 0) return;
+    remount_exec(card);
+    char *argv[] = {"sh", script, NULL};
+    int rc = run_cmd(argv);
+    if (rc != 0) fprintf(stderr, "stock patch failed (%d)\n", rc);
+}
+
+static void restore_stock_if_stopped(const char *card) {
+    struct screen scr = {.fd = -1};
+    int opened = 0;
+    if (!stopped_ac50) return;
+    if (!patch_current(card) && screen_open(&scr) == 0) {
+        show_loading(&scr, NULL, theme_load(card));
+        opened = 1;
+    }
+    mount_patched_stock(card);
+    if (opened) screen_close(&scr);
+    systemctl_ac50("start");
+    stopped_ac50 = 0;
 }
 
 /* Quiet check used while ac50 is stopping. surface_open logs every failure. */
@@ -275,6 +357,8 @@ static void resolve_run(const char *card, const char *run, char *out, size_t n) 
    2 means the panel and screen are still ours. */
 static int launch(struct surface *midi, struct screen *scr, const char *card, const struct menu_entry *e) {
     if (e->stock) {
+        if (!patch_current(card)) show_loading(scr, midi, theme_load(card));
+        mount_patched_stock(card);
         surface_all_off(midi);
         surface_close(midi);
         screen_close(scr);
@@ -374,20 +458,33 @@ static void release_devices(struct surface *midi, struct screen *scr) {
     if (scr->px || scr->fd >= 0) screen_close(scr);
 }
 
+static int wants_menu(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--menu") == 0) return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    const char *autorun = argc > 1 ? argv[1] : NULL;
+    int open_menu = wants_menu(argc, argv);
+    const char *autorun = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--menu") == 0) continue;
+        autorun = argv[i];
+        break;
+    }
     char card[512];
     card_root_of(autorun, card, sizeof card);
 
     struct surface midi = {.fd = -1};
     struct screen scr = {.fd = -1};
     if (open_surface_claim(&midi) != 0) {
-        restore_stock_if_stopped();
+        restore_stock_if_stopped(card);
         return 1;
     }
     if (screen_open(&scr) != 0) {
         release_devices(&midi, &scr);
-        restore_stock_if_stopped();
+        restore_stock_if_stopped(card);
         return 1;
     }
 
@@ -402,21 +499,28 @@ int main(int argc, char **argv) {
         free(back);
         free(front);
         release_devices(&midi, &scr);
-        restore_stock_if_stopped();
+        restore_stock_if_stopped(card);
         return 1;
     }
 
-    draw_prompt(&scr, back, front, &midi, theme);
-    printf("prompt: hold SHIFT for boot thingy\n");
-    fflush(stdout);
-
     struct parser parser = {0};
     struct input_dev dev = {0};
-    int held = wait_shift(&midi, &parser, &dev);
+    int held = 1;
+    if (!open_menu) {
+        draw_prompt(&scr, back, front, &midi, theme);
+        printf("prompt: hold SHIFT for boot thingy\n");
+        fflush(stdout);
+        held = wait_shift(&midi, &parser, &dev);
+    }
     if (!held) {
         if (def <= 0) {
+            if (!patch_current(card)) show_loading(&scr, &midi, theme);
+            mount_patched_stock(card);
             release_devices(&midi, &scr);
-            restore_stock_if_stopped();
+            if (stopped_ac50) {
+                systemctl_ac50("start");
+                stopped_ac50 = 0;
+            }
             free(back);
             free(front);
             return 0;
@@ -431,7 +535,7 @@ int main(int argc, char **argv) {
             memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
             if (reopen_after_app(&midi, &scr) != 0) {
                 release_devices(&midi, &scr);
-                restore_stock_if_stopped();
+                restore_stock_if_stopped(card);
                 free(back);
                 free(front);
                 return 1;
@@ -502,7 +606,7 @@ int main(int argc, char **argv) {
 
     if (rc != 0) {
         release_devices(&midi, &scr);
-        restore_stock_if_stopped();
+        restore_stock_if_stopped(card);
     }
     free(back);
     free(front);

@@ -92,8 +92,10 @@ From the computer:
 
   ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1
 
-The password is empty: press Enter. The first connection asks you to
-trust this MPC. Plug in the USB cable before you turn the MPC on.
+The password is empty: press Enter. Plug in the USB cable before you
+turn the MPC on. The server identity lives in ssh/ssh_host_ed25519_key.
+A fresh card gets that same key, so known_hosts stays valid. A card that
+already has a key keeps it.
 
 SSH and the web terminal both start bash from os_tools/bin. Aliases and
 exports belong in os_tools/.bashrc on the card. Setup keeps that file
@@ -641,11 +643,23 @@ exec "$bin" "$D" 8080 192.168.155.1
 EOF
   chmod 755 "$A/web.sh"
   if [ ! -s "$A/ssh_host_ed25519_key" ]; then
-    if ! command -v ssh-keygen >/dev/null 2>&1; then
-      echo "ERROR: ssh-keygen is required to create the server identity" >&2
-      exit 1
+    id=$ROOT/ssh/ssh_host_ed25519_key
+    if [ ! -s "$id" ]; then
+      if ! command -v ssh-keygen >/dev/null 2>&1; then
+        echo "ERROR: ssh-keygen is required to create the server identity" >&2
+        exit 1
+      fi
+      mkdir -p "$ROOT/ssh"
+      ssh-keygen -q -t ed25519 -N '' -f "$id" -C 'mpc-boot-thingy'
+      chmod 600 "$id" 2>/dev/null || true
     fi
-    ssh-keygen -q -t ed25519 -N '' -f "$A/ssh_host_ed25519_key" -C 'mpc-boot-thingy'
+    if [ ! -s "$id.pub" ] && command -v ssh-keygen >/dev/null 2>&1; then
+      ssh-keygen -y -f "$id" > "$id.pub"
+    fi
+    card_cp "$id" "$A/ssh_host_ed25519_key"
+    if [ -s "$id.pub" ]; then
+      card_cp "$id.pub" "$A/ssh_host_ed25519_key.pub"
+    fi
     chmod 600 "$A/ssh_host_ed25519_key" 2>/dev/null || true
   fi
   if command -v shasum >/dev/null 2>&1; then
@@ -663,6 +677,10 @@ EOF
   fi
   card_cp "$ROOT/build/mpc-boot-thingy" "$A/mpc-boot-thingy"
   chmod 755 "$A/mpc-boot-thingy"
+  card_cp "$ROOT/menu-patch/apply.sh" "$A/boot-menu-apply.sh"
+  card_cp "$ROOT/menu-patch/patches.list" "$A/patches.list"
+  card_cp "$ROOT/build/poke" "$A/poke"
+  chmod 755 "$A/boot-menu-apply.sh" "$A/poke"
   card_cp "$ROOT/build/mpc-boot-web" "$A/mpc-boot-web"
   chmod 755 "$A/mpc-boot-web"
   mkdir -p "$A/web"
@@ -744,10 +762,10 @@ add_over_ssh() {
 }
 
 install_over_ssh() {
-  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ]; then
+  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -x "$ROOT/build/poke" ]; then
     make -C "$ROOT"
   fi
-  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ]; then
+  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -x "$ROOT/build/poke" ]; then
     echo "ERROR: build did not produce the boot and web binaries" >&2
     exit 1
   fi
@@ -922,10 +940,10 @@ if [ -n "$ADD" ]; then
   exit 0
 fi
 
-if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ]; then
+if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -x "$ROOT/build/poke" ]; then
   make -C "$ROOT"
 fi
-if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ]; then
+if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -x "$ROOT/build/poke" ]; then
   echo "ERROR: build did not produce the boot and web binaries" >&2
   exit 1
 fi

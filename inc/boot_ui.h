@@ -39,3 +39,4 @@ struct boot_ui {
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int default_index);
 int boot_frame(struct ui *u, const struct input *in, void *state);
 void boot_draw_prompt(struct ui *u, int theme);
+void boot_draw_loading(struct ui *u, int theme);
