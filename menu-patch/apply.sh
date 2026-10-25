@@ -16,6 +16,7 @@ LOADER_SRC="$HERE/loader.so"
 LOADER=/run/mpc-patch-loader.so
 REAL=/run/launch-ac50.real
 WRAP=/run/launch-ac50.wrap
+STAMP=/run/mpc-patch-stamp
 
 log() { echo "[boot-menu] $*"; }
 die() { echo "[boot-menu] ERROR: $*" >&2; exit 1; }
@@ -63,10 +64,21 @@ sq() {
 [ -r "$LOADER_SRC" ] || die "missing $LOADER_SRC"
 [ -r "$LAUNCH" ] || die "cannot read $LAUNCH"
 
+# The stamp is the patch directory last mounted. A Boot Edit entry uses
+# its own directory, so a mount for a different set has to be replaced.
+stamp_matches() {
+    [ -f "$STAMP" ] || return 1
+    got=$(cat "$STAMP") || return 1
+    [ "$got" = "$PATCH_DIR" ]
+}
+
 unmount_stock
 if mounted "$LAUNCH"; then
-    log "patch loader already mounted"
-    exit 0
+    if stamp_matches; then
+        log "patch loader already mounted"
+        exit 0
+    fi
+    umount "$LAUNCH" || die "could not replace the patch loader"
 fi
 
 cp "$LOADER_SRC" "$LOADER"
@@ -88,4 +100,5 @@ fi
 } > "$WRAP"
 chmod 755 "$WRAP"
 mount --bind "$WRAP" "$LAUNCH" || die "could not mount the patch loader"
+printf '%s\n' "$PATCH_DIR" > "$STAMP" || die "could not record the patch directory"
 log "patch loader mounted"

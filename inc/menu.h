@@ -8,6 +8,7 @@
 #define MENU_ARGS 256
 #define MENU_PATH 512
 #define MENU_ID 288
+#define MENU_PATCHES 768
 
 struct menu_entry {
     char title[MENU_TITLE];
@@ -15,7 +16,9 @@ struct menu_entry {
     char args[MENU_ARGS];
     char base[MENU_PATH]; /* directory a relative run path is joined to */
     char id[MENU_ID];     /* "stock", "app:<folder>", or "entry:<file>" */
+    char patches[MENU_PATCHES]; /* comma-separated catalog ids, when boot_ac50 */
     int stock;
+    int boot_ac50; /* run is a Boot Edit script; launch hands off like Stock */
 };
 
 struct menu {

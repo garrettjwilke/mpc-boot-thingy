@@ -46,6 +46,12 @@ not replaced.
 A card with no autorun folder is installed with no question.
 A card that already has mpc-boot-thingy is updated with no question
 and no new backup. Menu files in autorun/boot-menu/ are left in place.
+So are autorun/patch-catalog/ and autorun/boot-edits/.
+
+Optional patches go in autorun/patch-catalog/ as .list or .so files.
+A .list can start with "# title Name". Stock does not load that folder.
+Boot Edit, on the device or the web page, saves a mix as its own menu
+row. The row runs a shell script that applies only those patches.
 
 The backup question appears only when the card has a different autorun,
 such as the USB SSH kit. Answering y copies that folder aside, then
@@ -693,7 +699,7 @@ EOF
   card_cp "$ROOT/build/mpc-boot-thingy" "$A/mpc-boot-thingy"
   chmod 755 "$A/mpc-boot-thingy"
   card_cp "$ROOT/menu-patch/apply.sh" "$A/boot-menu-apply.sh"
-  mkdir -p "$A/patches"
+  mkdir -p "$A/patches" "$A/patch-catalog" "$A/boot-edits"
   card_cp "$ROOT/menu-patch/patches.list" "$A/patches/boot-menu.list"
   card_cp "$ROOT/build/loader.so" "$A/loader.so"
   chmod 755 "$A/boot-menu-apply.sh" "$A/loader.so"

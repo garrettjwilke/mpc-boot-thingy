@@ -145,6 +145,27 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
 }
 .app .meta { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-top: 4px; }
 .app .badge { margin-left: 8px; }
+.patch {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+#boot-form { margin-top: 14px; }
+#boot-form .field { margin-bottom: 8px; }
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+  padding: 24px;
+}
+.modal[hidden] { display: none; }
+.modal .card { max-width: 420px; width: 100%; margin: 0; }
 .term-wrap {
   height: min(70vh, 640px);
   min-height: 360px;

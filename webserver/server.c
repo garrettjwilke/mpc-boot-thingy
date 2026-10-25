@@ -6,6 +6,7 @@
 #define _DARWIN_C_SOURCE
 #endif
 
+#include "boot_edit.h"
 #include "menu.h"
 
 #include <arpa/inet.h>
@@ -512,6 +513,29 @@ static void json_escape_print(FILE *fp, const char *s) {
     fputc('"', fp);
 }
 
+static void json_csv(FILE *fp, const char *list) {
+    char buf[MENU_PATCHES];
+    char *p;
+    int first = 1;
+    fputc('[', fp);
+    if (list && list[0] && strlen(list) < sizeof buf) {
+        snprintf(buf, sizeof buf, "%s", list);
+        p = buf;
+        while (*p) {
+            char *comma = strchr(p, ',');
+            if (comma) *comma = 0;
+            if (*p) {
+                if (!first) fputc(',', fp);
+                first = 0;
+                json_escape_print(fp, p);
+            }
+            if (!comma) break;
+            p = comma + 1;
+        }
+    }
+    fputc(']', fp);
+}
+
 static void rstrip(char *s) {
     size_t n = strlen(s);
     while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = 0;
@@ -826,7 +850,10 @@ static void handle_status(int fd) {
         json_escape_print(fp, menu.items[i].run);
         fputs(",\"args\":", fp);
         json_escape_print(fp, menu.items[i].args);
-        fprintf(fp, ",\"stock\":%s}", menu.items[i].stock ? "true" : "false");
+        fprintf(fp, ",\"stock\":%s,\"editable\":%s,\"patches\":", menu.items[i].stock ? "true" : "false",
+                menu.items[i].boot_ac50 ? "true" : "false");
+        json_csv(fp, menu.items[i].patches);
+        fputc('}', fp);
     }
     fputs("]}\n", fp);
     fclose(fp);
@@ -1058,6 +1085,10 @@ static void handle_delete(int fd, const char *query) {
             return;
         }
     } else {
+        if (boot_edit_remove(g_card, id) != 0) {
+            send_err(fd, 500, "Internal Server Error", "could not remove the boot entry");
+            return;
+        }
         if (!S_ISREG(st.st_mode) || unlink(full) != 0) {
             send_err(fd, 500, "Internal Server Error", "could not remove the program");
             return;
@@ -1509,6 +1540,164 @@ static int read_request(struct io *io, char *method, char *uri, char **headers_o
     return 0;
 }
 
+static const char *skip_ws(const char *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    return p;
+}
+
+static int json_string(const char **pp, char *out, size_t n) {
+    const char *p = *pp;
+    size_t i = 0;
+    if (*p != '"') return -1;
+    p++;
+    while (*p && *p != '"') {
+        unsigned char c = (unsigned char)*p++;
+        if (c == '\\') {
+            if (*p == '"' || *p == '\\' || *p == '/') c = (unsigned char)*p++;
+            else if (*p == 'n') {
+                c = '\n';
+                p++;
+            } else if (*p == 't') {
+                c = '\t';
+                p++;
+            } else return -1;
+        }
+        if (c < 0x20 || i + 1 >= n) return -1;
+        out[i++] = (char)c;
+    }
+    if (*p != '"') return -1;
+    out[i] = 0;
+    *pp = p + 1;
+    return 0;
+}
+
+static const char *json_key(const char *s, const char *key) {
+    size_t klen = strlen(key);
+    const char *p;
+    for (p = s; *p; p++) {
+        if (*p != '"') continue;
+        p++;
+        if (strncmp(p, key, klen) == 0 && p[klen] == '"') {
+            p = skip_ws(p + klen + 1);
+            if (*p == ':') return skip_ws(p + 1);
+        }
+    }
+    return NULL;
+}
+
+static void handle_patches(int fd) {
+    struct boot_patch patches[BOOT_PATCH_MAX];
+    char *buf = NULL;
+    size_t sz = 0;
+    FILE *fp;
+    int n = boot_edit_list(g_card, patches, BOOT_PATCH_MAX);
+    int i;
+    fp = open_memstream(&buf, &sz);
+    if (!fp) {
+        send_err(fd, 500, "Internal Server Error", "could not list patches");
+        return;
+    }
+    fputs("{\"patches\":[", fp);
+    for (i = 0; i < n; i++) {
+        if (i) fputc(',', fp);
+        fputs("{\"id\":", fp);
+        json_escape_print(fp, patches[i].id);
+        fputs(",\"title\":", fp);
+        json_escape_print(fp, patches[i].title);
+        fputc('}', fp);
+    }
+    fputs("]}\n", fp);
+    fclose(fp);
+    send_json(fd, 200, "OK", buf);
+    free(buf);
+}
+
+static void handle_boot_edit(int fd, struct io *io, int has_len, size_t content_len) {
+    char raw[8192], title[MENU_TITLE], id[MENU_ID], out_id[MENU_ID];
+    char ids[BOOT_PATCH_MAX][BOOT_PATCH_ID];
+    const char *ptrs[BOOT_PATCH_MAX];
+    const char *title_at, *id_at, *patches_at, *p;
+    int npatches = 0, i, rc;
+    char resp[MENU_ID + 32];
+    if (!has_len || content_len == 0 || content_len >= sizeof raw) {
+        send_err(fd, 400, "Bad Request", "missing boot entry");
+        return;
+    }
+    if (io_read(io, raw, content_len) != 0) {
+        send_err(fd, 400, "Bad Request", "missing boot entry");
+        return;
+    }
+    raw[content_len] = 0;
+    title_at = json_key(raw, "title");
+    patches_at = json_key(raw, "patches");
+    id_at = json_key(raw, "id");
+    if (!title_at || json_string(&title_at, title, sizeof title) != 0 || !one_line(title) || strlen(title) >= MENU_TITLE) {
+        send_err(fd, 400, "Bad Request", "title must be one short line");
+        return;
+    }
+    if (!patches_at) {
+        send_err(fd, 400, "Bad Request", "missing patches");
+        return;
+    }
+    p = skip_ws(patches_at);
+    if (*p != '[') {
+        send_err(fd, 400, "Bad Request", "missing patches");
+        return;
+    }
+    p = skip_ws(p + 1);
+    if (*p != ']') {
+        while (*p) {
+            if (npatches >= BOOT_PATCH_MAX || json_string(&p, ids[npatches], sizeof ids[npatches]) != 0) {
+                send_err(fd, 400, "Bad Request", "unknown patch");
+                return;
+            }
+            npatches++;
+            p = skip_ws(p);
+            if (*p == ']') break;
+            if (*p != ',') {
+                send_err(fd, 400, "Bad Request", "missing patches");
+                return;
+            }
+            p = skip_ws(p + 1);
+        }
+        if (*p != ']') {
+            send_err(fd, 400, "Bad Request", "missing patches");
+            return;
+        }
+    }
+    id[0] = 0;
+    if (id_at && *id_at != 'n') {
+        if (json_string(&id_at, id, sizeof id) != 0) {
+            send_err(fd, 400, "Bad Request", "that entry cannot be edited");
+            return;
+        }
+    }
+    for (i = 0; i < npatches; i++) ptrs[i] = ids[i];
+    rc = boot_edit_save(g_card, id[0] ? id : NULL, title, ptrs, npatches, out_id, sizeof out_id);
+    if (rc == BOOT_EDIT_BAD_TITLE) {
+        send_err(fd, 400, "Bad Request", "title must be one short line");
+        return;
+    }
+    if (rc == BOOT_EDIT_BAD_PATCH) {
+        send_err(fd, 400, "Bad Request", "unknown patch");
+        return;
+    }
+    if (rc == BOOT_EDIT_BAD_ID) {
+        send_err(fd, 400, "Bad Request", "that entry cannot be edited");
+        return;
+    }
+    if (rc != BOOT_EDIT_OK) {
+        send_err(fd, 500, "Internal Server Error", "could not save the boot entry");
+        return;
+    }
+    if (strchr(out_id, '"') || strchr(out_id, '\\')) {
+        send_json(fd, 200, "OK", "{\"ok\":true}\n");
+        return;
+    }
+    snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"%s\"}\n", out_id);
+    send_json(fd, 200, "OK", resp);
+}
+
 static void handle_client(int client) {
     struct io io;
     char method[16], uri[1024], path[1024];
@@ -1546,6 +1735,14 @@ static void handle_client(int client) {
     }
     if (strcmp(method, "GET") == 0 && strcmp(path, "/api/status") == 0) {
         handle_status(client);
+        goto out;
+    }
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/patches") == 0) {
+        handle_patches(client);
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/boot-edits") == 0) {
+        handle_boot_edit(client, &io, has_len, content_len);
         goto out;
     }
     if (strcmp(method, "POST") == 0 && strcmp(path, "/api/apps") == 0) {

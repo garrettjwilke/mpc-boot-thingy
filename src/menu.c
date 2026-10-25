@@ -26,7 +26,7 @@ static int parse_entry(const char *path, struct menu_entry *e) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     memset(e, 0, sizeof *e);
-    char line[512];
+    char line[1024];
     while (fgets(line, sizeof line, f)) {
         trim(line);
         if (!line[0] || line[0] == '#') continue;
@@ -39,6 +39,9 @@ static int parse_entry(const char *path, struct menu_entry *e) {
         if (strcmp(key, "title") == 0) snprintf(e->title, sizeof e->title, "%s", val);
         else if (strcmp(key, "run") == 0) snprintf(e->run, sizeof e->run, "%s", val);
         else if (strcmp(key, "args") == 0) snprintf(e->args, sizeof e->args, "%s", val);
+        else if (strcmp(key, "boot") == 0) e->boot_ac50 = strcmp(val, "ac50") == 0;
+        else if (strcmp(key, "patches") == 0 && strlen(val) < sizeof e->patches)
+            snprintf(e->patches, sizeof e->patches, "%s", val);
     }
     fclose(f);
     if (!e->title[0] || !e->run[0]) return -1;

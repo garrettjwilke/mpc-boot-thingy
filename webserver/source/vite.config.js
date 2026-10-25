@@ -59,9 +59,22 @@ function readRaw(req) {
 function mockState() {
   return {
     default_id: "stock",
+    patches: [
+      { id: "wide-screen.list", title: "Wide screen" },
+      { id: "extra-pads.list", title: "Extra pads" },
+    ],
     apps: [
-      { id: "stock", title: "Stock", run: "", args: "", stock: true },
-      { id: "app:lab-firmware", title: "Lab firmware", run: "mpcfw", args: "", stock: false },
+      { id: "stock", title: "Stock", run: "", args: "", stock: true, editable: false, patches: [] },
+      { id: "app:lab-firmware", title: "Lab firmware", run: "mpcfw", args: "", stock: false, editable: false, patches: [] },
+      {
+        id: "entry:boot-1.entry",
+        title: "Boot 1",
+        run: "autorun/boot-edits/boot-1/launch.sh",
+        args: "",
+        stock: false,
+        editable: true,
+        patches: ["wide-screen.list"],
+      },
     ],
     uname: "preview mpc",
     uptime: "up 1 minute",
@@ -75,6 +88,55 @@ function mockState() {
 async function handleMock(req, res, url, state) {
   if (req.method === "GET" && url.pathname === "/api/status") {
     sendJson(res, 200, state);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/patches") {
+    sendJson(res, 200, { patches: state.patches });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/boot-edits") {
+    const raw = await readRaw(req);
+    let body = {};
+    try { body = JSON.parse(raw.toString("utf8") || "{}"); }
+    catch (e) {
+      sendJson(res, 400, { error: "missing boot entry" });
+      return;
+    }
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    const patches = Array.isArray(body.patches) ? body.patches : null;
+    const id = typeof body.id === "string" ? body.id : "";
+    if (!title || title.includes("\n") || title.length >= 64) {
+      sendJson(res, 400, { error: "title must be one short line" });
+      return;
+    }
+    if (!patches || patches.some((name) => !state.patches.some((patch) => patch.id === name))) {
+      sendJson(res, 400, { error: "unknown patch" });
+      return;
+    }
+    if (id) {
+      const existing = state.apps.find((app) => app.id === id);
+      if (!existing || !existing.editable) {
+        sendJson(res, 400, { error: "that entry cannot be edited" });
+        return;
+      }
+      existing.title = title;
+      existing.patches = patches.slice();
+      sendJson(res, 200, { ok: true, id });
+      return;
+    }
+    let n = 1;
+    while (state.apps.some((app) => app.id === "entry:boot-" + n + ".entry")) n += 1;
+    const made = "entry:boot-" + n + ".entry";
+    state.apps.push({
+      id: made,
+      title,
+      run: "autorun/boot-edits/boot-" + n + "/launch.sh",
+      args: "",
+      stock: false,
+      editable: true,
+      patches: patches.slice(),
+    });
+    sendJson(res, 200, { ok: true, id: made });
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/apps") {

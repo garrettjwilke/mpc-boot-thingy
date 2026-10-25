@@ -1,6 +1,7 @@
 import "./styles.css";
-import { fetchStatus } from "./api.js";
+import { fetchPatches, fetchStatus } from "./api.js";
 import { renderApps } from "./apps.js";
+import { bindBootEdit } from "./bootedit.js";
 import { bindInstall } from "./install.js";
 import { renderDevice, bindReboot } from "./device.js";
 import { bindTerminal } from "./terminal.js";
@@ -19,9 +20,23 @@ function toast(msg) {
   toast._t = setTimeout(() => { el.style.display = "none"; }, 4200);
 }
 
+const editor = bindBootEdit({ toast, refresh: refreshStatus });
+
 async function refreshStatus() {
   const body = await fetchStatus();
-  renderApps(body.apps || [], body.default_id || "stock", { toast, refresh: refreshStatus });
+  let patches = [];
+  try {
+    const listed = await fetchPatches();
+    patches = listed.patches || [];
+  } catch (e) {
+    toast(e.message);
+  }
+  editor.setCatalog(patches);
+  renderApps(body.apps || [], body.default_id || "stock", {
+    toast,
+    refresh: refreshStatus,
+    onEdit: (app) => editor.edit(app)
+  });
   renderDevice(body);
   return body;
 }

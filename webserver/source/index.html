@@ -37,6 +37,21 @@
         <p class="muted">Hold SHIFT during the prompt to open the menu on the MPC. Otherwise the default starts.</p>
         <div id="apps"></div>
       </div>
+      <div class="card" id="boot-edit">
+        <h3>Boot Edit</h3>
+        <p class="muted">Turn catalog patches on to make one boot entry. Stock keeps its own patch set. Each saved entry shows up in the list above.</p>
+        <button class="btn" id="boot-new" type="button">New entry</button>
+        <div id="boot-form" hidden>
+          <label class="field">Title
+            <input id="boot-title" type="text" placeholder="Lab mix" />
+          </label>
+          <div id="boot-patches"></div>
+          <div class="row install-row">
+            <button class="btn secondary" id="boot-back" type="button">Back</button>
+            <button class="btn" id="boot-save" type="button">Save</button>
+          </div>
+        </div>
+      </div>
       <div class="card">
         <h3>Install a program</h3>
         <p class="muted">The new program is used on the next boot when it is the default and SHIFT is not held. It must be an aarch64 Linux executable, or a script whose first line runs sh or bash.</p>
@@ -84,6 +99,17 @@
       </div>
     </section>
   </main>
+  <div id="unsaved" class="modal" hidden>
+    <div class="card">
+      <h3>Not saved yet</h3>
+      <p class="muted">This entry has changes.</p>
+      <div class="row">
+        <button class="btn" id="unsaved-save" type="button">Save</button>
+        <button class="btn secondary" id="unsaved-discard" type="button">Don't save</button>
+        <button class="btn secondary" id="unsaved-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
   <div id="toast"></div>
   <script src="/xterm.js"></script>
   <script src="/xterm-addon-fit.js"></script>
