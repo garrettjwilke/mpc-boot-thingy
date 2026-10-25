@@ -1,5 +1,5 @@
 #!/bin/sh
-# Shift+Pad 16 "Boot Menu" row, applied by mpc-boot-thingy.
+# Shift+Pad 16 "boot thingy" row, applied by mpc-boot-thingy.
 #
 # ac50 always starts /usr/bin/MPC Sample. The patched copy lives on the card.
 # The first boot, and any boot whose patch hash differs, builds that copy.
