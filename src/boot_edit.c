@@ -7,7 +7,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+static char save_err[96];
+
+const char *boot_edit_last_error(void) {
+    return save_err[0] ? save_err : "could not save";
+}
+
+static int save_fail(int rc, const char *what) {
+    int e = errno;
+    if (what && what[0]) {
+        if (e) snprintf(save_err, sizeof save_err, "%s: %s", what, strerror(e));
+        else snprintf(save_err, sizeof save_err, "%s", what);
+    }
+    return rc;
+}
+
+static int save_text(int rc, const char *what) {
+    snprintf(save_err, sizeof save_err, "%s", what ? what : "could not save");
+    return rc;
+}
 
 static const char LAUNCH_BODY[] =
     "set -eu\n"
@@ -143,8 +164,35 @@ static int one_line(const char *s) {
 
 static int ensure_dir(const char *path) {
     struct stat st;
-    if (lstat(path, &st) == 0) return S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode) ? 0 : -1;
-    return mkdir(path, 0755);
+    if (lstat(path, &st) == 0) {
+        if (S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) return 0;
+        errno = ENOTDIR;
+        return -1;
+    }
+    if (mkdir(path, 0755) == 0 || errno == EEXIST) return 0;
+    return -1;
+}
+
+/* edisksd mounts the card noexec, and a failed remount can leave it read-only. */
+static void remount_card(const char *card) {
+    pid_t pid;
+    if (!card || !card[0] || access("/proc/mounts", R_OK) != 0) return;
+    pid = fork();
+    if (pid < 0) return;
+    if (pid == 0) {
+        execlp("mount", "mount", "-o", "remount,rw,exec", card, (char *)0);
+        _exit(127);
+    }
+    while (waitpid(pid, 0, 0) < 0 && errno == EINTR) {}
+}
+
+static int copy_fail(int in, int out, const char *dst) {
+    int e = errno;
+    if (in >= 0) close(in);
+    if (out >= 0) close(out);
+    if (dst) unlink(dst);
+    errno = e;
+    return -1;
 }
 
 static int copy_file(const char *src, const char *dst) {
@@ -154,22 +202,16 @@ static int copy_file(const char *src, const char *dst) {
     in = open(src, O_RDONLY | O_NOFOLLOW);
     if (in < 0) return -1;
     if (fstat(in, &st) != 0 || !S_ISREG(st.st_mode)) {
-        close(in);
-        return -1;
+        if (errno == 0) errno = EINVAL;
+        return copy_fail(in, -1, 0);
     }
     out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-    if (out < 0) {
-        close(in);
-        return -1;
-    }
+    if (out < 0) return copy_fail(in, -1, 0);
     for (;;) {
         ssize_t r = read(in, buf, sizeof buf);
         if (r < 0) {
             if (errno == EINTR) continue;
-            close(in);
-            close(out);
-            unlink(dst);
-            return -1;
+            return copy_fail(in, out, dst);
         }
         if (r == 0) break;
         size_t off = 0;
@@ -177,17 +219,16 @@ static int copy_file(const char *src, const char *dst) {
             ssize_t w = write(out, buf + off, (size_t)r - off);
             if (w < 0) {
                 if (errno == EINTR) continue;
-                close(in);
-                close(out);
-                unlink(dst);
-                return -1;
+                return copy_fail(in, out, dst);
             }
             off += (size_t)w;
         }
     }
     close(in);
     if (close(out) != 0) {
+        int e = errno;
         unlink(dst);
+        errno = e;
         return -1;
     }
     return 0;
@@ -228,22 +269,13 @@ static int write_all(int fd, const char *buf, size_t n) {
 }
 
 static int write_text(const char *path, const char *body, mode_t mode) {
-    char tmp[512];
     int fd, rc;
-    if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) return -1;
-    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, mode);
+    /* Write the final name directly. exFAT often refuses chmod and rename. */
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, mode);
     if (fd < 0) return -1;
     rc = write_all(fd, body, strlen(body));
     if (close(fd) != 0) rc = -1;
-    if (rc != 0) {
-        unlink(tmp);
-        return -1;
-    }
-    if (chmod(tmp, mode) != 0 || rename(tmp, path) != 0) {
-        unlink(tmp);
-        return -1;
-    }
-    return 0;
+    return rc;
 }
 
 static void title_of(const char *path, int is_list, const char *filename, char *out, size_t n) {
@@ -325,51 +357,60 @@ static int entry_is_edit(const char *path) {
     return yes;
 }
 
-static int fill_patches(const char *card, const char *slug, const char *const *patch_ids, int npatches) {
-    char root[512], work[512], final[512], old[512], src[512], dst[512], menu[512];
+static int name_kept(const char *name, const char *const *patch_ids, int npatches) {
     int i;
-    if (join2(root, sizeof root, card, "autorun/boot-edits") != 0) return -1;
-    if (ensure_dir(root) != 0) return -1;
-    if (join2(root, sizeof root, root, slug) != 0) return -1;
-    if (ensure_dir(root) != 0) return -1;
-    if (join2(work, sizeof work, root, "patches.work") != 0) return -1;
-    if (join2(final, sizeof final, root, "patches") != 0) return -1;
-    if (join2(old, sizeof old, root, "patches.old") != 0) return -1;
-    if (lstat(work, &(struct stat){0}) == 0 && rm_tree(work, 0) != 0) return -1;
-    if (mkdir(work, 0755) != 0) return -1;
+    if (strcmp(name, "boot-menu.list") == 0) return 1;
     for (i = 0; i < npatches; i++) {
-        if (catalog_file(card, patch_ids[i], src, sizeof src) != 0) {
-            rm_tree(work, 0);
-            return BOOT_EDIT_BAD_PATCH;
-        }
-        if (join2(dst, sizeof dst, work, patch_ids[i]) != 0 || copy_file(src, dst) != 0) {
-            rm_tree(work, 0);
-            return -1;
-        }
+        if (strcmp(name, patch_ids[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+static int fill_patches(const char *card, const char *slug, const char *const *patch_ids, int npatches) {
+    char edits[512], entry[512], patch_dir[512], src[512], dst[512], menu[512];
+    int i;
+    DIR *d;
+    struct dirent *de;
+    /* Copy straight into the final directory. Renaming a directory on the
+       card's exFAT volume was failing the save. */
+    if (join2(edits, sizeof edits, card, "autorun/boot-edits") != 0) return save_text(-1, "path too long");
+    if (ensure_dir(edits) != 0) return save_fail(-1, "boot-edits");
+    if (join2(entry, sizeof entry, edits, slug) != 0) return save_text(-1, "path too long");
+    if (ensure_dir(entry) != 0) return save_fail(-1, "entry folder");
+    if (join2(patch_dir, sizeof patch_dir, entry, "patches") != 0) return save_text(-1, "path too long");
+    if (ensure_dir(patch_dir) != 0) return save_fail(-1, "patches");
+    if (join2(dst, sizeof dst, entry, "patches.work") == 0 && lstat(dst, &(struct stat){0}) == 0) rm_tree(dst, 0);
+    if (join2(dst, sizeof dst, entry, "patches.old") == 0 && lstat(dst, &(struct stat){0}) == 0) rm_tree(dst, 0);
+    for (i = 0; i < npatches; i++) {
+        if (catalog_file(card, patch_ids[i], src, sizeof src) != 0) return BOOT_EDIT_BAD_PATCH;
+        if (join2(dst, sizeof dst, patch_dir, patch_ids[i]) != 0) return save_text(-1, "path too long");
+        if (copy_file(src, dst) != 0) return save_fail(-1, "copy patch");
     }
     if (join2(menu, sizeof menu, card, "autorun/patches/boot-menu.list") == 0) {
         struct stat st;
         if (lstat(menu, &st) == 0 && S_ISREG(st.st_mode)) {
-            if (join2(dst, sizeof dst, work, "boot-menu.list") != 0 || copy_file(menu, dst) != 0) {
-                rm_tree(work, 0);
-                return -1;
-            }
+            if (join2(dst, sizeof dst, patch_dir, "boot-menu.list") != 0) return save_text(-1, "path too long");
+            if (copy_file(menu, dst) != 0) return save_fail(-1, "copy boot menu");
         }
     }
-    if (lstat(old, &(struct stat){0}) == 0 && rm_tree(old, 0) != 0) {
-        rm_tree(work, 0);
-        return -1;
+    d = opendir(patch_dir);
+    if (!d) return save_fail(-1, "patches");
+    while ((de = readdir(d)) != NULL) {
+        struct stat st;
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+        if (name_kept(de->d_name, patch_ids, npatches)) continue;
+        if (join2(dst, sizeof dst, patch_dir, de->d_name) != 0) {
+            closedir(d);
+            return save_text(-1, "path too long");
+        }
+        if (lstat(dst, &st) != 0) continue;
+        if (!S_ISREG(st.st_mode)) continue;
+        if (unlink(dst) != 0) {
+            closedir(d);
+            return save_fail(-1, "remove old patch");
+        }
     }
-    if (lstat(final, &(struct stat){0}) == 0 && rename(final, old) != 0) {
-        rm_tree(work, 0);
-        return -1;
-    }
-    if (rename(work, final) != 0) {
-        if (lstat(old, &(struct stat){0}) == 0) rename(old, final);
-        rm_tree(work, 0);
-        return -1;
-    }
-    if (lstat(old, &(struct stat){0}) == 0) rm_tree(old, 0);
+    closedir(d);
     return 0;
 }
 
@@ -377,19 +418,21 @@ static int write_launch(const char *card, const char *slug, const char *const *p
     char path[512], body[8192];
     int n, i, left;
     char *p;
-    if (snprintf(path, sizeof path, "%s/autorun/boot-edits/%s/launch.sh", card, slug) >= (int)sizeof path) return -1;
+    if (snprintf(path, sizeof path, "%s/autorun/boot-edits/%s/launch.sh", card, slug) >= (int)sizeof path)
+        return save_text(-1, "path too long");
     n = snprintf(body, sizeof body, "#!/bin/sh\n# Boot Edit entry. The boot thingy runs this with sh.\n# patches:");
-    if (n < 0 || (size_t)n >= sizeof body) return -1;
+    if (n < 0 || (size_t)n >= sizeof body) return save_text(-1, "launch script too long");
     p = body + n;
     left = (int)sizeof body - n;
     for (i = 0; i < npatches; i++) {
         int w = snprintf(p, (size_t)left, " %s", patch_ids[i]);
-        if (w < 0 || w >= left) return -1;
+        if (w < 0 || w >= left) return save_text(-1, "launch script too long");
         p += w;
         left -= w;
     }
-    if (snprintf(p, (size_t)left, "\n%s", LAUNCH_BODY) >= left) return -1;
-    return write_text(path, body, 0755);
+    if (snprintf(p, (size_t)left, "\n%s", LAUNCH_BODY) >= left) return save_text(-1, "launch script too long");
+    if (write_text(path, body, 0755) != 0) return save_fail(-1, "launch.sh");
+    return 0;
 }
 
 static int write_entry(const char *path, const char *title, const char *slug, const char *patches) {
@@ -397,8 +440,9 @@ static int write_entry(const char *path, const char *title, const char *slug, co
     int n = snprintf(body, sizeof body,
                      "title=%s\nrun=autorun/boot-edits/%s/launch.sh\nboot=ac50\npatches=%s\n",
                      title, slug, patches ? patches : "");
-    if (n < 0 || (size_t)n >= sizeof body) return -1;
-    return write_text(path, body, 0644);
+    if (n < 0 || (size_t)n >= sizeof body) return save_text(-1, "menu entry too long");
+    if (write_text(path, body, 0644) != 0) return save_fail(-1, "menu entry");
+    return 0;
 }
 
 int boot_edit_save(const char *card, const char *id, const char *title, const char *const *patch_ids, int npatches,
@@ -406,7 +450,9 @@ int boot_edit_save(const char *card, const char *id, const char *title, const ch
     char stem[64], joined[MENU_PATCHES], entry[512], auto_title[MENU_TITLE];
     int create, i, used, ntitle;
     const char *use_title;
-    if (!card || !card[0] || !out_id || out_n < 8) return BOOT_EDIT_ERR;
+    save_err[0] = 0;
+    if (!card || !card[0] || !out_id || out_n < 8) return save_text(BOOT_EDIT_ERR, "missing card");
+    remount_card(card);
     if (npatches < 0 || npatches > BOOT_PATCH_MAX || (npatches > 0 && !patch_ids)) return BOOT_EDIT_BAD_PATCH;
     used = 0;
     joined[0] = 0;
@@ -459,17 +505,17 @@ int boot_edit_save(const char *card, const char *id, const char *title, const ch
         if (!title || !one_line(title) || strlen(title) >= MENU_TITLE) return BOOT_EDIT_BAD_TITLE;
         use_title = title;
     }
-    if (ensure_dir(card) != 0) return BOOT_EDIT_ERR;
+    if (ensure_dir(card) != 0) return save_fail(BOOT_EDIT_ERR, "card");
     {
-        char menu_dir[512];
-        if (join2(menu_dir, sizeof menu_dir, card, "autorun") != 0) return BOOT_EDIT_ERR;
-        if (ensure_dir(menu_dir) != 0) return BOOT_EDIT_ERR;
-        if (join2(menu_dir, sizeof menu_dir, menu_dir, "boot-menu") != 0) return BOOT_EDIT_ERR;
-        if (ensure_dir(menu_dir) != 0) return BOOT_EDIT_ERR;
+        char autorun_dir[512], menu_dir[512];
+        if (join2(autorun_dir, sizeof autorun_dir, card, "autorun") != 0) return save_text(BOOT_EDIT_ERR, "path too long");
+        if (ensure_dir(autorun_dir) != 0) return save_fail(BOOT_EDIT_ERR, "autorun");
+        if (join2(menu_dir, sizeof menu_dir, autorun_dir, "boot-menu") != 0) return save_text(BOOT_EDIT_ERR, "path too long");
+        if (ensure_dir(menu_dir) != 0) return save_fail(BOOT_EDIT_ERR, "boot menu");
     }
     {
         int filled = fill_patches(card, stem, patch_ids, npatches);
-        if (filled != 0) return filled == BOOT_EDIT_BAD_PATCH ? filled : BOOT_EDIT_ERR;
+        if (filled != 0) return filled == BOOT_EDIT_BAD_PATCH ? filled : (save_err[0] ? filled : save_fail(BOOT_EDIT_ERR, "patches"));
     }
     if (write_launch(card, stem, patch_ids, npatches) != 0 || write_entry(entry, use_title, stem, joined) != 0) {
         if (create) {

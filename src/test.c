@@ -438,6 +438,20 @@ int main(void) {
     assert(boot.save_id[0] == 0);
     assert(boot.save_npatches == 1);
     assert(strcmp(boot.save_patches[0], "extra-pads.list") == 0);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B3;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_UNSAVED);
+    assert(boot.action == BOOT_ACT_SAVE_BOOT);
+    boot_ui_notice(&boot, "Could not save");
+    input_begin(&in, 0);
+    boot_frame(&view, &in, &boot);
+    assert(strcmp(boot.notice, "Could not save") == 0);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.notice[0] == 0);
+    assert(boot.screen == BOOT_SCREEN_ENTRY);
 
     assert(boot_edit_remove(dir, "entry:30-snake.entry") == 0);
     snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1", dir);

@@ -189,6 +189,12 @@ void boot_ui_saved(struct boot_ui *ui) {
     ui->edit_id[0] = 0;
     ui->edit_title[0] = 0;
     ui->save_npatches = 0;
+    ui->notice[0] = 0;
+}
+
+void boot_ui_notice(struct boot_ui *ui, const char *text) {
+    if (!ui) return;
+    snprintf(ui->notice, sizeof ui->notice, "%s", text ? text : "");
 }
 
 void boot_draw_prompt(struct ui *u, int theme) {
@@ -224,6 +230,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     struct input ev;
     if (in) ev = *in;
     else input_begin(&ev, 0);
+    if (ev.down || ev.encoder || ev.encoder_press) s->notice[0] = 0;
 
     int shift_open = s->screen == BOOT_SCREEN_APPS && ui_menu_open(&s->shift_menu, &ev);
     if (!shift_open) {
@@ -247,7 +254,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         } else if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B3)) {
             s->screen = BOOT_SCREEN_SETTINGS;
             left = 1;
-        } else if (screen == BOOT_SCREEN_ENTRY && input_down(&ev, IN_B3)) {
+        } else if ((screen == BOOT_SCREEN_ENTRY || screen == BOOT_SCREEN_UNSAVED) && input_down(&ev, IN_B3)) {
             queue_save(s);
             left = 1;
         } else if (screen != BOOT_SCREEN_APPS && input_down(&ev, IN_B1)) {
@@ -306,7 +313,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         labels[0] = "Boot Edit";
         labels[1] = "";
         labels[2] = "Settings";
-    } else if (s->screen == BOOT_SCREEN_ENTRY) {
+    } else if (s->screen == BOOT_SCREEN_ENTRY || s->screen == BOOT_SCREEN_UNSAVED) {
         labels[0] = "Back";
         labels[1] = "";
         labels[2] = "Save";
@@ -334,6 +341,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         title = "Not saved yet";
         hint = "this entry has changes";
     } else hint = "hold shift to set default";
+    if (s->notice[0]) hint = s->notice;
     ui_text(u, 12, 40, title, th->text, 1);
     if (hint[0]) ui_text(u, 12, 56, hint, th->dim, 1);
 

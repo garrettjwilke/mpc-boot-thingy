@@ -161,6 +161,9 @@ if grep -q 'stock-os-patched' "$empty/autorun/autorun.sh"; then fail "autorun mo
 test -x "$empty/autorun/boot-menu-apply.sh"
 test -s "$empty/autorun/loader.so"
 test -s "$empty/autorun/patches/boot-menu.list"
+test -s "$empty/autorun/patch-catalog/shift-reboot.list"
+head -n 1 "$empty/autorun/patch-catalog/shift-reboot.list" | grep -qx '# title Reboot button'
+if [ -e "$empty/autorun/patches/shift-reboot.list" ]; then fail "shift reboot is always on"; fi
 if [ -e "$empty/autorun/poke" ]; then fail "poke is still installed"; fi
 if [ -e "$empty/autorun/patches.list" ]; then fail "patch list is still a single file"; fi
 if grep -q 'menu-os' "$empty/autorun/boot-menu-apply.sh"; then fail "apply still builds a binary copy"; fi

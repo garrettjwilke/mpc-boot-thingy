@@ -671,6 +671,14 @@ int main(int argc, char **argv) {
                 menu_load(&menu, card);
                 ui.default_index = menu_default_index(&menu, card);
                 boot_ui_saved(&ui);
+            } else if (rc == BOOT_EDIT_BAD_PATCH) {
+                boot_ui_notice(&ui, "That patch is not on the card");
+            } else if (rc == BOOT_EDIT_BAD_TITLE) {
+                boot_ui_notice(&ui, "Title is not valid");
+            } else if (rc == BOOT_EDIT_BAD_ID) {
+                boot_ui_notice(&ui, "That entry cannot be edited");
+            } else {
+                boot_ui_notice(&ui, boot_edit_last_error());
             }
             input_begin(&quiet, &dev);
             started = mono_ms();

@@ -1687,7 +1687,7 @@ static void handle_boot_edit(int fd, struct io *io, int has_len, size_t content_
         return;
     }
     if (rc != BOOT_EDIT_OK) {
-        send_err(fd, 500, "Internal Server Error", "could not save the boot entry");
+        send_err(fd, 500, "Internal Server Error", boot_edit_last_error());
         return;
     }
     if (strchr(out_id, '"') || strchr(out_id, '\\')) {
