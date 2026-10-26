@@ -74,7 +74,7 @@ printf '%s\n' "$out" | grep -q -- '--SD' || fail "help missing --SD"
 printf '%s\n' "$out" | grep -q 'boot.entry' || fail "help missing boot.entry"
 printf '%s\n' "$out" | grep -q 'title=Lab firmware' || fail "help missing entry format"
 printf '%s\n' "$out" | grep -q -- '--add' || fail "help missing --add"
-printf '%s\n' "$out" | grep -q '2222' || fail "help missing ssh port"
+printf '%s\n' "$out" | grep -q 'ssh root@192.168.155.1' || fail "help missing ssh command"
 printf '%s\n' "$out" | grep -q '192.168.155.1:8080' || fail "help missing web page"
 printf '%s\n' "$out" | grep -q 'press Enter' || fail "help missing empty password"
 printf '%s\n' "$out" | grep -q -- '--ssh' || fail "help missing --ssh"
@@ -209,6 +209,8 @@ grep -q '"-l", "-i"' "$ROOT/webserver/server.c"
 grep -q 'PermitEmptyPasswords yes' "$empty/autorun/ssh.sh"
 grep -q 'PubkeyAuthentication no' "$empty/autorun/ssh.sh"
 grep -q 'UsePAM no' "$empty/autorun/ssh.sh"
+grep -q 'Port 22' "$empty/autorun/ssh.sh" || fail "ssh.sh missing Port 22"
+if grep -q 'Port 2222' "$empty/autorun/ssh.sh"; then fail "ssh.sh still uses port 2222"; fi
 if grep -Eq '^[[:space:]]*AuthenticationMethods' "$empty/autorun/ssh.sh"; then
   fail "blank password must not be tied to AuthenticationMethods"
 fi

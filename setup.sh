@@ -99,7 +99,7 @@ Waiting without pressing SHIFT starts the stock app.
 SSH starts with the card, on the USB link only. There is no client key.
 From the computer:
 
-  ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1
+  ssh root@192.168.155.1
 
 The password is empty: press Enter. Plug in the USB cable before you
 turn the MPC on. The server identity lives in ssh/ssh_host_ed25519_key.
@@ -569,7 +569,7 @@ if [ -r /etc/shadow ]; then
   fi
 fi
 cat > "$RAM/sshd_config" <<'SSHCONF'
-Port 2222
+Port 22
 ListenAddress 192.168.155.1
 HostKey /run/mpc-boot-ssh/ssh_host_ed25519_key
 PidFile /run/mpc-boot-ssh/sshd.pid
@@ -743,7 +743,7 @@ EOF
   fi
   echo "Installed mpc-boot-thingy in $A"
   echo "SSH, no key file. Password is empty (press Enter):"
-  echo "  ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.155.1"
+  echo "  ssh root@192.168.155.1"
   echo "Bash is in $sd/os_tools/bin"
   if [ -n "$TOOLS" ]; then
     echo "Dev tools are in $sd/os_tools/bin"
@@ -757,7 +757,7 @@ EOF
 }
 
 MPC_HOST=${MPC_HOST:-root@192.168.155.1}
-MPC_PORT=${MPC_PORT:-2222}
+MPC_PORT=${MPC_PORT:-22}
 
 ssh_mpc() {
   ask=$1
