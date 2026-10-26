@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +26,16 @@
 #define WINDOW_MS 1000
 
 static int stopped_ac50;
+static volatile sig_atomic_t g_reload_requested;
+static pid_t g_running_child_pid = -1;
+
+static void handle_reload_signal(int sig) {
+    (void)sig;
+    g_reload_requested = 1;
+    if (g_running_child_pid > 0) {
+        kill(-g_running_child_pid, SIGTERM);
+    }
+}
 
 static double mono_ms(void) {
     struct timespec t;
@@ -460,6 +471,7 @@ static int launch(struct surface *midi, struct screen *scr, const char *card, co
         return 0;
     }
     if (pid == 0) {
+        setpgid(0, 0);
         int logfd = open("/tmp/mpc-boot-app.log", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (logfd >= 0) {
             dup2(logfd, STDOUT_FILENO);
@@ -471,8 +483,19 @@ static int launch(struct surface *midi, struct screen *scr, const char *card, co
         perror(execpath);
         _exit(127);
     }
+    g_running_child_pid = pid;
     int st = 0;
-    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {
+        if (g_reload_requested) {
+            kill(-pid, SIGTERM);
+            usleep(20000);
+            kill(-pid, SIGKILL);
+        }
+    }
+    g_running_child_pid = -1;
+    kill(-pid, SIGTERM);
+    while (waitpid(-pid, NULL, WNOHANG) > 0) {}
+
     int code = -1;
     if (WIFEXITED(st)) code = WEXITSTATUS(st);
     else if (WIFSIGNALED(st)) code = 128 + WTERMSIG(st);
@@ -485,6 +508,10 @@ static int reopen_after_app(struct surface *midi, struct screen *scr) {
     if (open_surface_claim(midi) != 0) {
         screen_close(scr);
         return -1;
+    }
+    if (midi->fd >= 0) {
+        unsigned char drain[256];
+        while (read(midi->fd, drain, sizeof drain) > 0) {}
     }
     return 0;
 }
@@ -521,6 +548,61 @@ static void release_devices(struct surface *midi, struct screen *scr) {
     if (scr->px || scr->fd >= 0) screen_close(scr);
 }
 
+static void write_pid_file(void) {
+    FILE *f = fopen("/run/mpc-boot-thingy.pid", "w");
+    if (f) {
+        fprintf(f, "%d\n", (int)getpid());
+        fclose(f);
+    }
+}
+
+static void remove_pid_file(void) {
+    unlink("/run/mpc-boot-thingy.pid");
+}
+
+static void flush_and_drop_caches(const char *card) {
+    sync();
+    FILE *f = fopen("/proc/sys/vm/drop_caches", "w");
+    if (f) {
+        fputs("3\n", f);
+        fclose(f);
+    }
+    remount_exec(card);
+}
+
+static void update_run_binary(const char *card) {
+    char src[512];
+    if (snprintf(src, sizeof src, "%s/autorun/mpc-boot-thingy", card) >= (int)sizeof src) return;
+    if (access(src, R_OK) == 0) {
+        copy_file(src, "/run/mpc-boot-thingy");
+    }
+}
+
+static void reload_and_reexec(struct surface *midi, struct screen *scr, const char *card, int argc, char **argv) {
+    flush_and_drop_caches(card);
+    update_run_binary(card);
+    release_devices(midi, scr);
+    remove_pid_file();
+
+    char *new_av[32];
+    int na = 0;
+    new_av[na++] = argv[0];
+    new_av[na++] = "--menu";
+    for (int i = 1; i < argc && na < 30; i++) {
+        if (strcmp(argv[i], "--menu") != 0) {
+            new_av[na++] = argv[i];
+        }
+    }
+    new_av[na] = NULL;
+
+    execv(new_av[0], new_av);
+    if (strcmp(new_av[0], "/run/mpc-boot-thingy") != 0 && access("/run/mpc-boot-thingy", X_OK) == 0) {
+        new_av[0] = "/run/mpc-boot-thingy";
+        execv(new_av[0], new_av);
+    }
+    perror("execv reload");
+}
+
 static int wants_menu(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--menu") == 0) return 1;
@@ -529,6 +611,15 @@ static int wants_menu(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = handle_reload_signal;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGUSR1, &sa, NULL);
+
+    write_pid_file();
+
     int open_menu = wants_menu(argc, argv);
     const char *autorun = NULL;
     for (int i = 1; i < argc; i++) {
@@ -621,6 +712,19 @@ int main(int argc, char **argv) {
 
     int rc = 1;
     for (;;) {
+        if (g_reload_requested) {
+            g_reload_requested = 0;
+            show_loading(&scr, &midi, theme_load(card));
+            reload_and_reexec(&midi, &scr, card, argc, argv);
+            if (reopen_after_app(&midi, &scr) != 0) break;
+            menu_load(&menu, card);
+            theme = theme_load(card);
+            def = menu_default_index(&menu, card);
+            boot_ui_init(&ui, &menu, theme, def);
+            npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
+            boot_ui_set_catalog(&ui, catalog, npatches);
+            boot_ui_notice(&ui, "Reloaded menu");
+        }
         struct pollfd pf = {.fd = midi.fd, .events = POLLIN};
         int pr = poll(&pf, 1, poll_ms(wake, started));
         if (pr < 0) {
@@ -655,6 +759,29 @@ int main(int argc, char **argv) {
                 parser = (struct parser){0};
                 dev = (struct input_dev){0};
             }
+            flush_and_drop_caches(card);
+            menu_load(&menu, card);
+            npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
+            boot_ui_set_catalog(&ui, catalog, npatches);
+            ui.default_index = menu_default_index(&menu, card);
+
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            continue;
+        }
+        if (ui.action == BOOT_ACT_RELOAD) {
+            ui.action = BOOT_ACT_NONE;
+            show_loading(&scr, &midi, theme_load(card));
+            reload_and_reexec(&midi, &scr, card, argc, argv);
+            if (reopen_after_app(&midi, &scr) != 0) break;
+            menu_load(&menu, card);
+            theme = theme_load(card);
+            def = menu_default_index(&menu, card);
+            boot_ui_init(&ui, &menu, theme, def);
+            npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
+            boot_ui_set_catalog(&ui, catalog, npatches);
+            boot_ui_notice(&ui, "Reloaded menu");
             input_begin(&quiet, &dev);
             started = mono_ms();
             wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
@@ -695,6 +822,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    remove_pid_file();
     if (rc != 0) {
         release_devices(&midi, &scr);
         restore_stock_if_stopped(card);

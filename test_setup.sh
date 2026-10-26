@@ -79,6 +79,7 @@ printf '%s\n' "$out" | grep -q '192.168.155.1:8080' || fail "help missing web pa
 printf '%s\n' "$out" | grep -q 'press Enter' || fail "help missing empty password"
 printf '%s\n' "$out" | grep -q -- '--ssh' || fail "help missing --ssh"
 printf '%s\n' "$out" | grep -q -- '--reboot' || fail "help missing --reboot"
+printf '%s\n' "$out" | grep -q -- '--reload' || fail "help missing --reload"
 printf '%s\n' "$out" | grep -q 'os_tools/bin' || fail "help missing os_tools"
 printf '%s\n' "$out" | grep -q 'os_tools/.bashrc' || fail "help missing bashrc"
 printf '%s\n' "$out" | grep -q -- '--tools' || fail "help missing --tools"
@@ -345,6 +346,9 @@ case "$last" in
   *reboot*)
     exit 0
     ;;
+  *killall*|*mpc-boot-thingy.pid*)
+    exit 0
+    ;;
   *'find /media'*)
     if [ "${FAKE_MEDIA_COUNT:-1}" = 0 ]; then exit 0; fi
     if [ "${FAKE_MEDIA_COUNT:-1}" = 2 ]; then
@@ -464,6 +468,23 @@ grep -q 'Updated /media/Lab Card over SSH' /tmp/mpc-boot-out || fail "ssh -r did
 grep -q 'Rebooting the MPC' /tmp/mpc-boot-out || fail "ssh -r did not reboot"
 grep -q 'find /media' "$sshlog" || fail "ssh -r did not look for the card"
 tail -n 1 "$sshlog" | grep -q reboot || fail "ssh -r should reboot after the install"
+
+if ./setup.sh --reload --SD "$empty" >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
+  fail "--reload must not take --SD"
+fi
+grep -q 'only works alone or with --ssh' /tmp/mpc-boot-err || fail "--reload --SD should explain itself"
+
+if ./setup.sh --reboot --reload >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
+  fail "--reboot --reload should fail"
+fi
+grep -q 'cannot be used together' /tmp/mpc-boot-err || fail "--reboot --reload should explain itself"
+
+: > "$sshlog"
+PATH="$bin:$PATH" FAKE_ROOT=$remote FAKE_SSH_LOG=$sshlog ./setup.sh -R >/tmp/mpc-boot-out
+grep -q 'Reloaded mpc-boot-thingy' /tmp/mpc-boot-out || fail "reload did not say it is reloading"
+grep -q 'killall' "$sshlog" || fail "reload did not signal mpc-boot-thingy"
+
+test -x "$empty/os_tools/bin/mpc-reload" || fail "mpc-reload is missing or not executable in os_tools"
 
 # macOS cp exits 1 when exFAT refuses extended attributes. Setup must
 # copy without them or the card update stops on the first binary.

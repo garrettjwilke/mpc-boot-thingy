@@ -238,7 +238,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         int n = s->menu ? s->menu->n : 0;
         int edits = 1 + edit_count(s);
         if (edits > MENU_MAX) edits = MENU_MAX;
-        if (screen == BOOT_SCREEN_SETTINGS) move_cursor(&s->settings_ls, 2, &ev);
+        if (screen == BOOT_SCREEN_SETTINGS) move_cursor(&s->settings_ls, 3, &ev);
         else if (screen == BOOT_SCREEN_DEFAULT) move_cursor(&s->default_ls, n, &ev);
         else if (screen == BOOT_SCREEN_THEME) {
             move_cursor(&s->theme_ls, theme_count(), &ev);
@@ -250,6 +250,9 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         int left = 0;
         if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B1)) {
             s->screen = BOOT_SCREEN_EDIT;
+            left = 1;
+        } else if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B2)) {
+            s->action = BOOT_ACT_RELOAD;
             left = 1;
         } else if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B3)) {
             s->screen = BOOT_SCREEN_SETTINGS;
@@ -284,10 +287,12 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
                 if (s->settings_ls.cursor == 0) {
                     s->screen = BOOT_SCREEN_DEFAULT;
                     s->default_ls.cursor = s->default_index;
-                } else {
+                } else if (s->settings_ls.cursor == 1) {
                     s->screen = BOOT_SCREEN_THEME;
                     s->theme = s->saved_theme;
                     s->theme_ls.cursor = s->saved_theme;
+                } else {
+                    s->action = BOOT_ACT_RELOAD;
                 }
                 ev.encoder_press = 0;
             } else if (screen == BOOT_SCREEN_DEFAULT) {
@@ -311,7 +316,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     const char *labels[3];
     if (s->screen == BOOT_SCREEN_APPS) {
         labels[0] = "Boot Edit";
-        labels[1] = "";
+        labels[1] = "Reload";
         labels[2] = "Settings";
     } else if (s->screen == BOOT_SCREEN_ENTRY || s->screen == BOOT_SCREEN_UNSAVED) {
         labels[0] = "Back";
@@ -365,8 +370,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
             snprintf(s->action_id, sizeof s->action_id, "%s", s->menu->items[hit].id);
         }
     } else if (s->screen == BOOT_SCREEN_SETTINGS) {
-        const char *rows[] = {"Set default app", "Set theme"};
-        ui_list(u, 8, list_y, 304, list_h, rows, 2, rows_st, widget_in, &s->settings_ls);
+        const char *rows[] = {"Set default app", "Set theme", "Reload menu & SD"};
+        ui_list(u, 8, list_y, 304, list_h, rows, 3, rows_st, widget_in, &s->settings_ls);
     } else if (s->screen == BOOT_SCREEN_DEFAULT) {
         char text[MENU_MAX][48];
         const char *rows[MENU_MAX];
