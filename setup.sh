@@ -27,6 +27,9 @@ Usage:
   ./setup.sh --ssh --tools
   ./setup.sh --reboot
   ./setup.sh --ssh -r
+  ./setup.sh --reload
+  ./setup.sh -R
+  ./setup.sh --ssh -R
 
 -h, --help
   Show this help and exit.
@@ -403,6 +406,28 @@ copy_toolkit() {
   rm -rf "$sd/os_tools"
   mkdir -p "$sd/os_tools"
   card_cp -R "$src/bin" "$src/toolkit" "$sd/os_tools/"
+  cat > "$sd/os_tools/bin/mpc-reload" <<'RELOAD'
+#!/bin/sh
+# Flush filesystem caches and signal mpc-boot-thingy to reload.
+sync
+if [ -w /proc/sys/vm/drop_caches ]; then
+  echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+fi
+card=$(find /media -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n 1)
+if [ -n "$card" ]; then
+  mount -o remount,exec "$card" 2>/dev/null || true
+fi
+if [ -f /run/mpc-boot-thingy.pid ]; then
+  pid=$(cat /run/mpc-boot-thingy.pid 2>/dev/null || true)
+  if [ -n "$pid" ] && kill -HUP "$pid" 2>/dev/null; then
+    echo "Reloaded mpc-boot-thingy (PID $pid)"
+    exit 0
+  fi
+fi
+killall -HUP mpc-boot-thingy 2>/dev/null || true
+echo "Reloaded mpc-boot-thingy"
+RELOAD
+  chmod 755 "$sd/os_tools/bin/mpc-reload"
   for name in .bashrc .bash_profile; do
     if [ -f "$hold/$name" ]; then
       card_cp "$hold/$name" "$sd/os_tools/$name"
@@ -781,6 +806,7 @@ add_over_ssh() {
     printf '%s\n' "$media"
     tar -C "$stage" --format ustar -cf - apps
   } | ssh_mpc "$ask" 'IFS= read -r dest; tar -C "$dest" -xf -'
+  ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
   echo "Updated the app on $media over SSH."
 }
 
@@ -818,6 +844,10 @@ install_over_ssh() {
     echo "This MPC's fingerprint:"
     ssh-keygen -lf "$stage/autorun/ssh_host_ed25519_key.pub"
   fi
+  if [ -z "$REBOOT" ]; then
+    ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
+    echo "Reloaded mpc-boot-thingy over SSH."
+  fi
 }
 
 reboot_mpc() {
@@ -826,7 +856,7 @@ reboot_mpc() {
   chmod 755 "$ask"
   # The bootloader counts boots and opens the updater when the count stays
   # above zero. Userspace clears it only after 10 minutes, so zero it here.
-  if ! ssh_mpc "$ask" 'echo 0 > /sys/devices/platform/fdc20000.syscon/fdc20000.syscon:bootcount/bootcount; nohup sh -c "sleep 1; reboot" >/dev/null 2>&1 &'; then
+  if ! ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; echo 0 > /sys/devices/platform/fdc20000.syscon/fdc20000.syscon:bootcount/bootcount; nohup sh -c "sleep 1; reboot" >/dev/null 2>&1 &'; then
     rm -f "$ask"
     echo "ERROR: could not reach the MPC over SSH" >&2
     exit 1
@@ -835,11 +865,41 @@ reboot_mpc() {
   echo "Rebooting the MPC."
 }
 
+reload_mpc() {
+  ask=$(mktemp)
+  printf '#!/bin/sh\nexit 0\n' > "$ask"
+  chmod 755 "$ask"
+  media=$(mpc_media_path) || {
+    rm -f "$ask"
+    exit 1
+  }
+  if ! ssh_mpc "$ask" '
+    sync
+    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+    card=$(find /media -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n 1)
+    [ -n "$card" ] && mount -o remount,exec "$card" 2>/dev/null || true
+    if [ -f /run/mpc-boot-thingy.pid ]; then
+      pid=$(cat /run/mpc-boot-thingy.pid 2>/dev/null || true)
+      if [ -n "$pid" ] && kill -HUP "$pid" 2>/dev/null; then
+        exit 0
+      fi
+    fi
+    killall -HUP mpc-boot-thingy 2>/dev/null || true
+  '; then
+    rm -f "$ask"
+    echo "ERROR: could not reach the MPC over SSH" >&2
+    exit 1
+  fi
+  rm -f "$ask"
+  echo "Reloaded mpc-boot-thingy on $media."
+}
+
 SD=
 ADD=
 TITLE=
 SSH_MODE=
 REBOOT=
+RELOAD=
 TOOLS=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -877,6 +937,9 @@ while [ $# -gt 0 ]; do
     -r|--reboot)
       REBOOT=1
       ;;
+    -R|--reload)
+      RELOAD=1
+      ;;
     --tools)
       TOOLS=1
       ;;
@@ -895,6 +958,21 @@ fi
 if [ -n "$TOOLS" ] && [ -z "$SD" ] && [ -z "$SSH_MODE" ]; then
   echo "ERROR: --tools needs --SD or --ssh" >&2
   exit 1
+fi
+
+if [ -n "$REBOOT" ] && [ -n "$RELOAD" ]; then
+  echo "ERROR: --reboot and --reload cannot be used together" >&2
+  exit 1
+fi
+
+if [ -n "$RELOAD" ] && { [ -n "$SD" ] || [ -n "$ADD" ] || [ -n "$TITLE" ]; }; then
+  echo "ERROR: --reload only works alone or with --ssh" >&2
+  exit 1
+fi
+
+if [ -n "$RELOAD" ]; then
+  reload_mpc
+  exit 0
 fi
 
 if [ -n "$REBOOT" ] && { [ -n "$SD" ] || [ -n "$ADD" ] || [ -n "$TITLE" ]; }; then

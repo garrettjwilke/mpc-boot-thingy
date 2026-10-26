@@ -250,6 +250,28 @@ int main(void) {
     assert(strcmp(boot.action_id, "entry:30-snake.entry") == 0);
     assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
+    /* Test reload from settings menu */
+    boot.action = BOOT_ACT_NONE;
+    input_begin(&in, 0);
+    in.encoder = 2;
+    boot_frame(&view, &in, &boot);
+    assert(boot.settings_ls.cursor == 2);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_RELOAD);
+
+    /* Test reload from soft key 2 on apps screen */
+    boot.action = BOOT_ACT_NONE;
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_APPS);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B2;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_RELOAD);
+
     snprintf(path, sizeof path, "%s/autorun/patch-catalog", dir);
     mkdir_p(path);
     snprintf(path, sizeof path, "%s/autorun/patch-catalog/wide-screen.list", dir);

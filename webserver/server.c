@@ -1178,9 +1178,35 @@ static int reboot_device(void) {
     if (pid < 0) return -1;
     if (pid == 0) {
         setsid();
+        sync();
         sleep(1);
         execlp("reboot", "reboot", (char *)NULL);
         _exit(127);
+    }
+    return 0;
+}
+
+static int reload_boot_thingy(void) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        setsid();
+        sync();
+        FILE *f = fopen("/proc/sys/vm/drop_caches", "w");
+        if (f) {
+            fputs("3\n", f);
+            fclose(f);
+        }
+        FILE *pf = fopen("/run/mpc-boot-thingy.pid", "r");
+        if (pf) {
+            int target_pid = 0;
+            if (fscanf(pf, "%d", &target_pid) == 1 && target_pid > 1) {
+                kill(target_pid, SIGHUP);
+            }
+            fclose(pf);
+        }
+        execlp("killall", "killall", "-HUP", "mpc-boot-thingy", (char *)NULL);
+        _exit(0);
     }
     return 0;
 }
@@ -1759,6 +1785,11 @@ static void handle_client(int client) {
     }
     if (strcmp(method, "POST") == 0 && strcmp(path, "/api/reboot") == 0) {
         if (reboot_device() != 0) send_err(client, 409, "Conflict", "bootcount node is absent");
+        else send_json(client, 200, "OK", "{\"ok\":true}\n");
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/reload") == 0) {
+        if (reload_boot_thingy() != 0) send_err(client, 500, "Internal Server Error", "reload failed");
         else send_json(client, 200, "OK", "{\"ok\":true}\n");
         goto out;
     }

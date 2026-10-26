@@ -20,7 +20,8 @@ enum {
     BOOT_ACT_LAUNCH,
     BOOT_ACT_SET_DEFAULT,
     BOOT_ACT_SAVE_THEME,
-    BOOT_ACT_SAVE_BOOT
+    BOOT_ACT_SAVE_BOOT,
+    BOOT_ACT_RELOAD
 };
 
 struct boot_ui {
