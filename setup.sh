@@ -520,7 +520,9 @@ else
 fi
 cp "$D/mpc-boot-thingy" /run/mpc-boot-thingy
 chmod 755 /run/mpc-boot-thingy
+printf '%s\n' "$D" > /run/mpc-boot-autorun
 systemd-run --unit=mpc-boot-thingy --collect --no-block /run/mpc-boot-thingy "$D"
+
 if ! systemctl is-active --quiet mpc-boot-web.service; then
   systemd-run --unit=mpc-boot-web --collect --no-block /bin/sh "$D/web.sh"
 fi

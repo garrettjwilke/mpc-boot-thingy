@@ -70,9 +70,16 @@ static int run_cmd(char *const argv[]) {
 static int remount_exec(const char *card);
 
 static int systemctl_ac50(const char *verb) {
+    if (verb && strcmp(verb, "stop") == 0) {
+        char *k_argv[] = {"systemctl", "kill", "-s", "KILL", "ac50.service", NULL};
+        run_cmd(k_argv);
+        char *ka_argv[] = {"killall", "-9", "MPC Sample", NULL};
+        run_cmd(ka_argv);
+    }
     char *argv[] = {"systemctl", (char *)verb, "ac50.service", NULL};
     return run_cmd(argv);
 }
+
 
 /* Mount the in-memory Shift+Pad 16 loader, then ac50 can start the stock app.
    The script lives next to this menu. A missing script still starts stock. */
