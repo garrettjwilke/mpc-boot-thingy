@@ -22,7 +22,7 @@ static int ends_with(const char *s, const char *suf) {
     return n >= m && memcmp(s + n - m, suf, m) == 0;
 }
 
-static int parse_entry(const char *path, struct menu_entry *e) {
+int menu_parse_entry(const char *path, struct menu_entry *e) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     memset(e, 0, sizeof *e);
@@ -133,7 +133,7 @@ int menu_load(struct menu *m, const char *card) {
 
     for (int i = 0; i < nc && m->n < MENU_MAX; i++) {
         struct menu_entry e;
-        if (parse_entry(found[i].path, &e) != 0) continue;
+        if (menu_parse_entry(found[i].path, &e) != 0) continue;
         snprintf(e.base, sizeof e.base, "%s", found[i].base);
         snprintf(e.id, sizeof e.id, "%s", found[i].id);
         m->items[m->n++] = e;

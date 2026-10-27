@@ -435,12 +435,16 @@ static int write_launch(const char *card, const char *slug, const char *const *p
     return 0;
 }
 
-static int write_entry(const char *path, const char *title, const char *slug, const char *patches) {
-    char body[MENU_TITLE + MENU_PATCHES + 128];
+static int write_entry(const char *path, const char *title, const char *slug, const char *patches, const char *args) {
+    char body[MENU_TITLE + MENU_PATCHES + MENU_ARGS + 128];
     int n = snprintf(body, sizeof body,
                      "title=%s\nrun=autorun/boot-edits/%s/launch.sh\nboot=ac50\npatches=%s\n",
                      title, slug, patches ? patches : "");
     if (n < 0 || (size_t)n >= sizeof body) return save_text(-1, "menu entry too long");
+    if (args && args[0]) {
+        int w = snprintf(body + n, sizeof body - (size_t)n, "args=%s\n", args);
+        if (w < 0 || (size_t)(n + w) >= sizeof body) return save_text(-1, "menu entry too long");
+    }
     if (write_text(path, body, 0644) != 0) return save_fail(-1, "menu entry");
     return 0;
 }
@@ -448,6 +452,7 @@ static int write_entry(const char *path, const char *title, const char *slug, co
 int boot_edit_save(const char *card, const char *id, const char *title, const char *const *patch_ids, int npatches,
                    char *out_id, size_t out_n) {
     char stem[64], joined[MENU_PATCHES], entry[512], auto_title[MENU_TITLE];
+    char old_args[MENU_ARGS] = {0};
     int create, i, used, ntitle;
     const char *use_title;
     save_err[0] = 0;
@@ -504,6 +509,10 @@ int boot_edit_save(const char *card, const char *id, const char *title, const ch
         if (!entry_is_edit(entry)) return BOOT_EDIT_BAD_ID;
         if (!title || !one_line(title) || strlen(title) >= MENU_TITLE) return BOOT_EDIT_BAD_TITLE;
         use_title = title;
+        struct menu_entry old_e;
+        if (menu_parse_entry(entry, &old_e) == 0) {
+            snprintf(old_args, sizeof old_args, "%s", old_e.args);
+        }
     }
     if (ensure_dir(card) != 0) return save_fail(BOOT_EDIT_ERR, "card");
     {
@@ -517,7 +526,7 @@ int boot_edit_save(const char *card, const char *id, const char *title, const ch
         int filled = fill_patches(card, stem, patch_ids, npatches);
         if (filled != 0) return filled == BOOT_EDIT_BAD_PATCH ? filled : (save_err[0] ? filled : save_fail(BOOT_EDIT_ERR, "patches"));
     }
-    if (write_launch(card, stem, patch_ids, npatches) != 0 || write_entry(entry, use_title, stem, joined) != 0) {
+    if (write_launch(card, stem, patch_ids, npatches) != 0 || write_entry(entry, use_title, stem, joined, old_args) != 0) {
         if (create) {
             char dir[512];
             struct stat st;
@@ -539,4 +548,107 @@ int boot_edit_remove(const char *card, const char *id) {
     if (snprintf(dir, sizeof dir, "%s/autorun/boot-edits/%s", card, stem) >= (int)sizeof dir) return -1;
     if (lstat(dir, &st) != 0) return 0;
     return rm_tree(dir, 0);
+}
+
+static int safe_component(const char *s) {
+    if (!s || !s[0] || strlen(s) >= 200) return 0;
+    if (strcmp(s, ".") == 0 || strcmp(s, "..") == 0) return 0;
+    if (strstr(s, "..")) return 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p < 0x20 || *p == 0x7f || *p == '/' || *p == '\\') return 0;
+    }
+    return 1;
+}
+
+int boot_entry_update(const char *card, const char *id, const char *new_title, const char *new_args) {
+    char path[512];
+    if (!card || !card[0] || !id || !id[0]) return -1;
+    remount_card(card);
+
+    if (strncmp(id, "app:", 4) == 0) {
+        const char *folder = id + 4;
+        if (!safe_component(folder)) return -1;
+        if (snprintf(path, sizeof path, "%s/apps/%s/boot.entry", card, folder) >= (int)sizeof path) return -1;
+    } else if (strncmp(id, "entry:", 6) == 0) {
+        const char *file = id + 6;
+        if (!safe_component(file) || !ends_with(file, ".entry")) return -1;
+        if (snprintf(path, sizeof path, "%s/autorun/boot-menu/%s", card, file) >= (int)sizeof path) return -1;
+    } else {
+        return -1;
+    }
+
+    struct menu_entry existing;
+    if (menu_parse_entry(path, &existing) != 0) return -1;
+
+    const char *title = (new_title && new_title[0]) ? new_title : existing.title;
+    if (!one_line(title) || strlen(title) >= MENU_TITLE) return -1;
+
+    const char *args = new_args ? new_args : existing.args;
+    if (args[0] && (!one_line(args) || strlen(args) >= MENU_ARGS)) return -1;
+
+    char body[MENU_TITLE + MENU_RUN + MENU_ARGS + MENU_PATCHES + 128];
+    int n = snprintf(body, sizeof body, "title=%s\nrun=%s\n", title, existing.run);
+    if (n < 0 || (size_t)n >= sizeof body) return -1;
+
+    if (args[0]) {
+        int w = snprintf(body + n, sizeof body - (size_t)n, "args=%s\n", args);
+        if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
+        n += w;
+    }
+
+    if (existing.boot_ac50) {
+        int w = snprintf(body + n, sizeof body - (size_t)n, "boot=ac50\n");
+        if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
+        n += w;
+        if (existing.patches[0]) {
+            w = snprintf(body + n, sizeof body - (size_t)n, "patches=%s\n", existing.patches);
+            if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
+            n += w;
+        }
+    }
+
+    return write_text(path, body, 0644);
+}
+
+int boot_entry_delete(const char *card, const char *id) {
+    if (!card || !card[0] || !id || !id[0]) return -1;
+    remount_card(card);
+
+    if (strncmp(id, "app:", 4) == 0) {
+        const char *name = id + 4;
+        if (!safe_component(name)) return -1;
+        char app_dir[512];
+        if (snprintf(app_dir, sizeof app_dir, "%s/apps/%s", card, name) >= (int)sizeof app_dir) return -1;
+        struct stat st;
+        if (lstat(app_dir, &st) != 0 || !S_ISDIR(st.st_mode)) return -1;
+        if (rm_tree(app_dir, 0) != 0) return -1;
+    } else if (strncmp(id, "entry:", 6) == 0) {
+        const char *name = id + 6;
+        if (!safe_component(name) || !ends_with(name, ".entry")) return -1;
+        char entry_path[512];
+        if (snprintf(entry_path, sizeof entry_path, "%s/autorun/boot-menu/%s", card, name) >= (int)sizeof entry_path) return -1;
+        struct stat st;
+        if (lstat(entry_path, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
+
+        boot_edit_remove(card, id);
+
+        if (unlink(entry_path) != 0) return -1;
+    } else {
+        return -1;
+    }
+
+    char def_path[512], line[MENU_ID];
+    if (snprintf(def_path, sizeof def_path, "%s/autorun/boot-default", card) < (int)sizeof def_path) {
+        FILE *df = fopen(def_path, "r");
+        if (df) {
+            int is_def = 0;
+            if (fgets(line, sizeof line, df)) {
+                trim(line);
+                if (strcmp(line, id) == 0) is_def = 1;
+            }
+            fclose(df);
+            if (is_def) menu_set_default(card, "stock");
+        }
+    }
+    return 0;
 }

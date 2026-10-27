@@ -33,6 +33,9 @@ struct menu {
    Each row gets an id: "stock", "app:<folder>", or "entry:<file>". */
 int menu_load(struct menu *m, const char *card);
 
+/* Parse a single .entry file into e. Returns 0 on success, -1 on failure. */
+int menu_parse_entry(const char *path, struct menu_entry *e);
+
 /* Index of the id saved in card/autorun/boot-default.
    A missing file, a blank line, "stock", or an unknown id returns 0. */
 int menu_default_index(const struct menu *m, const char *card);

@@ -35,3 +35,15 @@ const char *boot_edit_last_error(void);
 /* Removes autorun/boot-edits/<slug> when id names a boot=ac50 entry.
    0 when there is nothing to remove. Does not delete the .entry file. */
 int boot_edit_remove(const char *card, const char *id);
+
+/* Update title and/or arguments of an existing entry (app:<folder> or entry:<file>.entry).
+   If new_title is NULL, existing title is kept.
+   If new_args is NULL, existing args are kept.
+   Returns 0 on success, negative on error. */
+int boot_entry_update(const char *card, const char *id, const char *new_title, const char *new_args);
+
+/* Delete an installed app (app:<folder>) or boot entry (entry:<file>.entry).
+   Removes the entry file, any boot-edits directory, or the entire app folder.
+   If the deleted entry was set as default in boot-default, resets default to stock.
+   Returns 0 on success, negative on error. */
+int boot_entry_delete(const char *card, const char *id);
