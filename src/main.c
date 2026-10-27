@@ -9,6 +9,7 @@
 #include "surface.h"
 #include "theme.h"
 #include "ui.h"
+#include "usb_storage.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -518,7 +519,8 @@ static int reopen_after_app(struct surface *midi, struct screen *scr) {
 
 static void print_menu(const struct menu *m, int sel) {
     printf("menu:\n");
-    for (int i = 0; i < m->n; i++) printf("%c %s\n", i == sel ? '>' : ' ', m->items[i].title);
+    printf("%c %s\n", sel == 0 ? '>' : ' ', "USB storage (SD card)");
+    for (int i = 0; i < m->n; i++) printf("%c %s\n", (1 + i) == sel ? '>' : ' ', m->items[i].title);
     fflush(stdout);
 }
 
@@ -764,6 +766,8 @@ int main(int argc, char **argv) {
             npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
             boot_ui_set_catalog(&ui, catalog, npatches);
             ui.default_index = menu_default_index(&menu, card);
+            int dsel = (ui.default_index >= 0 && ui.default_index < menu.n) ? ui.default_index : 0;
+            ui.apps_ls.cursor = 1 + dsel;
 
             input_begin(&quiet, &dev);
             started = mono_ms();
@@ -812,6 +816,50 @@ int main(int argc, char **argv) {
             wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             continue;
         }
+        if (ui.action == BOOT_ACT_START_USB_STORAGE) {
+            ui.action = BOOT_ACT_NONE;
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+
+            char err_buf[128] = {0};
+            int rc_st = usb_storage_start(err_buf, sizeof err_buf);
+            if (rc_st == 0) {
+                ui.storage_status = USB_STORAGE_STATUS_ACTIVE;
+                ui.storage_err[0] = 0;
+            } else {
+                ui.storage_status = USB_STORAGE_STATUS_ERROR;
+                snprintf(ui.storage_err, sizeof ui.storage_err, "%s", err_buf[0] ? err_buf : "Failed to start");
+            }
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            continue;
+        }
+        if (ui.action == BOOT_ACT_STOP_USB_STORAGE) {
+            ui.action = BOOT_ACT_NONE;
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+
+            char err_buf[128] = {0};
+            usb_storage_stop(err_buf, sizeof err_buf);
+            flush_and_drop_caches(card);
+            menu_load(&menu, card);
+            npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
+            boot_ui_set_catalog(&ui, catalog, npatches);
+            ui.default_index = menu_default_index(&menu, card);
+            ui.storage_status = USB_STORAGE_STATUS_IDLE;
+            ui.storage_err[0] = 0;
+            int dsel = (ui.default_index >= 0 && ui.default_index < menu.n) ? ui.default_index : 0;
+            ui.apps_ls.cursor = 1 + dsel;
+            ui.screen = BOOT_SCREEN_APPS;
+
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            continue;
+        }
         if (ui.action == BOOT_ACT_SET_DEFAULT || ui.action == BOOT_ACT_SAVE_THEME) {
             int failed = persist(&ui, card) != 0;
             if (failed || ui.action == BOOT_ACT_SET_DEFAULT) {
@@ -820,6 +868,10 @@ int main(int argc, char **argv) {
                 wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             }
         }
+    }
+
+    if (ui.storage_status == USB_STORAGE_STATUS_ACTIVE) {
+        usb_storage_stop(NULL, 0);
     }
 
     remove_pid_file();

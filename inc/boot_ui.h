@@ -10,6 +10,7 @@ enum {
     BOOT_SCREEN_SETTINGS,
     BOOT_SCREEN_DEFAULT,
     BOOT_SCREEN_THEME,
+    BOOT_SCREEN_STORAGE,
     BOOT_SCREEN_EDIT,
     BOOT_SCREEN_ENTRY,
     BOOT_SCREEN_UNSAVED
@@ -21,7 +22,9 @@ enum {
     BOOT_ACT_SET_DEFAULT,
     BOOT_ACT_SAVE_THEME,
     BOOT_ACT_SAVE_BOOT,
-    BOOT_ACT_RELOAD
+    BOOT_ACT_RELOAD,
+    BOOT_ACT_START_USB_STORAGE,
+    BOOT_ACT_STOP_USB_STORAGE
 };
 
 struct boot_ui {
@@ -55,6 +58,8 @@ struct boot_ui {
     char save_patches[BOOT_PATCH_MAX][BOOT_PATCH_ID];
     int save_npatches;
     char notice[96];
+    int storage_status;
+    char storage_err[128];
 };
 
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int default_index);
