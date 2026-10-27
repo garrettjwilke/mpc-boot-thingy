@@ -3,6 +3,7 @@
 #include "input.h"
 #include "menu.h"
 #include "theme.h"
+#include "usb_storage.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -154,19 +155,49 @@ int main(void) {
     struct ui view = {.px = px};
     struct boot_ui boot;
     boot_ui_init(&boot, &m, 0, 0);
+    assert(boot.apps_ls.cursor == 1);
     struct input in;
     input_begin(&in, 0);
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_APPS);
+
+    /* Test scrolling up to row 0 (USB storage) */
+    input_begin(&in, 0);
+    in.encoder = -1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.apps_ls.cursor == 0);
+
+    /* Shift menu should NOT open on row 0 (USB storage) */
+    input_begin(&in, 0);
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    boot_frame(&view, &in, &boot);
+    assert(boot.shift_menu.shown == 0);
+
+    /* Pressing encoder on row 0 should start USB storage */
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_STORAGE);
+    assert(boot.action == BOOT_ACT_START_USB_STORAGE);
+
+    /* Return to apps screen */
+    boot.screen = BOOT_SCREEN_APPS;
+    boot.storage_status = USB_STORAGE_STATUS_IDLE;
+    boot.action = BOOT_ACT_NONE;
+    boot.apps_ls.cursor = 1;
+
     in.down = 1u << IN_B3;
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
-    boot_ui_init(&boot, &m, 0, 1);
+    /* Test shift menu to set default on an app row (cursor > 0) */
+    boot_ui_init(&boot, &m, 0, 0);
+    assert(boot.apps_ls.cursor == 1);
     input_begin(&in, 0);
     in.encoder = 1;
     boot_frame(&view, &in, &boot);
-    assert(boot.apps_ls.cursor == 1);
+    assert(boot.apps_ls.cursor == 2);
     assert(boot.action == BOOT_ACT_NONE);
     input_begin(&in, 0);
     in.shift = 1;
@@ -183,6 +214,15 @@ int main(void) {
     in.encoder_press = 1;
     boot_frame(&view, &in, &boot);
     assert(boot.action == BOOT_ACT_SET_DEFAULT);
+    assert(strcmp(boot.action_id, "app:20-lab") == 0);
+
+    /* Test that default_index = 1 initializes cursor to 2 (pointing to app:20-lab) */
+    boot_ui_init(&boot, &m, 0, 1);
+    assert(boot.apps_ls.cursor == 2);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_LAUNCH);
     assert(strcmp(boot.action_id, "app:20-lab") == 0);
 
     boot_ui_init(&boot, &m, 0, 0);
@@ -250,12 +290,91 @@ int main(void) {
     assert(strcmp(boot.action_id, "entry:30-snake.entry") == 0);
     assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
-    /* Test reload from settings menu */
+    /* Test USB storage from settings menu (index 2) */
     boot.action = BOOT_ACT_NONE;
     input_begin(&in, 0);
     in.encoder = 2;
     boot_frame(&view, &in, &boot);
     assert(boot.settings_ls.cursor == 2);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_STORAGE);
+    assert(boot.action == BOOT_ACT_START_USB_STORAGE);
+    assert(boot.storage_status == USB_STORAGE_STATUS_PREPARING);
+
+    /* Storage screen: simulate start succeeded */
+    char dev_path[64];
+    assert(usb_storage_find_sd_device(dev_path, sizeof dev_path) == 0);
+    assert(strcmp(dev_path, "/dev/mock_mmcblk1") == 0);
+    char err_buf[128];
+    assert(usb_storage_start(err_buf, sizeof err_buf) == 0);
+    boot.storage_status = USB_STORAGE_STATUS_ACTIVE;
+    boot.action = BOOT_ACT_NONE;
+
+    /* Verify lockout: encoder rotation and other keys do not leave storage screen */
+    input_begin(&in, 0);
+    in.encoder = 5;
+    in.down = (1u << IN_B2) | (1u << IN_B3);
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_STORAGE);
+    assert(boot.action == BOOT_ACT_NONE);
+    assert(boot.storage_status == USB_STORAGE_STATUS_ACTIVE);
+
+    /* Test exit via soft key B1 */
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_STOP_USB_STORAGE);
+    assert(boot.storage_status == USB_STORAGE_STATUS_EXITING);
+
+    /* Simulate main loop finishing stop */
+    assert(usb_storage_stop(err_buf, sizeof err_buf) == 0);
+    boot.action = BOOT_ACT_NONE;
+    boot.storage_status = USB_STORAGE_STATUS_IDLE;
+    boot.screen = BOOT_SCREEN_SETTINGS;
+
+    /* Test exit via Encoder press */
+    boot.settings_ls.cursor = 2;
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_STORAGE);
+    assert(boot.action == BOOT_ACT_START_USB_STORAGE);
+    boot.storage_status = USB_STORAGE_STATUS_ACTIVE;
+    boot.action = BOOT_ACT_NONE;
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_STOP_USB_STORAGE);
+    assert(boot.storage_status == USB_STORAGE_STATUS_EXITING);
+    boot.action = BOOT_ACT_NONE;
+    boot.storage_status = USB_STORAGE_STATUS_IDLE;
+    boot.screen = BOOT_SCREEN_SETTINGS;
+
+    /* Test storage error state and Back button */
+    boot.settings_ls.cursor = 2;
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_STORAGE);
+    usb_storage_set_mock(1, 1);
+    assert(usb_storage_start(err_buf, sizeof err_buf) != 0);
+    boot.storage_status = USB_STORAGE_STATUS_ERROR;
+    snprintf(boot.storage_err, sizeof boot.storage_err, "%s", err_buf);
+    boot.action = BOOT_ACT_NONE;
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_SETTINGS);
+    usb_storage_set_mock(1, 0);
+
+    /* Test reload from settings menu (now index 3) */
+    boot.action = BOOT_ACT_NONE;
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.settings_ls.cursor == 3);
     input_begin(&in, 0);
     in.encoder_press = 1;
     boot_frame(&view, &in, &boot);
