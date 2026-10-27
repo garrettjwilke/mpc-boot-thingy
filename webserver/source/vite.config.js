@@ -202,6 +202,20 @@ async function handleMock(req, res, url, state) {
     sendJson(res, 200, { ok: true, id });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/api/boot-now") {
+    const raw = (await readRaw(req)).toString("utf8").trim();
+    let id = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.id === "string") id = parsed.id;
+    } catch (e) {}
+    if (!state.apps.some((app) => app.id === id)) {
+      sendJson(res, 400, { error: "that id is not in the menu" });
+      return;
+    }
+    sendJson(res, 200, { ok: true, id });
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/api/reboot") {
     sendJson(res, 200, { ok: true });
     return;

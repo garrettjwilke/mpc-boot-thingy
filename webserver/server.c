@@ -1165,6 +1165,103 @@ static void handle_default(int fd, struct io *io, int has_len, size_t content_le
     send_json(fd, 200, "OK", resp);
 }
 
+static const char *boot_now_file_path(void) {
+    const char *env = getenv("MPC_BOOT_NOW_FILE");
+    return (env && env[0]) ? env : "/run/mpc-boot-now";
+}
+
+static const char *boot_pid_file_path(void) {
+    const char *env = getenv("MPC_BOOT_PID_FILE");
+    return (env && env[0]) ? env : "/run/mpc-boot-thingy.pid";
+}
+
+static int trigger_boot_now(const char *id) {
+    const char *path = boot_now_file_path();
+    const char *pid_path = boot_pid_file_path();
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) f = fopen(path, "w");
+    if (!f) return -1;
+    fprintf(f, "%s\n", id);
+    fflush(f);
+    fclose(f);
+    if (strcmp(tmp, path) != 0) {
+        rename(tmp, path);
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        setsid();
+        sync();
+        int running = 0;
+        FILE *pf = fopen(pid_path, "r");
+        if (pf) {
+            int target_pid = 0;
+            if (fscanf(pf, "%d", &target_pid) == 1 && target_pid > 1) {
+                if (kill(target_pid, 0) == 0) {
+                    kill(target_pid, SIGUSR2);
+                    running = 1;
+                }
+            }
+            fclose(pf);
+        }
+        if (running) {
+            execlp("killall", "killall", "-USR2", "mpc-boot-thingy", (char *)NULL);
+            _exit(0);
+        }
+        char run_bin[512];
+        snprintf(run_bin, sizeof run_bin, "%s/mpc-boot-thingy", g_autorun);
+        if (access("/run/mpc-boot-thingy", X_OK) == 0) {
+            execlp("systemd-run", "systemd-run", "--unit=mpc-boot-thingy", "--collect", "--no-block", "/run/mpc-boot-thingy", g_autorun, (char *)NULL);
+            execlp("/run/mpc-boot-thingy", "/run/mpc-boot-thingy", g_autorun, (char *)NULL);
+        }
+        execlp("systemd-run", "systemd-run", "--unit=mpc-boot-thingy", "--collect", "--no-block", run_bin, g_autorun, (char *)NULL);
+        execlp(run_bin, run_bin, g_autorun, (char *)NULL);
+        _exit(127);
+    }
+    return 0;
+}
+
+static void handle_boot_now(int fd, struct io *io, int has_len, size_t content_len) {
+    char raw[1024], id[MENU_ID];
+    struct menu menu;
+    char resp[MENU_ID + 32];
+    int found = 0;
+    if (!has_len || content_len == 0 || content_len >= sizeof raw) {
+        send_err(fd, 400, "Bad Request", "missing app id");
+        return;
+    }
+    if (io_read(io, raw, content_len) != 0) {
+        send_err(fd, 400, "Bad Request", "missing app id");
+        return;
+    }
+    raw[content_len] = 0;
+    if (body_id(raw, id, sizeof id) != 0) {
+        send_err(fd, 400, "Bad Request", "missing app id");
+        return;
+    }
+    menu_load(&menu, g_card);
+    for (int i = 0; i < menu.n; i++) {
+        if (strcmp(menu.items[i].id, id) == 0) found = 1;
+    }
+    if (!found) {
+        send_err(fd, 400, "Bad Request", "that id is not in the menu");
+        return;
+    }
+    if (trigger_boot_now(id) != 0) {
+        send_err(fd, 500, "Internal Server Error", "could not trigger boot");
+        return;
+    }
+    snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"%s\"}\n", id);
+    if (strchr(id, '"') || strchr(id, '\\') || strchr(id, '\n')) {
+        send_json(fd, 200, "OK", "{\"ok\":true}\n");
+        return;
+    }
+    send_json(fd, 200, "OK", resp);
+}
+
 static int reboot_device(void) {
     int fd = open(BOOTCOUNT, O_WRONLY);
     pid_t pid;
@@ -1197,7 +1294,7 @@ static int reload_boot_thingy(void) {
             fputs("3\n", f);
             fclose(f);
         }
-        FILE *pf = fopen("/run/mpc-boot-thingy.pid", "r");
+        FILE *pf = fopen(boot_pid_file_path(), "r");
         if (pf) {
             int target_pid = 0;
             if (fscanf(pf, "%d", &target_pid) == 1 && target_pid > 1) {
@@ -1781,6 +1878,10 @@ static void handle_client(int client) {
     }
     if (strcmp(method, "POST") == 0 && strcmp(path, "/api/default") == 0) {
         handle_default(client, &io, has_len, content_len);
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/boot-now") == 0) {
+        handle_boot_now(client, &io, has_len, content_len);
         goto out;
     }
     if (strcmp(method, "POST") == 0 && strcmp(path, "/api/reboot") == 0) {

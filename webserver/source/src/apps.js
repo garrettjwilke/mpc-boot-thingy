@@ -1,4 +1,4 @@
-import { postDefault, removeApp } from "./api.js";
+import { bootNow, postDefault, removeApp } from "./api.js";
 
 export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
   const appsEl = document.getElementById("apps");
@@ -9,7 +9,19 @@ export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
   for (const app of apps) {
     const row = document.createElement("div");
     row.className = "app";
+
+    const main = document.createElement("div");
+    main.className = "app-main";
+
+    const bootBtn = document.createElement("button");
+    bootBtn.className = "btn sm boot-btn";
+    bootBtn.type = "button";
+    bootBtn.textContent = "Boot now";
+    bootBtn.addEventListener("click", () => onBootNow(app, toast, bootBtn));
+    main.appendChild(bootBtn);
+
     const info = document.createElement("div");
+    info.className = "app-info";
     const title = document.createElement("strong");
     title.textContent = app.title || app.id;
     info.appendChild(title);
@@ -25,11 +37,13 @@ export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
       ? "boot entry" + (app.patches && app.patches.length ? "  " + app.patches.join(", ") : "")
       : app.stock ? app.id : (app.id + (app.run ? "  run " + app.run : "") + (app.args ? "  " + app.args : ""));
     info.appendChild(meta);
+    main.appendChild(info);
+
     const actions = document.createElement("div");
     actions.className = "row";
     if (app.id !== defaultId) {
       const setBtn = document.createElement("button");
-      setBtn.className = "btn sm";
+      setBtn.className = "btn secondary sm";
       setBtn.type = "button";
       setBtn.textContent = "Set default";
       setBtn.addEventListener("click", () => changeDefault(app, toast, refresh));
@@ -51,9 +65,26 @@ export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
       delBtn.addEventListener("click", () => deleteApp(app, toast, refresh));
       actions.appendChild(delBtn);
     }
-    row.appendChild(info);
+    row.appendChild(main);
     row.appendChild(actions);
     appsEl.appendChild(row);
+  }
+}
+
+async function onBootNow(app, toast, btn) {
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Booting...";
+  try {
+    await bootNow(app.id);
+    toast("Booting " + (app.title || app.id) + "...");
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }, 1500);
   }
 }
 

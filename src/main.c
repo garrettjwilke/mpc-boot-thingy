@@ -28,11 +28,20 @@
 
 static int stopped_ac50;
 static volatile sig_atomic_t g_reload_requested;
+static volatile sig_atomic_t g_boot_now_requested;
 static pid_t g_running_child_pid = -1;
 
 static void handle_reload_signal(int sig) {
     (void)sig;
     g_reload_requested = 1;
+    if (g_running_child_pid > 0) {
+        kill(-g_running_child_pid, SIGTERM);
+    }
+}
+
+static void handle_boot_now_signal(int sig) {
+    (void)sig;
+    g_boot_now_requested = 1;
     if (g_running_child_pid > 0) {
         kill(-g_running_child_pid, SIGTERM);
     }
@@ -487,7 +496,7 @@ static int launch(struct surface *midi, struct screen *scr, const char *card, co
     g_running_child_pid = pid;
     int st = 0;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {
-        if (g_reload_requested) {
+        if (g_reload_requested || g_boot_now_requested) {
             kill(-pid, SIGTERM);
             usleep(20000);
             kill(-pid, SIGKILL);
@@ -550,8 +559,18 @@ static void release_devices(struct surface *midi, struct screen *scr) {
     if (scr->px || scr->fd >= 0) screen_close(scr);
 }
 
+static const char *boot_now_file_path(void) {
+    const char *env = getenv("MPC_BOOT_NOW_FILE");
+    return (env && env[0]) ? env : "/run/mpc-boot-now";
+}
+
+static const char *boot_pid_file_path(void) {
+    const char *env = getenv("MPC_BOOT_PID_FILE");
+    return (env && env[0]) ? env : "/run/mpc-boot-thingy.pid";
+}
+
 static void write_pid_file(void) {
-    FILE *f = fopen("/run/mpc-boot-thingy.pid", "w");
+    FILE *f = fopen(boot_pid_file_path(), "w");
     if (f) {
         fprintf(f, "%d\n", (int)getpid());
         fclose(f);
@@ -559,7 +578,23 @@ static void write_pid_file(void) {
 }
 
 static void remove_pid_file(void) {
-    unlink("/run/mpc-boot-thingy.pid");
+    unlink(boot_pid_file_path());
+}
+
+static int check_boot_now_target(char *out_id, size_t n) {
+    out_id[0] = 0;
+    const char *path = boot_now_file_path();
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    if (fgets(out_id, (int)n, f)) {
+        size_t l = strlen(out_id);
+        while (l > 0 && (out_id[l - 1] == '\r' || out_id[l - 1] == '\n' || out_id[l - 1] == ' ')) {
+            out_id[--l] = 0;
+        }
+    }
+    fclose(f);
+    unlink(path);
+    return out_id[0] ? 1 : 0;
 }
 
 static void flush_and_drop_caches(const char *card) {
@@ -620,6 +655,12 @@ int main(int argc, char **argv) {
     sigaction(SIGHUP, &sa, NULL);
     sigaction(SIGUSR1, &sa, NULL);
 
+    struct sigaction sa_boot;
+    memset(&sa_boot, 0, sizeof sa_boot);
+    sa_boot.sa_handler = handle_boot_now_signal;
+    sigemptyset(&sa_boot.sa_mask);
+    sigaction(SIGUSR2, &sa_boot, NULL);
+
     write_pid_file();
 
     int open_menu = wants_menu(argc, argv);
@@ -661,14 +702,44 @@ int main(int argc, char **argv) {
 
     struct parser parser = {0};
     struct input_dev dev = {0};
+    char boot_now_id[MENU_ID] = {0};
+    int has_boot_now = check_boot_now_target(boot_now_id, sizeof boot_now_id);
     int held = 1;
-    if (!open_menu) {
+    if (!open_menu && !has_boot_now) {
         draw_prompt(&scr, back, front, &midi, theme);
         printf("prompt: hold SHIFT for boot thingy\n");
         fflush(stdout);
         held = wait_shift(&midi, &parser, &dev);
     }
-    if (!held) {
+    if (has_boot_now) {
+        int bsel = -1;
+        for (int i = 0; i < menu.n; i++) {
+            if (strcmp(menu.items[i].id, boot_now_id) == 0) {
+                bsel = i;
+                break;
+            }
+        }
+        if (bsel >= 0) {
+            int ran = launch(&midi, &scr, card, &menu.items[bsel]);
+            if (ran == 1) {
+                free(back);
+                free(front);
+                return 0;
+            }
+            if (ran != 2) {
+                memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
+                if (reopen_after_app(&midi, &scr) != 0) {
+                    release_devices(&midi, &scr);
+                    restore_stock_if_stopped(card);
+                    free(back);
+                    free(front);
+                    return 1;
+                }
+                parser = (struct parser){0};
+                dev = (struct input_dev){0};
+            }
+        }
+    } else if (!held) {
         if (def <= 0) {
             if (!stock_ready(card)) show_loading(&scr, &midi, theme);
             mount_patched_stock(card);
@@ -726,6 +797,45 @@ int main(int argc, char **argv) {
             npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
             boot_ui_set_catalog(&ui, catalog, npatches);
             boot_ui_notice(&ui, "Reloaded menu");
+        }
+        if (g_boot_now_requested || access(boot_now_file_path(), F_OK) == 0) {
+            g_boot_now_requested = 0;
+            char b_id[MENU_ID] = {0};
+            if (check_boot_now_target(b_id, sizeof b_id)) {
+                menu_load(&menu, card);
+                int sel = -1;
+                for (int i = 0; i < menu.n; i++) {
+                    if (strcmp(menu.items[i].id, b_id) == 0) {
+                        sel = i;
+                        break;
+                    }
+                }
+                if (sel >= 0) {
+                    int ran = launch(&midi, &scr, card, &menu.items[sel]);
+                    if (ran == 1) {
+                        rc = 0;
+                        break;
+                    }
+                    if (ran != 2) {
+                        memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
+                        if (reopen_after_app(&midi, &scr) != 0) break;
+                        parser = (struct parser){0};
+                        dev = (struct input_dev){0};
+                    }
+                    flush_and_drop_caches(card);
+                    menu_load(&menu, card);
+                    npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
+                    boot_ui_set_catalog(&ui, catalog, npatches);
+                    ui.default_index = menu_default_index(&menu, card);
+                    int dsel = (ui.default_index >= 0 && ui.default_index < menu.n) ? ui.default_index : 0;
+                    ui.apps_ls.cursor = 1 + dsel;
+
+                    input_begin(&quiet, &dev);
+                    started = mono_ms();
+                    wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+                    continue;
+                }
+            }
         }
         struct pollfd pf = {.fd = midi.fd, .events = POLLIN};
         int pr = poll(&pf, 1, poll_ms(wake, started));

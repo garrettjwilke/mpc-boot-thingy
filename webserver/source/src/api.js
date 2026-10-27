@@ -28,6 +28,14 @@ export async function postDefault(id) {
   }));
 }
 
+export async function bootNow(id) {
+  return readBody(await fetch("/api/boot-now", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: id
+  }));
+}
+
 export async function removeApp(id) {
   return readBody(await fetch("/api/apps?id=" + encodeURIComponent(id), { method: "DELETE" }));
 }

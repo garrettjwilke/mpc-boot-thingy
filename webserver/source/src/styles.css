@@ -143,6 +143,18 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
   border-top: 1px solid var(--border);
   align-items: center;
 }
+.app-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+.app-main .boot-btn {
+  flex-shrink: 0;
+  min-width: 84px;
+  text-align: center;
+}
 .app .meta { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-top: 4px; }
 .app .badge { margin-left: 8px; }
 .patch {
