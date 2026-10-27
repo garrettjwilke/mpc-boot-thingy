@@ -816,6 +816,40 @@ int main(int argc, char **argv) {
             wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             continue;
         }
+        if (ui.action == BOOT_ACT_UPDATE_ENTRY) {
+            ui.action = BOOT_ACT_NONE;
+            int urc = boot_entry_update(card, ui.action_id, ui.save_title[0] ? ui.save_title : NULL, ui.save_args);
+            if (urc == 0) {
+                flush_and_drop_caches(card);
+                menu_load(&menu, card);
+                ui.default_index = menu_default_index(&menu, card);
+                boot_ui_notice(&ui, "Entry updated");
+            } else {
+                boot_ui_notice(&ui, "Could not update entry");
+            }
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            continue;
+        }
+        if (ui.action == BOOT_ACT_DELETE_ENTRY) {
+            ui.action = BOOT_ACT_NONE;
+            int drc = boot_entry_delete(card, ui.action_id);
+            if (drc == 0) {
+                flush_and_drop_caches(card);
+                menu_load(&menu, card);
+                npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
+                boot_ui_set_catalog(&ui, catalog, npatches);
+                ui.default_index = menu_default_index(&menu, card);
+                boot_ui_notice(&ui, "Deleted");
+            } else {
+                boot_ui_notice(&ui, "Could not delete");
+            }
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            continue;
+        }
         if (ui.action == BOOT_ACT_START_USB_STORAGE) {
             ui.action = BOOT_ACT_NONE;
             input_begin(&quiet, &dev);

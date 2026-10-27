@@ -83,11 +83,19 @@ static void note_default(struct boot_ui *s, int index) {
     snprintf(s->action_id, sizeof s->action_id, "%s", s->menu->items[index].id);
 }
 
+static void trim(char *s) {
+    char *a = s;
+    while (*a == ' ' || *a == '\t' || *a == '\r') a++;
+    if (a != s) memmove(s, a, strlen(a) + 1);
+    size_t n = strlen(s);
+    while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) s[--n] = 0;
+}
+
 static int edit_count(const struct boot_ui *s) {
     int n = 0;
     if (!s->menu) return 0;
     for (int i = 0; i < s->menu->n; i++) {
-        if (s->menu->items[i].boot_ac50) n++;
+        if (!s->menu->items[i].stock) n++;
     }
     return n;
 }
@@ -115,20 +123,28 @@ static void open_entry(struct boot_ui *s, int cursor) {
     memset(s->enabled, 0, sizeof s->enabled);
     memset(s->saved_on, 0, sizeof s->saved_on);
     s->entry_ls.cursor = 0;
+    s->item_ls.cursor = 0;
     s->edit_id[0] = 0;
     s->edit_title[0] = 0;
+    s->edit_args[0] = 0;
+    s->edit_is_app = 0;
+    s->edit_boot_ac50 = 0;
     s->edit_new = 1;
     if (cursor > 0 && s->menu) {
         for (int i = 0; i < s->menu->n; i++) {
-            if (!s->menu->items[i].boot_ac50) continue;
+            if (s->menu->items[i].stock) continue;
             seen++;
             if (seen != cursor) continue;
             s->edit_new = 0;
             snprintf(s->edit_id, sizeof s->edit_id, "%s", s->menu->items[i].id);
             snprintf(s->edit_title, sizeof s->edit_title, "%s", s->menu->items[i].title);
+            snprintf(s->edit_args, sizeof s->edit_args, "%s", s->menu->items[i].args);
+            s->edit_boot_ac50 = s->menu->items[i].boot_ac50;
+            s->edit_is_app = strncmp(s->menu->items[i].id, "app:", 4) == 0;
             mark_enabled(s, s->menu->items[i].patches);
             memcpy(s->saved_on, s->enabled, sizeof s->enabled);
-            break;
+            s->screen = BOOT_SCREEN_ITEM_EDIT;
+            return;
         }
     }
     s->screen = BOOT_SCREEN_ENTRY;
@@ -138,9 +154,15 @@ static void queue_save(struct boot_ui *s) {
     s->action = BOOT_ACT_SAVE_BOOT;
     s->save_id[0] = 0;
     s->save_title[0] = 0;
+    s->save_args[0] = 0;
     if (!s->edit_new) {
         snprintf(s->save_id, sizeof s->save_id, "%s", s->edit_id);
+    }
+    if (s->edit_title[0]) {
         snprintf(s->save_title, sizeof s->save_title, "%s", s->edit_title);
+    }
+    if (s->edit_args[0]) {
+        snprintf(s->save_args, sizeof s->save_args, "%s", s->edit_args);
     }
     s->save_npatches = 0;
     for (int i = 0; i < s->ncatalog && s->save_npatches < BOOT_PATCH_MAX; i++) {
@@ -152,7 +174,7 @@ static void queue_save(struct boot_ui *s) {
 
 static void discard_entry(struct boot_ui *s) {
     memcpy(s->enabled, s->saved_on, sizeof s->enabled);
-    s->screen = BOOT_SCREEN_EDIT;
+    s->screen = s->edit_new ? BOOT_SCREEN_EDIT : BOOT_SCREEN_ITEM_EDIT;
 }
 
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int default_index) {
@@ -190,8 +212,12 @@ void boot_ui_saved(struct boot_ui *ui) {
     memset(ui->enabled, 0, sizeof ui->enabled);
     memset(ui->saved_on, 0, sizeof ui->saved_on);
     ui->edit_new = 0;
+    ui->edit_is_app = 0;
+    ui->edit_boot_ac50 = 0;
     ui->edit_id[0] = 0;
     ui->edit_title[0] = 0;
+    ui->edit_args[0] = 0;
+    ui->save_args[0] = 0;
     ui->save_npatches = 0;
     ui->notice[0] = 0;
 }
@@ -236,6 +262,48 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     else input_begin(&ev, 0);
     if (ev.down || ev.encoder || ev.encoder_press) s->notice[0] = 0;
 
+    if (s->screen == BOOT_SCREEN_TEXT_EDIT) {
+        const struct boot_theme *th = theme_at(s->theme);
+        struct ui_text_editor_style ed_st = ui_text_editor_style_default();
+        ed_st.fill = th->bg;
+        ed_st.text_box = th->box;
+        ed_st.text = th->text;
+        ed_st.title = th->hl;
+        ed_st.border = th->border;
+        ed_st.highlight = th->hl;
+
+        int res = ui_text_editor(u, 0, 0, UI_W, UI_H, &s->text_ed, ed_st, &ev);
+        if (res == UI_TEXT_OK) {
+            trim(s->text_buf);
+            if (s->text_edit_mode == BOOT_TEXT_RENAME) {
+                if (s->text_buf[0]) {
+                    snprintf(s->edit_title, sizeof s->edit_title, "%s", s->text_buf);
+                    if (s->text_prev_screen == BOOT_SCREEN_ITEM_EDIT) {
+                        s->action = BOOT_ACT_UPDATE_ENTRY;
+                        snprintf(s->action_id, sizeof s->action_id, "%s", s->edit_id);
+                        snprintf(s->save_title, sizeof s->save_title, "%s", s->edit_title);
+                        snprintf(s->save_args, sizeof s->save_args, "%s", s->edit_args);
+                    }
+                    s->screen = s->text_prev_screen;
+                } else {
+                    boot_ui_notice(s, "Title cannot be empty");
+                }
+            } else if (s->text_edit_mode == BOOT_TEXT_ARGS) {
+                snprintf(s->edit_args, sizeof s->edit_args, "%s", s->text_buf);
+                if (s->text_prev_screen == BOOT_SCREEN_ITEM_EDIT) {
+                    s->action = BOOT_ACT_UPDATE_ENTRY;
+                    snprintf(s->action_id, sizeof s->action_id, "%s", s->edit_id);
+                    snprintf(s->save_title, sizeof s->save_title, "%s", s->edit_title);
+                    snprintf(s->save_args, sizeof s->save_args, "%s", s->edit_args);
+                }
+                s->screen = s->text_prev_screen;
+            }
+        } else if (res == UI_TEXT_CANCEL) {
+            s->screen = s->text_prev_screen;
+        }
+        return 0;
+    }
+
     int shift_open = s->screen == BOOT_SCREEN_APPS && s->apps_ls.cursor > 0 && ui_menu_open(&s->shift_menu, &ev);
     if (!shift_open) {
         int screen = s->screen;
@@ -248,6 +316,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
             move_cursor(&s->theme_ls, theme_count(), &ev);
             s->theme = s->theme_ls.cursor;
         } else if (screen == BOOT_SCREEN_EDIT) move_cursor(&s->edit_ls, edits, &ev);
+        else if (screen == BOOT_SCREEN_ITEM_EDIT) move_cursor(&s->item_ls, s->edit_boot_ac50 ? 4 : 3, &ev);
+        else if (screen == BOOT_SCREEN_DELETE_CONFIRM) move_cursor(&s->delete_confirm_ls, 2, &ev);
         else if (screen == BOOT_SCREEN_ENTRY) move_cursor(&s->entry_ls, s->ncatalog, &ev);
         else if (screen == BOOT_SCREEN_UNSAVED) move_cursor(&s->unsaved_ls, 3, &ev);
 
@@ -271,6 +341,13 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         } else if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B3)) {
             s->screen = BOOT_SCREEN_SETTINGS;
             left = 1;
+        } else if (screen == BOOT_SCREEN_ENTRY && input_down(&ev, IN_B2)) {
+            snprintf(s->text_buf, sizeof s->text_buf, "%s", s->edit_title);
+            ui_text_editor_init(&s->text_ed, s->text_buf, MENU_TITLE, "RENAME ENTRY");
+            s->text_edit_mode = BOOT_TEXT_RENAME;
+            s->text_prev_screen = BOOT_SCREEN_ENTRY;
+            s->screen = BOOT_SCREEN_TEXT_EDIT;
+            left = 1;
         } else if ((screen == BOOT_SCREEN_ENTRY || screen == BOOT_SCREEN_UNSAVED) && input_down(&ev, IN_B3)) {
             queue_save(s);
             left = 1;
@@ -280,10 +357,14 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
                 s->theme_ls.cursor = s->saved_theme;
                 s->screen = BOOT_SCREEN_SETTINGS;
             } else if (screen == BOOT_SCREEN_ENTRY) {
-                s->screen = boot_ui_dirty(s) ? BOOT_SCREEN_UNSAVED : BOOT_SCREEN_EDIT;
+                s->screen = boot_ui_dirty(s) ? BOOT_SCREEN_UNSAVED : (s->edit_new ? BOOT_SCREEN_EDIT : BOOT_SCREEN_ITEM_EDIT);
                 if (s->screen == BOOT_SCREEN_UNSAVED) s->unsaved_ls.cursor = 0;
             } else if (screen == BOOT_SCREEN_UNSAVED) {
                 s->screen = BOOT_SCREEN_ENTRY;
+            } else if (screen == BOOT_SCREEN_ITEM_EDIT) {
+                s->screen = BOOT_SCREEN_EDIT;
+            } else if (screen == BOOT_SCREEN_DELETE_CONFIRM) {
+                s->screen = BOOT_SCREEN_ITEM_EDIT;
             } else if (screen == BOOT_SCREEN_EDIT) {
                 s->screen = BOOT_SCREEN_APPS;
             } else if (screen == BOOT_SCREEN_SETTINGS) {
@@ -337,7 +418,11 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         labels[0] = "Boot Edit";
         labels[1] = "Reload";
         labels[2] = "Settings";
-    } else if (s->screen == BOOT_SCREEN_ENTRY || s->screen == BOOT_SCREEN_UNSAVED) {
+    } else if (s->screen == BOOT_SCREEN_ENTRY) {
+        labels[0] = "Back";
+        labels[1] = "Rename";
+        labels[2] = "Save";
+    } else if (s->screen == BOOT_SCREEN_UNSAVED) {
         labels[0] = "Back";
         labels[1] = "";
         labels[2] = "Save";
@@ -366,9 +451,36 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         else if (s->storage_status == USB_STORAGE_STATUS_ACTIVE) hint = "connected via USB";
         else if (s->storage_status == USB_STORAGE_STATUS_EXITING) hint = "exiting USB storage...";
         else if (s->storage_status == USB_STORAGE_STATUS_ERROR) hint = "storage error";
-    } else if (s->screen == BOOT_SCREEN_EDIT) title = "Boot Edit";
-    else if (s->screen == BOOT_SCREEN_ENTRY) {
-        fit_text(title_buf, sizeof title_buf, s->edit_new ? "New entry" : s->edit_title);
+    } else if (s->screen == BOOT_SCREEN_EDIT) {
+        title = "Boot Edit";
+        if (s->edit_ls.cursor == 0) {
+            hint = "create custom boot with patches";
+        } else {
+            hint = "press to edit or delete";
+        }
+    } else if (s->screen == BOOT_SCREEN_ITEM_EDIT) {
+        fit_text(title_buf, sizeof title_buf, s->edit_title);
+        title = title_buf;
+        if (s->item_ls.cursor == 0 && s->edit_boot_ac50) {
+            hint = "press to choose patches";
+        } else if ((s->item_ls.cursor == 0 && !s->edit_boot_ac50) || (s->item_ls.cursor == 1 && s->edit_boot_ac50)) {
+            hint = "press to change title";
+        } else if ((s->item_ls.cursor == 1 && !s->edit_boot_ac50) || (s->item_ls.cursor == 2 && s->edit_boot_ac50)) {
+            if (s->edit_args[0]) {
+                static char args_hint[64];
+                snprintf(args_hint, sizeof args_hint, "args: %s", s->edit_args);
+                hint = args_hint;
+            } else {
+                hint = "press to add boot arguments";
+            }
+        } else {
+            hint = s->edit_is_app ? "press to delete app from card" : "press to delete entry";
+        }
+    } else if (s->screen == BOOT_SCREEN_DELETE_CONFIRM) {
+        title = s->edit_is_app ? "Delete App?" : "Delete Boot Entry?";
+        hint = "this cannot be undone";
+    } else if (s->screen == BOOT_SCREEN_ENTRY) {
+        fit_text(title_buf, sizeof title_buf, s->edit_new ? (s->edit_title[0] ? s->edit_title : "New entry") : s->edit_title);
         title = title_buf;
         hint = "press to toggle";
     } else if (s->screen == BOOT_SCREEN_UNSAVED) {
@@ -482,7 +594,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         rows[shown++] = "New entry";
         if (s->menu) {
             for (int i = 0; i < s->menu->n && shown < MENU_MAX; i++) {
-                if (!s->menu->items[i].boot_ac50) continue;
+                if (s->menu->items[i].stock) continue;
                 fit_text(text[shown], sizeof text[shown], s->menu->items[i].title);
                 rows[shown] = text[shown];
                 shown++;
@@ -490,6 +602,48 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         }
         int hit = ui_list(u, 8, list_y, 304, list_h, rows, shown, rows_st, widget_in, &s->edit_ls);
         if (hit >= 0) open_entry(s, hit);
+    } else if (s->screen == BOOT_SCREEN_ITEM_EDIT) {
+        const char *rows[4];
+        int count = 0;
+        if (s->edit_boot_ac50) rows[count++] = "Edit patches";
+        rows[count++] = "Rename entry";
+        rows[count++] = "Edit arguments";
+        rows[count++] = s->edit_is_app ? "Delete app completely" : "Delete boot entry";
+        int hit = ui_list(u, 8, list_y, 304, list_h, rows, count, rows_st, widget_in, &s->item_ls);
+        if (hit >= 0) {
+            const char *chosen = rows[hit];
+            if (strcmp(chosen, "Edit patches") == 0) {
+                s->screen = BOOT_SCREEN_ENTRY;
+            } else if (strcmp(chosen, "Rename entry") == 0) {
+                snprintf(s->text_buf, sizeof s->text_buf, "%s", s->edit_title);
+                ui_text_editor_init(&s->text_ed, s->text_buf, MENU_TITLE, "RENAME ENTRY");
+                s->text_edit_mode = BOOT_TEXT_RENAME;
+                s->text_prev_screen = BOOT_SCREEN_ITEM_EDIT;
+                s->screen = BOOT_SCREEN_TEXT_EDIT;
+            } else if (strcmp(chosen, "Edit arguments") == 0) {
+                snprintf(s->text_buf, sizeof s->text_buf, "%s", s->edit_args);
+                ui_text_editor_init(&s->text_ed, s->text_buf, MENU_ARGS, "BOOT ARGUMENTS");
+                s->text_edit_mode = BOOT_TEXT_ARGS;
+                s->text_prev_screen = BOOT_SCREEN_ITEM_EDIT;
+                s->screen = BOOT_SCREEN_TEXT_EDIT;
+            } else {
+                s->delete_confirm_ls.cursor = 0;
+                s->screen = BOOT_SCREEN_DELETE_CONFIRM;
+            }
+        }
+    } else if (s->screen == BOOT_SCREEN_DELETE_CONFIRM) {
+        const char *rows[2];
+        rows[0] = "No, keep it";
+        rows[1] = s->edit_is_app ? "Yes, delete app completely" : "Yes, delete boot entry";
+        int hit = ui_list(u, 8, list_y, 304, list_h, rows, 2, rows_st, widget_in, &s->delete_confirm_ls);
+        if (hit == 0) {
+            s->screen = BOOT_SCREEN_ITEM_EDIT;
+        } else if (hit == 1) {
+            s->action = BOOT_ACT_DELETE_ENTRY;
+            snprintf(s->action_id, sizeof s->action_id, "%s", s->edit_id);
+            s->screen = BOOT_SCREEN_EDIT;
+            s->edit_ls.cursor = 0;
+        }
     } else if (s->screen == BOOT_SCREEN_ENTRY) {
         char text[BOOT_PATCH_MAX][48];
         const char *rows[BOOT_PATCH_MAX];

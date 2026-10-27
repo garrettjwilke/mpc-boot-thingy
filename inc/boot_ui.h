@@ -12,8 +12,11 @@ enum {
     BOOT_SCREEN_THEME,
     BOOT_SCREEN_STORAGE,
     BOOT_SCREEN_EDIT,
+    BOOT_SCREEN_ITEM_EDIT,
+    BOOT_SCREEN_DELETE_CONFIRM,
     BOOT_SCREEN_ENTRY,
-    BOOT_SCREEN_UNSAVED
+    BOOT_SCREEN_UNSAVED,
+    BOOT_SCREEN_TEXT_EDIT
 };
 
 enum {
@@ -24,7 +27,14 @@ enum {
     BOOT_ACT_SAVE_BOOT,
     BOOT_ACT_RELOAD,
     BOOT_ACT_START_USB_STORAGE,
-    BOOT_ACT_STOP_USB_STORAGE
+    BOOT_ACT_STOP_USB_STORAGE,
+    BOOT_ACT_UPDATE_ENTRY,
+    BOOT_ACT_DELETE_ENTRY
+};
+
+enum {
+    BOOT_TEXT_RENAME = 0,
+    BOOT_TEXT_ARGS = 1
 };
 
 struct boot_ui {
@@ -42,6 +52,8 @@ struct boot_ui {
     struct ui_list_state default_ls;
     struct ui_list_state theme_ls;
     struct ui_list_state edit_ls;
+    struct ui_list_state item_ls;
+    struct ui_list_state delete_confirm_ls;
     struct ui_list_state entry_ls;
     struct ui_list_state unsaved_ls;
     int soft_active;
@@ -51,12 +63,20 @@ struct boot_ui {
     int enabled[BOOT_PATCH_MAX];
     int saved_on[BOOT_PATCH_MAX];
     int edit_new;
+    int edit_is_app;
+    int edit_boot_ac50;
     char edit_id[MENU_ID];
     char edit_title[MENU_TITLE];
+    char edit_args[MENU_ARGS];
     char save_id[MENU_ID];
     char save_title[MENU_TITLE];
+    char save_args[MENU_ARGS];
     char save_patches[BOOT_PATCH_MAX][BOOT_PATCH_ID];
     int save_npatches;
+    struct ui_text_editor text_ed;
+    char text_buf[MENU_ARGS];
+    int text_edit_mode;
+    int text_prev_screen;
     char notice[96];
     int storage_status;
     char storage_err[128];

@@ -536,14 +536,24 @@ int main(void) {
     assert(!boot_ui_dirty(&boot));
 
     input_begin(&in, 0);
-    in.encoder = 1;
+    in.encoder = 3; /* Move past New entry (0), Lab firmware (1), Snake (2) to Lab mix (3) */
     boot_frame(&view, &in, &boot);
+    assert(boot.edit_ls.cursor == 3);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
+    assert(strcmp(boot.edit_title, "Lab mix") == 0);
+    assert(strcmp(boot.edit_id, saved_id) == 0);
+    assert(boot.edit_boot_ac50 == 1);
+    assert(!boot.edit_is_app);
+
+    /* On item edit for patched entry, row 0 is Edit patches */
+    assert(boot.item_ls.cursor == 0);
     input_begin(&in, 0);
     in.encoder_press = 1;
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_ENTRY);
-    assert(strcmp(boot.edit_title, "Lab mix") == 0);
-    assert(strcmp(boot.edit_id, saved_id) == 0);
     assert(boot.enabled[0] == 0);
     assert(boot.enabled[1] == 1);
     input_begin(&in, 0);
@@ -557,50 +567,173 @@ int main(void) {
     boot_ui_saved(&boot);
     assert(boot.screen == BOOT_SCREEN_EDIT);
 
+    /* Test selecting an installed app in Boot Edit (row 1: Lab firmware) */
+    boot_ui_init(&boot, &again, 0, 0);
+    boot_ui_set_catalog(&boot, catalog, nc);
+    boot.screen = BOOT_SCREEN_EDIT;
     input_begin(&in, 0);
-    in.encoder = -1;
+    in.encoder = 1;
     boot_frame(&view, &in, &boot);
+    assert(boot.edit_ls.cursor == 1);
     input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
+    assert(strcmp(boot.edit_id, "app:20-lab") == 0);
+    assert(strcmp(boot.edit_title, "Lab firmware") == 0);
+    assert(strcmp(boot.edit_args, "--demo one") == 0);
+    assert(boot.edit_is_app == 1);
+    assert(!boot.edit_boot_ac50);
+
+    /* Row 0 on non-patched item: Rename entry -> enters BOOT_SCREEN_TEXT_EDIT */
+    assert(boot.item_ls.cursor == 0);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_TEXT_EDIT);
+    assert(boot.text_edit_mode == BOOT_TEXT_RENAME);
+    assert(strcmp(boot.text_buf, "Lab firmware") == 0);
+    /* Press B1 Cancel in text editor -> returns to BOOT_SCREEN_ITEM_EDIT without change */
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
+    assert(strcmp(boot.edit_title, "Lab firmware") == 0);
+    assert(boot.action == BOOT_ACT_NONE);
+
+    /* Open Rename entry again and confirm with B3 OK */
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_TEXT_EDIT);
+    snprintf(boot.text_buf, sizeof boot.text_buf, "Lab Pro");
+    boot.text_ed.len = (int)strlen(boot.text_buf);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B3;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
+    assert(boot.action == BOOT_ACT_UPDATE_ENTRY);
+    assert(strcmp(boot.action_id, "app:20-lab") == 0);
+    assert(strcmp(boot.save_title, "Lab Pro") == 0);
+    assert(strcmp(boot.edit_title, "Lab Pro") == 0);
+
+    /* Row 1 on non-patched item: Edit arguments */
+    boot.action = BOOT_ACT_NONE;
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.item_ls.cursor == 1);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_TEXT_EDIT);
+    assert(boot.text_edit_mode == BOOT_TEXT_ARGS);
+    assert(strcmp(boot.text_buf, "--demo one") == 0);
+    snprintf(boot.text_buf, sizeof boot.text_buf, "--fast --stereo");
+    boot.text_ed.len = (int)strlen(boot.text_buf);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B3;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
+    assert(boot.action == BOOT_ACT_UPDATE_ENTRY);
+    assert(strcmp(boot.save_args, "--fast --stereo") == 0);
+
+    /* Row 2: Delete app completely -> opens BOOT_SCREEN_DELETE_CONFIRM */
+    boot.action = BOOT_ACT_NONE;
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.item_ls.cursor == 2);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_DELETE_CONFIRM);
+
+    /* On delete confirm, row 0 is "No, keep it" -> returns to ITEM_EDIT */
+    assert(boot.delete_confirm_ls.cursor == 0);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
+    assert(boot.action == BOOT_ACT_NONE);
+
+    /* Enter delete confirm again and select row 1 "Yes, delete ..." */
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_DELETE_CONFIRM);
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.delete_confirm_ls.cursor == 1);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_DELETE_ENTRY);
+    assert(strcmp(boot.action_id, "app:20-lab") == 0);
+    assert(boot.screen == BOOT_SCREEN_EDIT);
+
+    /* Test B2 Rename button in BOOT_SCREEN_ENTRY */
+    input_begin(&in, 0);
+    boot.edit_ls.cursor = 0; /* New entry */
     in.encoder_press = 1;
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_ENTRY);
     assert(boot.edit_new);
     input_begin(&in, 0);
-    in.encoder_press = 1;
+    in.down = 1u << IN_B2; /* Rename soft key */
     boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_TEXT_EDIT);
+    assert(boot.text_prev_screen == BOOT_SCREEN_ENTRY);
+    snprintf(boot.text_buf, sizeof boot.text_buf, "My Custom Boot");
+    boot.text_ed.len = (int)strlen(boot.text_buf);
     input_begin(&in, 0);
-    in.down = 1u << IN_B1;
+    in.down = 1u << IN_B3; /* OK */
     boot_frame(&view, &in, &boot);
-    assert(boot.screen == BOOT_SCREEN_UNSAVED);
-    input_begin(&in, 0);
-    in.encoder_press = 1;
-    boot_frame(&view, &in, &boot);
-    assert(boot.action == BOOT_ACT_SAVE_BOOT);
-    assert(boot.save_id[0] == 0);
-    assert(boot.save_npatches == 1);
-    assert(strcmp(boot.save_patches[0], "extra-pads.list") == 0);
-    input_begin(&in, 0);
-    in.down = 1u << IN_B3;
-    boot_frame(&view, &in, &boot);
-    assert(boot.screen == BOOT_SCREEN_UNSAVED);
-    assert(boot.action == BOOT_ACT_SAVE_BOOT);
-    boot_ui_notice(&boot, "Could not save");
-    input_begin(&in, 0);
-    boot_frame(&view, &in, &boot);
-    assert(strcmp(boot.notice, "Could not save") == 0);
-    input_begin(&in, 0);
-    in.down = 1u << IN_B1;
-    boot_frame(&view, &in, &boot);
-    assert(boot.notice[0] == 0);
     assert(boot.screen == BOOT_SCREEN_ENTRY);
+    assert(strcmp(boot.edit_title, "My Custom Boot") == 0);
 
-    assert(boot_edit_remove(dir, "entry:30-snake.entry") == 0);
+    /* Backend tests for boot_entry_update and boot_entry_delete */
+    assert(boot_entry_delete(dir, "stock") != 0);
+    assert(boot_entry_update(dir, "stock", "Foo", "Bar") != 0);
+
+    /* Update regular entry */
+    assert(boot_entry_update(dir, "entry:30-snake.entry", "Snake DX", "--lives 5") == 0);
+    struct menu updated;
+    assert(menu_load(&updated, dir) == 5);
+    int snk = -1;
+    for (int i = 0; i < updated.n; i++) {
+        if (strcmp(updated.items[i].id, "entry:30-snake.entry") == 0) snk = i;
+    }
+    assert(snk > 0);
+    assert(strcmp(updated.items[snk].title, "Snake DX") == 0);
+    assert(strcmp(updated.items[snk].args, "--lives 5") == 0);
+
+    /* Delete regular entry */
+    snprintf(path, sizeof path, "%s/autorun/boot-menu/30-snake.entry", dir);
+    assert(access(path, F_OK) == 0);
+    assert(boot_entry_delete(dir, "entry:30-snake.entry") == 0);
+    assert(access(path, F_OK) != 0);
+    assert(menu_load(&updated, dir) == 4);
+
+    /* Delete app folder completely */
+    snprintf(path, sizeof path, "%s/apps/20-lab", dir);
+    assert(access(path, F_OK) == 0);
+    /* Set default to app:20-lab first to verify default reset to stock */
+    assert(menu_set_default(dir, "app:20-lab") == 0);
+    assert(menu_default_index(&updated, dir) == 1);
+    assert(boot_entry_delete(dir, "app:20-lab") == 0);
+    assert(access(path, F_OK) != 0);
+    assert(menu_load(&updated, dir) == 3);
+    assert(menu_default_index(&updated, dir) == 0); /* Reset to stock */
+
+    /* Delete patched entry */
     snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1", dir);
     assert(access(path, F_OK) == 0);
-    assert(boot_edit_remove(dir, saved_id) == 0);
+    assert(boot_entry_delete(dir, saved_id) == 0);
     assert(access(path, F_OK) != 0);
     snprintf(path, sizeof path, "%s/autorun/boot-menu/boot-1.entry", dir);
-    assert(access(path, F_OK) == 0);
+    assert(access(path, F_OK) != 0);
 
     puts("selftest ok");
     return 0;
