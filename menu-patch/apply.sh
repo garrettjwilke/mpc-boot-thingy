@@ -101,4 +101,6 @@ fi
 chmod 755 "$WRAP"
 mount --bind "$WRAP" "$LAUNCH" || die "could not mount the patch loader"
 printf '%s\n' "$PATCH_DIR" > "$STAMP" || die "could not record the patch directory"
+printf '%s\n' "$HERE" > /run/mpc-boot-autorun 2>/dev/null || true
 log "patch loader mounted"
+
