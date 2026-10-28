@@ -724,6 +724,10 @@ int main(int argc, char **argv) {
     struct input_dev dev = {0};
     char boot_now_id[MENU_ID] = {0};
     int has_boot_now = check_boot_now_target(boot_now_id, sizeof boot_now_id);
+    if (has_boot_now && strcmp(boot_now_id, MENU_BOOT_THINGY_ID) == 0) {
+        has_boot_now = 0;
+        open_menu = 1;
+    }
     int held = 1;
     if (!open_menu && !has_boot_now) {
         if (draw_prompt(&scr, back, front, &midi, card, theme))
@@ -824,6 +828,15 @@ int main(int argc, char **argv) {
             g_boot_now_requested = 0;
             char b_id[MENU_ID] = {0};
             if (check_boot_now_target(b_id, sizeof b_id)) {
+                if (strcmp(b_id, MENU_BOOT_THINGY_ID) == 0) {
+                    ui.screen = BOOT_SCREEN_APPS;
+                    ui.action = BOOT_ACT_NONE;
+                    ui.notice[0] = 0;
+                    input_begin(&quiet, &dev);
+                    started = mono_ms();
+                    wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+                    continue;
+                }
                 menu_load(&menu, card);
                 int sel = -1;
                 for (int i = 0; i < menu.n; i++) {

@@ -10,6 +10,10 @@
 #define MENU_ID 288
 #define MENU_PATCHES 768
 
+/* The web page sends this to /api/boot-now to open the menu.
+   It is not a menu row and cannot be saved as the default. */
+#define MENU_BOOT_THINGY_ID "boot-thingy"
+
 struct menu_entry {
     char title[MENU_TITLE];
     char run[MENU_RUN];
