@@ -1242,13 +1242,15 @@ static void handle_boot_now(int fd, struct io *io, int has_len, size_t content_l
         send_err(fd, 400, "Bad Request", "missing app id");
         return;
     }
-    menu_load(&menu, g_card);
-    for (int i = 0; i < menu.n; i++) {
-        if (strcmp(menu.items[i].id, id) == 0) found = 1;
-    }
-    if (!found) {
-        send_err(fd, 400, "Bad Request", "that id is not in the menu");
-        return;
+    if (strcmp(id, MENU_BOOT_THINGY_ID) != 0) {
+        menu_load(&menu, g_card);
+        for (int i = 0; i < menu.n; i++) {
+            if (strcmp(menu.items[i].id, id) == 0) found = 1;
+        }
+        if (!found) {
+            send_err(fd, 400, "Bad Request", "that id is not in the menu");
+            return;
+        }
     }
     if (trigger_boot_now(id) != 0) {
         send_err(fd, 500, "Internal Server Error", "could not trigger boot");

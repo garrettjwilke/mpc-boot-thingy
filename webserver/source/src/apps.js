@@ -1,11 +1,15 @@
 import { bootNow, postDefault, removeApp } from "./api.js";
 
+/* Same value as MENU_BOOT_THINGY_ID in inc/menu.h. The device menu never lists it. */
+const BOOT_THINGY_ID = "boot-thingy";
+
 export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
   const appsEl = document.getElementById("apps");
   const hdrDefault = document.getElementById("hdr-default");
   appsEl.textContent = "";
   hdrDefault.textContent = "Default: " + (defaultId || "stock");
   hdrDefault.className = "badge ok";
+  appsEl.appendChild(bootThingyRow(toast));
   for (const app of apps) {
     const row = document.createElement("div");
     row.className = "app";
@@ -69,6 +73,36 @@ export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
     row.appendChild(actions);
     appsEl.appendChild(row);
   }
+}
+
+function bootThingyRow(toast) {
+  const row = document.createElement("div");
+  row.className = "app";
+
+  const main = document.createElement("div");
+  main.className = "app-main";
+
+  const bootBtn = document.createElement("button");
+  bootBtn.className = "btn sm boot-btn";
+  bootBtn.type = "button";
+  bootBtn.textContent = "Boot now";
+  const app = { id: BOOT_THINGY_ID, title: "Boot thingy" };
+  bootBtn.addEventListener("click", () => onBootNow(app, toast, bootBtn));
+  main.appendChild(bootBtn);
+
+  const info = document.createElement("div");
+  info.className = "app-info";
+  const title = document.createElement("strong");
+  title.textContent = app.title;
+  info.appendChild(title);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = "Opens the menu on the MPC";
+  info.appendChild(meta);
+  main.appendChild(info);
+
+  row.appendChild(main);
+  return row;
 }
 
 async function onBootNow(app, toast, btn) {

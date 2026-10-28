@@ -209,7 +209,7 @@ async function handleMock(req, res, url, state) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed.id === "string") id = parsed.id;
     } catch (e) {}
-    if (!state.apps.some((app) => app.id === id)) {
+    if (id !== "boot-thingy" && !state.apps.some((app) => app.id === id)) {
       sendJson(res, 400, { error: "that id is not in the menu" });
       return;
     }
