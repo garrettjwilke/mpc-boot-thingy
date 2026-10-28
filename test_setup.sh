@@ -218,6 +218,7 @@ fi
 test -s "$empty/autorun/system/ssh/ssh_host_ed25519_key"
 test -s "$empty/autorun/system/ssh/ssh_host_ed25519_key.pub"
 cmp -s "$ROOT/ssh/ssh_host_ed25519_key" "$empty/autorun/system/ssh/ssh_host_ed25519_key" || fail "fresh install did not use the saved server identity"
+cmp -s "$ROOT/splash-screen.png" "$empty/autorun/splash-screen.png" || fail "fresh install did not copy the splash"
 hostkey=$(shasum -a 256 "$empty/autorun/system/ssh/ssh_host_ed25519_key" | awk '{print $1}')
 got=$(digest_of "$empty/autorun")
 have=$(cat "$empty/autorun/autorun.check")
@@ -232,6 +233,7 @@ printf '\nalias ll="ls -l"\n' >> "$empty/autorun/os_tools/.bashrc"
 mkdir -p "$empty/os_tools" "$empty/apps"
 printf 'leave\n' > "$empty/os_tools/mine"
 printf 'leave\n' > "$empty/apps/mine"
+printf 'custom-splash\n' > "$empty/autorun/splash-screen.png"
 ./setup.sh --SD "$empty" >/tmp/mpc-boot-out
 grep -q 'Updating it' /tmp/mpc-boot-out || fail "reinstall should update without asking"
 test ! -e "$empty/autorun/os_tools/stray" || fail "reinstall left a file in os_tools"
@@ -244,6 +246,7 @@ test "$(cat "$empty/apps/mine")" = leave || fail "reinstall changed a card-root 
 grep -q 'title=Snake' "$empty/autorun/boot-menu/30-snake.entry" || fail "reinstall removed a menu entry"
 grep -q 'title Wide' "$empty/autorun/patch-catalog/wide.list" || fail "reinstall removed a catalog patch"
 test "$(shasum -a 256 "$empty/autorun/system/ssh/ssh_host_ed25519_key" | awk '{print $1}')" = "$hostkey" || fail "reinstall replaced the server identity"
+test "$(cat "$empty/autorun/splash-screen.png")" = custom-splash || fail "reinstall replaced the splash"
 if find "$empty" -maxdepth 1 -type d -name 'autorun-backup-*' | grep -q .; then
   fail "reinstall of mpc-boot-thingy created a backup"
 fi
@@ -372,6 +375,10 @@ case "$last" in
     if [ "${FAKE_SSH_FAIL:-0}" = 1 ]; then exit 1; fi
     printf '%s\n' '/media/Lab Card'
     ;;
+  *splash-screen.png*)
+    IFS= read -r dest
+    test -s "$FAKE_ROOT$dest/autorun/splash-screen.png"
+    ;;
   *'test -s'*)
     IFS= read -r dest
     test -s "$FAKE_ROOT$dest/autorun/system/ssh/ssh_host_ed25519_key"
@@ -427,6 +434,8 @@ if grep -q 'Back up the existing' /tmp/mpc-boot-out; then fail "ssh install aske
 test ! -d "$remote"/autorun-backup-* 
 grep -q 'title=Snake' "$card/autorun/boot-menu/30-snake.entry" || fail "ssh install removed a menu entry"
 test "$(cat "$card/autorun/system/ssh/ssh_host_ed25519_key")" = keep-key || fail "ssh install replaced the server identity"
+cmp -s "$ROOT/splash-screen.png" "$card/autorun/splash-screen.png" || fail "ssh install did not copy the splash"
+printf 'custom-splash\n' > "$card/autorun/splash-screen.png"
 test -x "$card/autorun/system/mpc-boot-thingy" || test -f "$card/autorun/system/mpc-boot-thingy"
 grep -q 'systemd-run --unit=mpc-boot-ssh' "$card/autorun/autorun.sh"
 grep -q 'systemd-run --unit=mpc-boot-web' "$card/autorun/autorun.sh"
@@ -445,6 +454,7 @@ test -x "$card/autorun/os_tools/bin/busybox-full"
 test -x "$card/autorun/os_tools/bin/bash"
 cmp "$devfix/toolkit/marker" "$card/autorun/os_tools/toolkit/marker"
 grep -q 'alias kept=yes' "$card/autorun/os_tools/.bashrc" || fail "ssh --tools replaced .bashrc"
+test "$(cat "$card/autorun/splash-screen.png")" = custom-splash || fail "ssh update replaced the splash"
 test ! -e "$card/bin"
 test ! -e "$card/toolkit"
 test "$(cat "$card/os_tools/mine")" = card-root || fail "ssh --tools changed a card-root os_tools folder"

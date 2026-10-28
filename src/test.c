@@ -2,10 +2,13 @@
 #include "boot_ui.h"
 #include "input.h"
 #include "menu.h"
+#include "png.h"
 #include "theme.h"
+#include "ui.h"
 #include "usb_storage.h"
 
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -737,6 +740,30 @@ int main(void) {
     assert(access(path, F_OK) != 0);
     snprintf(path, sizeof path, "%s/autorun/boot-menu/boot-1.entry", dir);
     assert(access(path, F_OK) != 0);
+
+    assert(png_load_screen("splash-screen.png", px) == 0);
+    uint64_t sum = 0;
+    for (int i = 0; i < UI_W * UI_H; i++) sum = sum * 131 + px[i];
+    assert(sum == 4867112348204652761ull);
+    assert(px[0] == 0);
+    assert(px[120 * UI_W + 160] == 0x00bcb8aa);
+    assert(png_load_screen("no-such-splash-screen.png", px) != 0);
+    static const unsigned char tiny_png[] = {
+        137, 80,  78,  71,  13,  10,  26,  10,  0,   0,   0,   13,  73,  72,  68,  82,  0,   0,   0,   1,   0,   0,   0,
+        1,   8,   2,   0,   0,   0,   144, 119, 83,  222, 0,   0,   0,   12,  73,  68,  65,  84,  120, 156, 99,  248, 207,
+        192, 0,   0,   3,   1,   1,   0,   201, 254, 146, 239, 0,   0,   0,   0,   73,  69,  78,  68,  174, 66,  96,  130};
+    char tiny_path[64];
+    snprintf(tiny_path, sizeof tiny_path, "/tmp/mpc-png-tiny-%d.png", (int)getpid());
+    FILE *tf = fopen(tiny_path, "wb");
+    assert(tf);
+    assert(fwrite(tiny_png, 1, sizeof tiny_png, tf) == sizeof tiny_png);
+    fclose(tf);
+    assert(png_load_screen(tiny_path, px) != 0);
+    unlink(tiny_path);
+    snprintf(tiny_path, sizeof tiny_path, "/tmp/mpc-png-text-%d.png", (int)getpid());
+    write_file(tiny_path, "not a png");
+    assert(png_load_screen(tiny_path, px) != 0);
+    unlink(tiny_path);
 
     puts("selftest ok");
     return 0;

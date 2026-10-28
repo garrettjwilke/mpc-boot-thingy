@@ -2,9 +2,9 @@
 WARN = -Wall -Wextra
 UI = mpc-ui-toolkit/src
 INC = -Iinc -I$(UI)
-DEV_SRC = src/main.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/usb_storage.c \
+DEV_SRC = src/main.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/usb_storage.c src/png.c \
 	$(UI)/ui.c $(UI)/widgets.c $(UI)/input.c $(UI)/screen.c $(UI)/surface.c
-HOST_SRC = src/test.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/usb_storage.c $(UI)/ui.c $(UI)/widgets.c $(UI)/input.c
+HOST_SRC = src/test.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/usb_storage.c src/png.c $(UI)/ui.c $(UI)/widgets.c $(UI)/input.c
 
 .PHONY: all test clean web-host
 
