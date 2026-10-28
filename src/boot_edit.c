@@ -36,7 +36,7 @@ static const char LAUNCH_BODY[] =
     "STOCK=\"${MPC_STOCK:-/usr/bin/MPC Sample}\"\n"
     "LAUNCH=\"${MPC_LAUNCH:-/usr/bin/launch-ac50}\"\n"
     "PATCH_DIR=\"$HERE/patches\"\n"
-    "LOADER_SRC=\"$HERE/../../loader.so\"\n"
+    "LOADER_SRC=\"$HERE/../../system/loader.so\"\n"
     "LOADER=/run/mpc-patch-loader.so\n"
     "REAL=/run/launch-ac50.real\n"
     "WRAP=/run/launch-ac50.wrap\n"
@@ -386,7 +386,7 @@ static int fill_patches(const char *card, const char *slug, const char *const *p
         if (join2(dst, sizeof dst, patch_dir, patch_ids[i]) != 0) return save_text(-1, "path too long");
         if (copy_file(src, dst) != 0) return save_fail(-1, "copy patch");
     }
-    if (join2(menu, sizeof menu, card, "autorun/patches/boot-menu.list") == 0) {
+    if (join2(menu, sizeof menu, card, "autorun/system/patches/boot-menu.list") == 0) {
         struct stat st;
         if (lstat(menu, &st) == 0 && S_ISREG(st.st_mode)) {
             if (join2(dst, sizeof dst, patch_dir, "boot-menu.list") != 0) return save_text(-1, "path too long");
@@ -568,7 +568,7 @@ int boot_entry_update(const char *card, const char *id, const char *new_title, c
     if (strncmp(id, "app:", 4) == 0) {
         const char *folder = id + 4;
         if (!safe_component(folder)) return -1;
-        if (snprintf(path, sizeof path, "%s/apps/%s/boot.entry", card, folder) >= (int)sizeof path) return -1;
+        if (snprintf(path, sizeof path, "%s/autorun/apps/%s/boot.entry", card, folder) >= (int)sizeof path) return -1;
     } else if (strncmp(id, "entry:", 6) == 0) {
         const char *file = id + 6;
         if (!safe_component(file) || !ends_with(file, ".entry")) return -1;
@@ -618,7 +618,7 @@ int boot_entry_delete(const char *card, const char *id) {
         const char *name = id + 4;
         if (!safe_component(name)) return -1;
         char app_dir[512];
-        if (snprintf(app_dir, sizeof app_dir, "%s/apps/%s", card, name) >= (int)sizeof app_dir) return -1;
+        if (snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/%s", card, name) >= (int)sizeof app_dir) return -1;
         struct stat st;
         if (lstat(app_dir, &st) != 0 || !S_ISDIR(st.st_mode)) return -1;
         if (rm_tree(app_dir, 0) != 0) return -1;
@@ -638,7 +638,7 @@ int boot_entry_delete(const char *card, const char *id) {
     }
 
     char def_path[512], line[MENU_ID];
-    if (snprintf(def_path, sizeof def_path, "%s/autorun/boot-default", card) < (int)sizeof def_path) {
+    if (snprintf(def_path, sizeof def_path, "%s/autorun/system/boot-default", card) < (int)sizeof def_path) {
         FILE *df = fopen(def_path, "r");
         if (df) {
             int is_def = 0;

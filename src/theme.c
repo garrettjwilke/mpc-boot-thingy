@@ -41,7 +41,7 @@ static int theme_index(const char *id) {
 int theme_load(const char *card) {
     if (!card || !card[0]) return 0;
     char path[512];
-    int wr = snprintf(path, sizeof path, "%s/autorun/boot-theme", card);
+    int wr = snprintf(path, sizeof path, "%s/autorun/system/boot-theme", card);
     if (wr < 0 || (size_t)wr >= sizeof path) return 0;
     FILE *f = fopen(path, "r");
     if (!f) return 0;
@@ -75,8 +75,8 @@ static int write_all(int fd, const char *buf, size_t n) {
 int theme_save(const char *card, int index) {
     char path[512], tmp[512], line[64];
     if (!card || !card[0] || index < 0 || index >= theme_count()) return -1;
-    int pw = snprintf(path, sizeof path, "%s/autorun/boot-theme", card);
-    int tw = snprintf(tmp, sizeof tmp, "%s/autorun/boot-theme.tmp", card);
+    int pw = snprintf(path, sizeof path, "%s/autorun/system/boot-theme", card);
+    int tw = snprintf(tmp, sizeof tmp, "%s/autorun/system/boot-theme.tmp", card);
     if (pw < 0 || (size_t)pw >= sizeof path || tw < 0 || (size_t)tw >= sizeof tmp) return -1;
     int n = snprintf(line, sizeof line, "%s\n", themes[index].id);
     if (n < 0 || (size_t)n >= sizeof line) return -1;

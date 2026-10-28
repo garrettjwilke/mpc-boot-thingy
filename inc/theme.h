@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-/* One line in card/autorun/boot-theme. A missing or unknown file is Amber. */
+/* One line in card/autorun/system/boot-theme. A missing or unknown file is Amber. */
 struct boot_theme {
     const char *id;
     const char *name;

@@ -28,7 +28,7 @@ struct menu {
 
 /* Stock is always first. Then, sorted by name:
    every .entry file in card/autorun/boot-menu (run is relative to the card root) and
-   card/apps/<name>/boot.entry (run is relative to that folder).
+   card/autorun/apps/<name>/boot.entry (run is relative to that folder).
    A file without both title and run is skipped. A missing card yields Stock only.
    Each row gets an id: "stock", "app:<folder>", or "entry:<file>". */
 int menu_load(struct menu *m, const char *card);
@@ -36,11 +36,11 @@ int menu_load(struct menu *m, const char *card);
 /* Parse a single .entry file into e. Returns 0 on success, -1 on failure. */
 int menu_parse_entry(const char *path, struct menu_entry *e);
 
-/* Index of the id saved in card/autorun/boot-default.
+/* Index of the id saved in card/autorun/system/boot-default.
    A missing file, a blank line, "stock", or an unknown id returns 0. */
 int menu_default_index(const struct menu *m, const char *card);
 
-/* Writes id and a newline to card/autorun/boot-default. 0 on success. */
+/* Writes id and a newline to card/autorun/system/boot-default. 0 on success. */
 int menu_set_default(const char *card, const char *id);
 
 /* Split args on spaces into out[0..). Copies into buf, which must stay alive.

@@ -736,8 +736,8 @@ static int serve_web(int client, const char *url_path) {
     char root[PATH_MAX], full[PATH_MAX], root_real[PATH_MAX], resolved[PATH_MAX];
     struct stat st;
     if (web_rel(url_path, rel, sizeof rel) != 0) return -1;
-    if (snprintf(root, sizeof root, "%s/web", g_autorun) >= (int)sizeof root ||
-        snprintf(full, sizeof full, "%s/web/%s", g_autorun, rel) >= (int)sizeof full) {
+    if (snprintf(root, sizeof root, "%s/system/web", g_autorun) >= (int)sizeof root ||
+        snprintf(full, sizeof full, "%s/system/web/%s", g_autorun, rel) >= (int)sizeof full) {
         return -1;
     }
     if (!realpath(root, root_real)) return -1;
@@ -949,11 +949,11 @@ static void handle_upload(int fd, struct io *io, int has_len, size_t content_len
         send_err(fd, 400, "Bad Request", "executable name is not allowed");
         return;
     }
-    if (snprintf(apps, sizeof apps, "%s/apps", g_card) >= (int)sizeof apps ||
-        snprintf(dir, sizeof dir, "%s/apps/%s", g_card, slug) >= (int)sizeof dir ||
-        snprintf(part, sizeof part, "%s/apps/%s/.upload", g_card, slug) >= (int)sizeof part ||
-        snprintf(dest, sizeof dest, "%s/apps/%s/%s", g_card, slug, name) >= (int)sizeof dest ||
-        snprintf(entry, sizeof entry, "%s/apps/%s/boot.entry", g_card, slug) >= (int)sizeof entry) {
+    if (snprintf(apps, sizeof apps, "%s/autorun/apps", g_card) >= (int)sizeof apps ||
+        snprintf(dir, sizeof dir, "%s/autorun/apps/%s", g_card, slug) >= (int)sizeof dir ||
+        snprintf(part, sizeof part, "%s/autorun/apps/%s/.upload", g_card, slug) >= (int)sizeof part ||
+        snprintf(dest, sizeof dest, "%s/autorun/apps/%s/%s", g_card, slug, name) >= (int)sizeof dest ||
+        snprintf(entry, sizeof entry, "%s/autorun/apps/%s/boot.entry", g_card, slug) >= (int)sizeof entry) {
         send_err(fd, 400, "Bad Request", "path is too long");
         return;
     }
@@ -1049,8 +1049,8 @@ static void handle_delete(int fd, const char *query) {
     if (strncmp(id, "app:", 4) == 0) {
         app = 1;
         name = id + 4;
-        if (snprintf(root, sizeof root, "%s/apps", g_card) >= (int)sizeof root ||
-            snprintf(full, sizeof full, "%s/apps/%s", g_card, name) >= (int)sizeof full) {
+        if (snprintf(root, sizeof root, "%s/autorun/apps", g_card) >= (int)sizeof root ||
+            snprintf(full, sizeof full, "%s/autorun/apps/%s", g_card, name) >= (int)sizeof full) {
             send_err(fd, 400, "Bad Request", "path is too long");
             return;
         }
@@ -1212,7 +1212,7 @@ static int trigger_boot_now(const char *id) {
             _exit(0);
         }
         char run_bin[512];
-        snprintf(run_bin, sizeof run_bin, "%s/mpc-boot-thingy", g_autorun);
+        snprintf(run_bin, sizeof run_bin, "%s/system/mpc-boot-thingy", g_autorun);
         if (access("/run/mpc-boot-thingy", X_OK) == 0) {
             execlp("systemd-run", "systemd-run", "--unit=mpc-boot-thingy", "--collect", "--no-block", "/run/mpc-boot-thingy", g_autorun, (char *)NULL);
             execlp("/run/mpc-boot-thingy", "/run/mpc-boot-thingy", g_autorun, (char *)NULL);
@@ -1443,7 +1443,7 @@ static int start_shell(int *ptm_out, pid_t *pid_out) {
         setenv("HOME", "/root", 1);
         setenv("USER", "root", 1);
         setenv("LOGNAME", "root", 1);
-        sn = snprintf(shell, sizeof shell, "%s/os_tools/bin/bash", g_card);
+        sn = snprintf(shell, sizeof shell, "%s/autorun/os_tools/bin/bash", g_card);
         if (sn > 0 && (size_t)sn < sizeof shell && access(shell, X_OK) == 0) {
             setenv("SHELL", shell, 1);
             execl(shell, shell, "-l", "-i", (char *)NULL);
