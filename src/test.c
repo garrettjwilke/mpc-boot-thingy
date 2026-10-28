@@ -61,25 +61,25 @@ int main(void) {
     snprintf(path, sizeof path, "%s/autorun/boot-menu/05-skip.entry", dir);
     write_file(path, "run=apps/only\n");
     snprintf(path, sizeof path, "%s/autorun/boot-menu/30-snake.entry", dir);
-    write_file(path, "\n# a game\ntitle=Snake\nrun=apps/snake\nargs=\n");
+    write_file(path, "\n# a game\ntitle=Snake\nrun=autorun/apps/snake\nargs=\n");
 
-    snprintf(path, sizeof path, "%s/apps/20-lab", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab", dir);
     mkdir_p(path);
-    snprintf(path, sizeof path, "%s/apps/20-lab/boot.entry", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab/boot.entry", dir);
     write_file(path, "title=Lab firmware\nrun=mpcfw\nargs=--demo one\n");
-    snprintf(path, sizeof path, "%s/apps/20-lab/notes.txt", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab/notes.txt", dir);
     write_file(path, "title=Not an entry\nrun=nope\n");
-    snprintf(path, sizeof path, "%s/apps/loose-binary", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/loose-binary", dir);
     mkdir_p(path);
-    snprintf(path, sizeof path, "%s/apps/loose-binary/mpcfw", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/loose-binary/mpcfw", dir);
     write_file(path, "no boot.entry here\n");
-    snprintf(path, sizeof path, "%s/apps/90-skip", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/90-skip", dir);
     mkdir_p(path);
-    snprintf(path, sizeof path, "%s/apps/90-skip/boot.entry", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/90-skip/boot.entry", dir);
     write_file(path, "title=Missing run\n");
 
     char lab[512];
-    snprintf(lab, sizeof lab, "%s/apps/20-lab", dir);
+    snprintf(lab, sizeof lab, "%s/autorun/apps/20-lab", dir);
 
     struct menu m;
     assert(menu_load(&m, dir) == 3);
@@ -92,7 +92,7 @@ int main(void) {
     assert(strcmp(m.items[1].args, "--demo one") == 0);
     assert(!m.items[1].stock);
     assert(strcmp(m.items[2].title, "Snake") == 0);
-    assert(strcmp(m.items[2].run, "apps/snake") == 0);
+    assert(strcmp(m.items[2].run, "autorun/apps/snake") == 0);
     assert(strcmp(m.items[2].base, dir) == 0);
     assert(strcmp(m.items[0].id, "stock") == 0);
     assert(strcmp(m.items[1].id, "app:20-lab") == 0);
@@ -100,7 +100,9 @@ int main(void) {
     assert(menu_default_index(&m, dir) == 0);
     assert(menu_default_index(NULL, dir) == 0);
 
-    snprintf(path, sizeof path, "%s/autorun/boot-default", dir);
+    snprintf(path, sizeof path, "%s/autorun/system", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/system/boot-default", dir);
     write_file(path, "app:20-lab\n");
     assert(menu_default_index(&m, dir) == 1);
     write_file(path, "  entry:30-snake.entry\r\n");
@@ -145,7 +147,7 @@ int main(void) {
     assert(theme_save(dir, 2) == 0);
     assert(theme_load(dir) == 2);
     assert(strcmp(theme_at(theme_load(dir))->name, "Green") == 0);
-    snprintf(path, sizeof path, "%s/autorun/boot-theme", dir);
+    snprintf(path, sizeof path, "%s/autorun/system/boot-theme", dir);
     write_file(path, "nope\n");
     assert(theme_load(dir) == 0);
     write_file(path, "  blue\n");
@@ -399,9 +401,9 @@ int main(void) {
     write_file(path, "pads\n");
     snprintf(path, sizeof path, "%s/autorun/patch-catalog/note.txt", dir);
     write_file(path, "nope\n");
-    snprintf(path, sizeof path, "%s/autorun/patches", dir);
+    snprintf(path, sizeof path, "%s/autorun/system/patches", dir);
     mkdir_p(path);
-    snprintf(path, sizeof path, "%s/autorun/patches/boot-menu.list", dir);
+    snprintf(path, sizeof path, "%s/autorun/system/patches/boot-menu.list", dir);
     write_file(path, "menu-bytes\n");
 
     struct boot_patch catalog[8];
@@ -448,6 +450,7 @@ int main(void) {
     assert(strstr(body, "could not replace the patch loader"));
     assert(strstr(body, "wide-screen.list"));
     assert(strstr(body, "extra-pads.list"));
+    assert(strstr(body, "../../system/loader.so"));
     free(body);
     {
         struct stat st;
@@ -717,7 +720,7 @@ int main(void) {
     assert(menu_load(&updated, dir) == 4);
 
     /* Delete app folder completely */
-    snprintf(path, sizeof path, "%s/apps/20-lab", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab", dir);
     assert(access(path, F_OK) == 0);
     /* Set default to app:20-lab first to verify default reset to stock */
     assert(menu_set_default(dir, "app:20-lab") == 0);

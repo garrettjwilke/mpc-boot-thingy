@@ -136,88 +136,89 @@ mkdir "$empty"
 ./setup.sh --SD "$empty" >/tmp/mpc-boot-out
 grep -q 'os_tools/bin' /tmp/mpc-boot-out || fail "install did not name os_tools"
 if grep -q 'Dev tools are in' /tmp/mpc-boot-out; then fail "default install announced dev tools"; fi
-test -x "$empty/os_tools/bin/bash"
-cmp "$fix/bin/bash" "$empty/os_tools/bin/bash"
-cmp "$fix/toolkit/marker" "$empty/os_tools/toolkit/marker"
-test ! -e "$empty/os_tools/bin/vim"
-test ! -e "$empty/os_tools/bin/busybox-full"
-test -f "$empty/os_tools/.bashrc"
-grep -q 'BASH_SOURCE' "$empty/os_tools/.bashrc"
-grep -q 'PATH' "$empty/os_tools/.bashrc"
-grep -q '.bashrc' "$empty/os_tools/.bash_profile"
+test -x "$empty/autorun/os_tools/bin/bash"
+cmp "$fix/bin/bash" "$empty/autorun/os_tools/bin/bash"
+cmp "$fix/toolkit/marker" "$empty/autorun/os_tools/toolkit/marker"
+test ! -e "$empty/autorun/os_tools/bin/vim"
+test ! -e "$empty/autorun/os_tools/bin/busybox-full"
+test -f "$empty/autorun/os_tools/.bashrc"
+grep -q 'BASH_SOURCE' "$empty/autorun/os_tools/.bashrc"
+grep -q 'PATH' "$empty/autorun/os_tools/.bashrc"
+grep -q '.bashrc' "$empty/autorun/os_tools/.bash_profile"
 test ! -e "$empty/bin"
 test ! -e "$empty/toolkit"
 test ! -d "$empty/apps"
-test -f "$empty/autorun/mpc-boot-thingy.mark"
+test ! -d "$empty/os_tools"
+test -f "$empty/autorun/system/mpc-boot-thingy.mark"
 test -d "$empty/autorun/boot-menu"
 test -d "$empty/autorun/patch-catalog"
 test -d "$empty/autorun/boot-edits"
-test -x "$empty/autorun/mpc-boot-thingy"
+test -x "$empty/autorun/system/mpc-boot-thingy"
 grep -q 'systemd-run --unit=mpc-boot-thingy' "$empty/autorun/autorun.sh"
 grep -q 'systemd-run --unit=mpc-boot-web' "$empty/autorun/autorun.sh"
 grep -q 'systemd-run --unit=mpc-boot-ssh' "$empty/autorun/autorun.sh"
 grep -q 'remount,exec' "$empty/autorun/autorun.sh"
 if grep -q 'boot-menu-apply' "$empty/autorun/autorun.sh"; then fail "autorun applies the stock patch"; fi
 if grep -q 'stock-os-patched' "$empty/autorun/autorun.sh"; then fail "autorun mounts the stock patch"; fi
-test -x "$empty/autorun/boot-menu-apply.sh"
-test -s "$empty/autorun/loader.so"
-test -s "$empty/autorun/patches/boot-menu.list"
+test -x "$empty/autorun/system/boot-menu-apply.sh"
+test -s "$empty/autorun/system/loader.so"
+test -s "$empty/autorun/system/patches/boot-menu.list"
 test -s "$empty/autorun/patch-catalog/shift-reboot.list"
 head -n 1 "$empty/autorun/patch-catalog/shift-reboot.list" | grep -qx '# title Reboot button'
-if [ -e "$empty/autorun/patches/shift-reboot.list" ]; then fail "shift reboot is always on"; fi
+if [ -e "$empty/autorun/system/patches/shift-reboot.list" ]; then fail "shift reboot is always on"; fi
 if [ -e "$empty/autorun/poke" ]; then fail "poke is still installed"; fi
 if [ -e "$empty/autorun/patches.list" ]; then fail "patch list is still a single file"; fi
-if grep -q 'menu-os' "$empty/autorun/boot-menu-apply.sh"; then fail "apply still builds a binary copy"; fi
-if grep -q 'poke' "$empty/autorun/boot-menu-apply.sh"; then fail "apply still pokes the binary"; fi
-grep -q 'LD_PRELOAD' "$empty/autorun/boot-menu-apply.sh"
-grep -q 'cp "$LAUNCH" "$REAL"' "$empty/autorun/boot-menu-apply.sh"
-if grep -q 'mount --bind "$LAUNCH" "$REAL"' "$empty/autorun/boot-menu-apply.sh"; then
+if grep -q 'menu-os' "$empty/autorun/system/boot-menu-apply.sh"; then fail "apply still builds a binary copy"; fi
+if grep -q 'poke' "$empty/autorun/system/boot-menu-apply.sh"; then fail "apply still pokes the binary"; fi
+grep -q 'LD_PRELOAD' "$empty/autorun/system/boot-menu-apply.sh"
+grep -q 'cp "$LAUNCH" "$REAL"' "$empty/autorun/system/boot-menu-apply.sh"
+if grep -q 'mount --bind "$LAUNCH" "$REAL"' "$empty/autorun/system/boot-menu-apply.sh"; then
   fail "stock launcher bind follows the wrapper"
 fi
-grep -q 'launch-ac50' "$empty/autorun/boot-menu-apply.sh"
-grep -q 'loader.so' "$empty/autorun/boot-menu-apply.sh"
-grep -q 'mpc-patch-stamp' "$empty/autorun/boot-menu-apply.sh"
-if grep -q '/tmp/mpc-stock-patched' "$empty/autorun/boot-menu-apply.sh"; then fail "patched app is rebuilt in /tmp"; fi
+grep -q 'launch-ac50' "$empty/autorun/system/boot-menu-apply.sh"
+grep -q 'loader.so' "$empty/autorun/system/boot-menu-apply.sh"
+grep -q 'mpc-patch-stamp' "$empty/autorun/system/boot-menu-apply.sh"
+if grep -q '/tmp/mpc-stock-patched' "$empty/autorun/system/boot-menu-apply.sh"; then fail "patched app is rebuilt in /tmp"; fi
 grep -q 'boot-menu-apply.sh' "$ROOT/src/main.c"
 grep -q '/usr/bin/launch-ac50' "$ROOT/src/main.c"
-test -x "$empty/autorun/mpc-boot-web"
-strings "$empty/autorun/mpc-boot-web" | grep -q 'application/octet-stream' || fail "web server cannot serve built page files"
-test -x "$empty/autorun/web.sh"
-web_page "$empty/autorun/web"
-grep -q 'mpc-boot-web' "$empty/autorun/web.sh"
-grep -q '8080' "$empty/autorun/web.sh"
-grep -q 'remount,exec' "$empty/autorun/web.sh"
-grep -q 'exec "\$bin"' "$empty/autorun/web.sh"
-if grep -q 'exec /run/mpc-boot-web ' "$empty/autorun/web.sh"; then
+test -x "$empty/autorun/system/mpc-boot-web"
+strings "$empty/autorun/system/mpc-boot-web" | grep -q 'application/octet-stream' || fail "web server cannot serve built page files"
+test -x "$empty/autorun/system/web.sh"
+web_page "$empty/autorun/system/web"
+grep -q 'mpc-boot-web' "$empty/autorun/system/web.sh"
+grep -q '8080' "$empty/autorun/system/web.sh"
+grep -q 'remount,exec' "$empty/autorun/system/web.sh"
+grep -q 'exec "\$bin"' "$empty/autorun/system/web.sh"
+if grep -q 'exec /run/mpc-boot-web ' "$empty/autorun/system/web.sh"; then
   fail "web.sh executes the log directory"
 fi
 if grep -q 'autorun-backup' "$empty/autorun/autorun.sh"; then fail "new autorun mentions a backup"; fi
-if grep -q 'mpc-sample-usb-ssh' "$empty/autorun/autorun.sh" "$empty/autorun/ssh.sh"; then fail "new autorun starts the ssh kit"; fi
-if grep -q 'authorized_keys' "$empty/autorun/ssh.sh"; then fail "ssh still expects a client key"; fi
-grep -q 'os_tools/bin' "$empty/autorun/ssh.sh"
-grep -q 'export PATH="%s:$PATH"' "$empty/autorun/ssh.sh"
-grep -q 'mount --bind "$RAM/profile" /etc/profile' "$empty/autorun/ssh.sh"
-grep -q 'tools were not added to PATH' "$empty/autorun/ssh.sh"
-grep -q 'dirname -- "$D"' "$empty/autorun/ssh.sh"
-grep -q 'ln -sfn "$card/os_tools/.bashrc" /root/.bashrc' "$empty/autorun/ssh.sh"
-grep -q 'os_tools/bin/bash' "$empty/autorun/ssh.sh"
-grep -q '/etc/passwd' "$empty/autorun/ssh.sh"
-grep -q 'ln -sfn "$card/os_tools/.bashrc" /root/.bashrc' "$empty/autorun/web.sh"
-if grep -q '/media/MPC' "$empty/autorun/ssh.sh"; then fail "ssh.sh hardcodes the card path"; fi
+if grep -q 'mpc-sample-usb-ssh' "$empty/autorun/autorun.sh" "$empty/autorun/system/ssh.sh"; then fail "new autorun starts the ssh kit"; fi
+if grep -q 'authorized_keys' "$empty/autorun/system/ssh.sh"; then fail "ssh still expects a client key"; fi
+grep -q 'os_tools/bin' "$empty/autorun/system/ssh.sh"
+grep -q 'export PATH="%s:$PATH"' "$empty/autorun/system/ssh.sh"
+grep -q 'mount --bind "$RAM/profile" /etc/profile' "$empty/autorun/system/ssh.sh"
+grep -q 'tools were not added to PATH' "$empty/autorun/system/ssh.sh"
+grep -q 'dirname -- "$D"' "$empty/autorun/system/ssh.sh"
+grep -q 'ln -sfn "$A/os_tools/.bashrc" /root/.bashrc' "$empty/autorun/system/ssh.sh"
+grep -q 'os_tools/bin/bash' "$empty/autorun/system/ssh.sh"
+grep -q '/etc/passwd' "$empty/autorun/system/ssh.sh"
+grep -q 'ln -sfn "$A/os_tools/.bashrc" /root/.bashrc' "$empty/autorun/system/web.sh"
+if grep -q '/media/MPC' "$empty/autorun/system/ssh.sh"; then fail "ssh.sh hardcodes the card path"; fi
 grep -q 'os_tools/bin/bash' "$ROOT/webserver/server.c"
 grep -q '"-l", "-i"' "$ROOT/webserver/server.c"
-grep -q 'PermitEmptyPasswords yes' "$empty/autorun/ssh.sh"
-grep -q 'PubkeyAuthentication no' "$empty/autorun/ssh.sh"
-grep -q 'UsePAM no' "$empty/autorun/ssh.sh"
-grep -q 'Port 22' "$empty/autorun/ssh.sh" || fail "ssh.sh missing Port 22"
-if grep -q 'Port 2222' "$empty/autorun/ssh.sh"; then fail "ssh.sh still uses port 2222"; fi
-if grep -Eq '^[[:space:]]*AuthenticationMethods' "$empty/autorun/ssh.sh"; then
+grep -q 'PermitEmptyPasswords yes' "$empty/autorun/system/ssh.sh"
+grep -q 'PubkeyAuthentication no' "$empty/autorun/system/ssh.sh"
+grep -q 'UsePAM no' "$empty/autorun/system/ssh.sh"
+grep -q 'Port 22' "$empty/autorun/system/ssh.sh" || fail "ssh.sh missing Port 22"
+if grep -q 'Port 2222' "$empty/autorun/system/ssh.sh"; then fail "ssh.sh still uses port 2222"; fi
+if grep -Eq '^[[:space:]]*AuthenticationMethods' "$empty/autorun/system/ssh.sh"; then
   fail "blank password must not be tied to AuthenticationMethods"
 fi
-test -s "$empty/autorun/ssh_host_ed25519_key"
-test -s "$empty/autorun/ssh_host_ed25519_key.pub"
-cmp -s "$ROOT/ssh/ssh_host_ed25519_key" "$empty/autorun/ssh_host_ed25519_key" || fail "fresh install did not use the saved server identity"
-hostkey=$(shasum -a 256 "$empty/autorun/ssh_host_ed25519_key" | awk '{print $1}')
+test -s "$empty/autorun/system/ssh/ssh_host_ed25519_key"
+test -s "$empty/autorun/system/ssh/ssh_host_ed25519_key.pub"
+cmp -s "$ROOT/ssh/ssh_host_ed25519_key" "$empty/autorun/system/ssh/ssh_host_ed25519_key" || fail "fresh install did not use the saved server identity"
+hostkey=$(shasum -a 256 "$empty/autorun/system/ssh/ssh_host_ed25519_key" | awk '{print $1}')
 got=$(digest_of "$empty/autorun")
 have=$(cat "$empty/autorun/autorun.check")
 test "$got" = "$have" || fail "autorun.check mismatch"
@@ -226,18 +227,23 @@ test "$got" = "$have" || fail "autorun.check mismatch"
 printf 'title=Snake\nrun=apps/snake\nargs=\n' > "$empty/autorun/boot-menu/30-snake.entry"
 mkdir -p "$empty/autorun/patch-catalog"
 printf '# title Wide\n' > "$empty/autorun/patch-catalog/wide.list"
-printf 'stray\n' > "$empty/os_tools/stray"
-printf '\nalias ll="ls -l"\n' >> "$empty/os_tools/.bashrc"
+printf 'stray\n' > "$empty/autorun/os_tools/stray"
+printf '\nalias ll="ls -l"\n' >> "$empty/autorun/os_tools/.bashrc"
+mkdir -p "$empty/os_tools" "$empty/apps"
+printf 'leave\n' > "$empty/os_tools/mine"
+printf 'leave\n' > "$empty/apps/mine"
 ./setup.sh --SD "$empty" >/tmp/mpc-boot-out
 grep -q 'Updating it' /tmp/mpc-boot-out || fail "reinstall should update without asking"
-test ! -e "$empty/os_tools/stray" || fail "reinstall left a file in os_tools"
-grep -q 'alias ll=' "$empty/os_tools/.bashrc" || fail "reinstall replaced .bashrc"
-test -x "$empty/os_tools/bin/bash"
-test ! -e "$empty/os_tools/bin/vim"
-cmp "$fix/toolkit/marker" "$empty/os_tools/toolkit/marker"
+test ! -e "$empty/autorun/os_tools/stray" || fail "reinstall left a file in os_tools"
+grep -q 'alias ll=' "$empty/autorun/os_tools/.bashrc" || fail "reinstall replaced .bashrc"
+test -x "$empty/autorun/os_tools/bin/bash"
+test ! -e "$empty/autorun/os_tools/bin/vim"
+cmp "$fix/toolkit/marker" "$empty/autorun/os_tools/toolkit/marker"
+test "$(cat "$empty/os_tools/mine")" = leave || fail "reinstall changed a card-root os_tools folder"
+test "$(cat "$empty/apps/mine")" = leave || fail "reinstall changed a card-root apps folder"
 grep -q 'title=Snake' "$empty/autorun/boot-menu/30-snake.entry" || fail "reinstall removed a menu entry"
 grep -q 'title Wide' "$empty/autorun/patch-catalog/wide.list" || fail "reinstall removed a catalog patch"
-test "$(shasum -a 256 "$empty/autorun/ssh_host_ed25519_key" | awk '{print $1}')" = "$hostkey" || fail "reinstall replaced the server identity"
+test "$(shasum -a 256 "$empty/autorun/system/ssh/ssh_host_ed25519_key" | awk '{print $1}')" = "$hostkey" || fail "reinstall replaced the server identity"
 if find "$empty" -maxdepth 1 -type d -name 'autorun-backup-*' | grep -q .; then
   fail "reinstall of mpc-boot-thingy created a backup"
 fi
@@ -270,9 +276,10 @@ test ! -d "$ssh/os_tools"
 # Accepting backs up and replaces. The new script only starts mpc-boot-thingy.
 pty_setup y "$ssh" >/tmp/mpc-boot-out
 test -d "$ssh"/autorun-backup-*
-test -f "$ssh/autorun/mpc-boot-thingy.mark"
-test -x "$ssh/os_tools/bin/bash"
-test ! -e "$ssh/os_tools/bin/vim"
+test -f "$ssh/autorun/system/mpc-boot-thingy.mark"
+test -x "$ssh/autorun/os_tools/bin/bash"
+test ! -e "$ssh/autorun/os_tools/bin/vim"
+test ! -d "$ssh/os_tools"
 test ! -e "$ssh/bin"
 test ! -e "$ssh/toolkit"
 test ! -d "$ssh/apps"
@@ -304,9 +311,12 @@ chmod 755 "$work/snake"
 grep -q 'Installed Snake Game' /tmp/mpc-boot-out
 grep -q 'boot menu is not on this card' /tmp/mpc-boot-out
 printf 'title=Snake Game\nrun=snake\n' > "$work/expect.entry"
-cmp "$work/expect.entry" "$bare/apps/snake-game/boot.entry"
-cmp "$work/snake" "$bare/apps/snake-game/snake"
-test ! -d "$bare/autorun"
+cmp "$work/expect.entry" "$bare/autorun/apps/snake-game/boot.entry"
+cmp "$work/snake" "$bare/autorun/apps/snake-game/snake"
+test ! -f "$bare/autorun/autorun.sh"
+test ! -d "$bare/autorun/system"
+test ! -d "$bare/autorun/os_tools"
+test ! -d "$bare/apps"
 test ! -d "$bare/os_tools"
 
 # A project folder contributes its boot.entry and the program it names, not its sources.
@@ -320,16 +330,18 @@ grep -q 'Installed Lab firmware' /tmp/mpc-boot-out
 if grep -q 'boot menu is not on this card' /tmp/mpc-boot-out; then
   fail "card that already has the menu should not ask to install it"
 fi
-cmp "$proj/boot.entry" "$empty/apps/lab-firmware/boot.entry"
-cmp "$proj/mpcfw" "$empty/apps/lab-firmware/mpcfw"
-test ! -e "$empty/apps/lab-firmware/extra.c"
+cmp "$proj/boot.entry" "$empty/autorun/apps/lab-firmware/boot.entry"
+cmp "$proj/mpcfw" "$empty/autorun/apps/lab-firmware/mpcfw"
+test ! -e "$empty/autorun/apps/lab-firmware/extra.c"
 # Updating the boot menu leaves the dropped-in app alone.
 ./setup.sh --SD "$empty" >/tmp/mpc-boot-out
-cmp "$proj/mpcfw" "$empty/apps/lab-firmware/mpcfw"
+cmp "$proj/mpcfw" "$empty/autorun/apps/lab-firmware/mpcfw"
 grep -q 'title=Snake' "$empty/autorun/boot-menu/30-snake.entry"
-test -x "$empty/os_tools/bin/bash"
-test ! -e "$empty/os_tools/bin/vim"
-test ! -e "$empty/apps/os_tools"
+test -x "$empty/autorun/os_tools/bin/bash"
+test ! -e "$empty/autorun/os_tools/bin/vim"
+test ! -e "$empty/autorun/apps/os_tools"
+test "$(cat "$empty/os_tools/mine")" = leave || fail "update changed a card-root os_tools folder"
+test "$(cat "$empty/apps/mine")" = leave || fail "update changed a card-root apps folder"
 
 # --ssh finds the one /media directory and overwrites without a backup prompt.
 if ./setup.sh --ssh --SD "$empty" >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
@@ -362,7 +374,7 @@ case "$last" in
     ;;
   *'test -s'*)
     IFS= read -r dest
-    test -s "$FAKE_ROOT$dest/autorun/ssh_host_ed25519_key"
+    test -s "$FAKE_ROOT$dest/autorun/system/ssh/ssh_host_ed25519_key"
     ;;
   *'tar -C'*)
     IFS= read -r dest
@@ -370,21 +382,23 @@ case "$last" in
     hold=$(mktemp -d)
     if printf '%s\n' "$last" | grep -q '.bashrc'; then
       for n in .bashrc .bash_profile; do
-        if [ -f "$FAKE_ROOT$dest/os_tools/$n" ]; then
-          cp "$FAKE_ROOT$dest/os_tools/$n" "$hold/$n"
+        if [ -f "$FAKE_ROOT$dest/autorun/os_tools/$n" ]; then
+          cp "$FAKE_ROOT$dest/autorun/os_tools/$n" "$hold/$n"
         fi
       done
     fi
     case "$last" in
-      *'rm -rf "$dest/os_tools"'*) rm -rf "$FAKE_ROOT$dest/os_tools" ;;
+      *'rm -rf "$dest/autorun/os_tools"'*) rm -rf "$FAKE_ROOT$dest/autorun/os_tools" ;;
     esac
     tar -C "$FAKE_ROOT$dest" -xf -
-    mkdir -p "$FAKE_ROOT$dest/os_tools"
-    for n in .bashrc .bash_profile; do
-      if [ -f "$hold/$n" ]; then
-        cp "$hold/$n" "$FAKE_ROOT$dest/os_tools/$n"
-      fi
-    done
+    if printf '%s\n' "$last" | grep -q '.bashrc'; then
+      mkdir -p "$FAKE_ROOT$dest/autorun/os_tools"
+      for n in .bashrc .bash_profile; do
+        if [ -f "$hold/$n" ]; then
+          cp "$hold/$n" "$FAKE_ROOT$dest/autorun/os_tools/$n"
+        fi
+      done
+    fi
     rm -rf "$hold"
     ;;
   *)
@@ -398,47 +412,53 @@ remote=$work/remote
 card="$remote/media/Lab Card"
 mkdir -p "$card/autorun/boot-menu"
 printf 'title=Snake\nrun=snake\n' > "$card/autorun/boot-menu/30-snake.entry"
-printf 'keep-key\n' > "$card/autorun/ssh_host_ed25519_key"
-mkdir -p "$card/os_tools"
-printf 'stray\n' > "$card/os_tools/stray"
-printf 'alias kept=yes\n' > "$card/os_tools/.bashrc"
+mkdir -p "$card/autorun/system/ssh" "$card/autorun/os_tools" "$card/os_tools" "$card/apps"
+printf 'keep-key\n' > "$card/autorun/system/ssh/ssh_host_ed25519_key"
+printf 'stray\n' > "$card/autorun/os_tools/stray"
+printf 'alias kept=yes\n' > "$card/autorun/os_tools/.bashrc"
+printf 'card-root\n' > "$card/os_tools/mine"
+printf 'card-root\n' > "$card/apps/mine"
 printf 'leave-me\n' > "$card/notes.txt"
 
 PATH="$bin:$PATH" FAKE_ROOT=$remote ./setup.sh --ssh >/tmp/mpc-boot-out
 grep -q 'Updated /media/Lab Card over SSH' /tmp/mpc-boot-out || fail "ssh install did not name the card"
-grep -q '/media/Lab Card/os_tools/bin' /tmp/mpc-boot-out || fail "ssh install did not name os_tools"
+grep -q '/media/Lab Card/autorun/os_tools/bin' /tmp/mpc-boot-out || fail "ssh install did not name os_tools"
 if grep -q 'Back up the existing' /tmp/mpc-boot-out; then fail "ssh install asked for a backup"; fi
 test ! -d "$remote"/autorun-backup-* 
 grep -q 'title=Snake' "$card/autorun/boot-menu/30-snake.entry" || fail "ssh install removed a menu entry"
-test "$(cat "$card/autorun/ssh_host_ed25519_key")" = keep-key || fail "ssh install replaced the server identity"
-test -x "$card/autorun/mpc-boot-thingy" || test -f "$card/autorun/mpc-boot-thingy"
+test "$(cat "$card/autorun/system/ssh/ssh_host_ed25519_key")" = keep-key || fail "ssh install replaced the server identity"
+test -x "$card/autorun/system/mpc-boot-thingy" || test -f "$card/autorun/system/mpc-boot-thingy"
 grep -q 'systemd-run --unit=mpc-boot-ssh' "$card/autorun/autorun.sh"
 grep -q 'systemd-run --unit=mpc-boot-web' "$card/autorun/autorun.sh"
-web_page "$card/autorun/web"
-test ! -e "$card/os_tools/stray" || fail "ssh install left a file in os_tools"
-grep -q 'alias kept=yes' "$card/os_tools/.bashrc" || fail "ssh install replaced .bashrc"
-test -x "$card/os_tools/bin/bash"
-test ! -e "$card/os_tools/bin/vim"
-cmp "$fix/toolkit/marker" "$card/os_tools/toolkit/marker"
+web_page "$card/autorun/system/web"
+test ! -e "$card/autorun/os_tools/stray" || fail "ssh install left a file in os_tools"
+grep -q 'alias kept=yes' "$card/autorun/os_tools/.bashrc" || fail "ssh install replaced .bashrc"
+test -x "$card/autorun/os_tools/bin/bash"
+test ! -e "$card/autorun/os_tools/bin/vim"
+cmp "$fix/toolkit/marker" "$card/autorun/os_tools/toolkit/marker"
+test "$(cat "$card/os_tools/mine")" = card-root || fail "ssh install changed a card-root os_tools folder"
+test "$(cat "$card/apps/mine")" = card-root || fail "ssh install changed a card-root apps folder"
 PATH="$bin:$PATH" FAKE_ROOT=$remote ./setup.sh --ssh --tools >/tmp/mpc-boot-out
-grep -q 'Dev tools are in /media/Lab Card/os_tools/bin' /tmp/mpc-boot-out || fail "ssh --tools did not name the dev tools"
-test -x "$card/os_tools/bin/vim"
-test -x "$card/os_tools/bin/busybox-full"
-test -x "$card/os_tools/bin/bash"
-cmp "$devfix/toolkit/marker" "$card/os_tools/toolkit/marker"
-grep -q 'alias kept=yes' "$card/os_tools/.bashrc" || fail "ssh --tools replaced .bashrc"
+grep -q 'Dev tools are in /media/Lab Card/autorun/os_tools/bin' /tmp/mpc-boot-out || fail "ssh --tools did not name the dev tools"
+test -x "$card/autorun/os_tools/bin/vim"
+test -x "$card/autorun/os_tools/bin/busybox-full"
+test -x "$card/autorun/os_tools/bin/bash"
+cmp "$devfix/toolkit/marker" "$card/autorun/os_tools/toolkit/marker"
+grep -q 'alias kept=yes' "$card/autorun/os_tools/.bashrc" || fail "ssh --tools replaced .bashrc"
 test ! -e "$card/bin"
 test ! -e "$card/toolkit"
-test ! -d "$card/apps"
-test "$(cat "$card/notes.txt")" = leave-me || fail "ssh install removed a file outside os_tools"
+test "$(cat "$card/os_tools/mine")" = card-root || fail "ssh --tools changed a card-root os_tools folder"
+test "$(cat "$card/apps/mine")" = card-root || fail "ssh --tools changed a card-root apps folder"
+test "$(cat "$card/notes.txt")" = leave-me || fail "ssh install removed a file outside autorun"
 test "$(digest_of "$card/autorun")" = "$(cat "$card/autorun/autorun.check")" || fail "ssh install check mismatch"
 
 PATH="$bin:$PATH" FAKE_ROOT=$remote ./setup.sh --ssh --add "$proj" >/tmp/mpc-boot-out
 grep -q 'Installed Lab firmware' /tmp/mpc-boot-out || fail "ssh add did not install"
 grep -q 'Updated the app on /media/Lab Card over SSH' /tmp/mpc-boot-out || fail "ssh add did not name the card"
-cmp "$proj/mpcfw" "$card/apps/lab-firmware/mpcfw" || fail "ssh add did not copy the program"
-cmp "$proj/boot.entry" "$card/apps/lab-firmware/boot.entry" || fail "ssh add did not copy boot.entry"
-test ! -e "$card/apps/lab-firmware/extra.c" || fail "ssh add copied a source file"
+cmp "$proj/mpcfw" "$card/autorun/apps/lab-firmware/mpcfw" || fail "ssh add did not copy the program"
+cmp "$proj/boot.entry" "$card/autorun/apps/lab-firmware/boot.entry" || fail "ssh add did not copy boot.entry"
+test ! -e "$card/autorun/apps/lab-firmware/extra.c" || fail "ssh add copied a source file"
+test "$(cat "$card/apps/mine")" = card-root || fail "ssh add changed a card-root apps folder"
 test "$(cat "$card/notes.txt")" = leave-me || fail "ssh add removed a file outside the app"
 grep -q 'title=Snake' "$card/autorun/boot-menu/30-snake.entry" || fail "ssh add removed a menu entry"
 
@@ -486,7 +506,7 @@ PATH="$bin:$PATH" FAKE_ROOT=$remote FAKE_SSH_LOG=$sshlog ./setup.sh -R >/tmp/mpc
 grep -q 'Reloaded mpc-boot-thingy' /tmp/mpc-boot-out || fail "reload did not say it is reloading"
 grep -q 'killall' "$sshlog" || fail "reload did not signal mpc-boot-thingy"
 
-test -x "$empty/os_tools/bin/mpc-reload" || fail "mpc-reload is missing or not executable in os_tools"
+test -x "$empty/autorun/os_tools/bin/mpc-reload" || fail "mpc-reload is missing or not executable in os_tools"
 
 # macOS cp exits 1 when exFAT refuses extended attributes. Setup must
 # copy without them or the card update stops on the first binary.
@@ -506,9 +526,11 @@ EOF
   xcard=$work/xattr
   mkdir "$xcard"
   PATH="$cpx:$PATH" ./setup.sh --SD "$xcard" >/tmp/mpc-boot-out
-  test -f "$xcard/autorun/mpc-boot-web" || fail "attribute failure stopped the copy"
-  test -x "$xcard/os_tools/bin/bash" || fail "attribute failure stopped bash"
-  test ! -e "$xcard/os_tools/bin/vim" || fail "attribute copy included vim"
+  test -f "$xcard/autorun/system/mpc-boot-web" || fail "attribute failure stopped the copy"
+  test -x "$xcard/autorun/os_tools/bin/bash" || fail "attribute failure stopped bash"
+  test ! -e "$xcard/autorun/os_tools/bin/vim" || fail "attribute copy included vim"
+  test ! -d "$xcard/os_tools" || fail "attribute copy wrote os_tools outside autorun"
+  test ! -d "$xcard/apps" || fail "attribute copy wrote apps outside autorun"
 fi
 
 # --tools installs vim and busybox-full. Updating without the flag
@@ -517,18 +539,20 @@ devcard=$work/dev
 mkdir "$devcard"
 ./setup.sh --SD "$devcard" --tools >/tmp/mpc-boot-out
 grep -q 'Dev tools are in' /tmp/mpc-boot-out || fail "tools install did not name the dev tools"
-test -x "$devcard/os_tools/bin/bash"
-test -x "$devcard/os_tools/bin/vim"
-test -x "$devcard/os_tools/bin/busybox-full"
-cmp "$devfix/bin/vim" "$devcard/os_tools/bin/vim"
-cmp "$devfix/toolkit/marker" "$devcard/os_tools/toolkit/marker"
-printf '\nalias ll="ls -l"\n' >> "$devcard/os_tools/.bashrc"
+test -x "$devcard/autorun/os_tools/bin/bash"
+test -x "$devcard/autorun/os_tools/bin/vim"
+test -x "$devcard/autorun/os_tools/bin/busybox-full"
+cmp "$devfix/bin/vim" "$devcard/autorun/os_tools/bin/vim"
+cmp "$devfix/toolkit/marker" "$devcard/autorun/os_tools/toolkit/marker"
+printf '\nalias ll="ls -l"\n' >> "$devcard/autorun/os_tools/.bashrc"
 ./setup.sh --SD "$devcard" >/tmp/mpc-boot-out
-test ! -e "$devcard/os_tools/bin/vim" || fail "update without --tools left vim"
-test ! -e "$devcard/os_tools/bin/busybox-full" || fail "update without --tools left busybox-full"
-test -x "$devcard/os_tools/bin/bash"
-cmp "$fix/bin/bash" "$devcard/os_tools/bin/bash"
-cmp "$fix/toolkit/marker" "$devcard/os_tools/toolkit/marker"
-grep -q 'alias ll=' "$devcard/os_tools/.bashrc" || fail "update without --tools replaced .bashrc"
+test ! -e "$devcard/autorun/os_tools/bin/vim" || fail "update without --tools left vim"
+test ! -e "$devcard/autorun/os_tools/bin/busybox-full" || fail "update without --tools left busybox-full"
+test -x "$devcard/autorun/os_tools/bin/bash"
+cmp "$fix/bin/bash" "$devcard/autorun/os_tools/bin/bash"
+cmp "$fix/toolkit/marker" "$devcard/autorun/os_tools/toolkit/marker"
+grep -q 'alias ll=' "$devcard/autorun/os_tools/.bashrc" || fail "update without --tools replaced .bashrc"
+test ! -d "$devcard/os_tools"
+test ! -d "$devcard/apps"
 
 echo "setup fixtures ok"

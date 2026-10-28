@@ -92,7 +92,7 @@ static int collect_entries(struct found *f, int n, int max, const char *dir, con
     return n;
 }
 
-/* apps/<name>/boot.entry. run is relative to that folder. key is the folder name. */
+/* autorun/apps/<name>/boot.entry. run is relative to that folder. key is the folder name. */
 static int collect_apps(struct found *f, int n, int max, const char *apps) {
     DIR *d = opendir(apps);
     if (!d) return n;
@@ -127,7 +127,7 @@ int menu_load(struct menu *m, const char *card) {
     char bootmenu[512], apps[512];
     if (join2(bootmenu, sizeof bootmenu, card, "autorun/boot-menu") == 0)
         nc = collect_entries(found, nc, MAX_FILES, bootmenu, card);
-    if (join2(apps, sizeof apps, card, "apps") == 0)
+    if (join2(apps, sizeof apps, card, "autorun/apps") == 0)
         nc = collect_apps(found, nc, MAX_FILES, apps);
     qsort(found, (size_t)nc, sizeof found[0], found_cmp);
 
@@ -144,7 +144,7 @@ int menu_load(struct menu *m, const char *card) {
 int menu_default_index(const struct menu *m, const char *card) {
     if (!m || m->n < 1 || !card || !card[0]) return 0;
     char path[512];
-    int wr = snprintf(path, sizeof path, "%s/autorun/boot-default", card);
+    int wr = snprintf(path, sizeof path, "%s/autorun/system/boot-default", card);
     if (wr < 0 || (size_t)wr >= sizeof path) return 0;
     FILE *f = fopen(path, "r");
     if (!f) return 0;
@@ -182,8 +182,8 @@ int menu_set_default(const char *card, const char *id) {
     char path[512], tmp[512], line[MENU_ID + 2];
     if (!card || !card[0] || !id || !id[0] || strlen(id) >= MENU_ID) return -1;
     if (strchr(id, '\n') || strchr(id, '\r')) return -1;
-    int pw = snprintf(path, sizeof path, "%s/autorun/boot-default", card);
-    int tw = snprintf(tmp, sizeof tmp, "%s/autorun/boot-default.tmp", card);
+    int pw = snprintf(path, sizeof path, "%s/autorun/system/boot-default", card);
+    int tw = snprintf(tmp, sizeof tmp, "%s/autorun/system/boot-default.tmp", card);
     if (pw < 0 || (size_t)pw >= sizeof path || tw < 0 || (size_t)tw >= sizeof tmp) return -1;
     int n = snprintf(line, sizeof line, "%s\n", id);
     if (n < 0 || (size_t)n >= sizeof line) return -1;

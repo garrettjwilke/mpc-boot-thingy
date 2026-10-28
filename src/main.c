@@ -141,10 +141,10 @@ static int stock_ready(const char *card) {
     char script[512], dir[512];
     int ns, nd;
     if (!card || !card[0]) return 1;
-    ns = snprintf(script, sizeof script, "%s/autorun/boot-menu-apply.sh", card);
+    ns = snprintf(script, sizeof script, "%s/autorun/system/boot-menu-apply.sh", card);
     if (ns < 0 || (size_t)ns >= sizeof script || access(script, R_OK) != 0) return 1;
     if (!mount_point_is("/usr/bin/launch-ac50")) return 0;
-    nd = snprintf(dir, sizeof dir, "%s/autorun/patches", card);
+    nd = snprintf(dir, sizeof dir, "%s/autorun/system/patches", card);
     if (nd < 0 || (size_t)nd >= sizeof dir) return 0;
     return stamp_equals(dir);
 }
@@ -168,7 +168,7 @@ static void show_loading(struct screen *scr, struct surface *midi, int theme) {
 static void mount_patched_stock(const char *card) {
     char script[512];
     if (!card || !card[0]) return;
-    int n = snprintf(script, sizeof script, "%s/autorun/boot-menu-apply.sh", card);
+    int n = snprintf(script, sizeof script, "%s/autorun/system/boot-menu-apply.sh", card);
     if (n < 0 || (size_t)n >= sizeof script) return;
     if (access(script, R_OK) != 0) return;
     remount_exec(card);

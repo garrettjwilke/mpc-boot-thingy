@@ -49,7 +49,9 @@ not replaced.
 A card with no autorun folder is installed with no question.
 A card that already has mpc-boot-thingy is updated with no question
 and no new backup. Menu files in autorun/boot-menu/ are left in place.
-So are autorun/patch-catalog/ and autorun/boot-edits/.
+So are autorun/patch-catalog/, autorun/boot-edits/, and autorun/apps/.
+Setup only writes inside autorun/. Other folders on the card are left
+alone.
 
 Optional patches go in autorun/patch-catalog/ as .list or .so files.
 A .list can start with "# title Name". Stock does not load that folder.
@@ -60,12 +62,12 @@ The backup question appears only when the card has a different autorun,
 such as the USB SSH kit. Answering y copies that folder aside, then
 installs. Any other answer leaves the card unchanged.
 
-Add a program by dragging a folder into apps/ on the card. The folder
-name sets the menu order (10-game comes before 20-tool). Stock stays
-first. No rebuild and no new check. The folder looks like this:
+Add a program by dragging a folder into autorun/apps/ on the card. The
+folder name sets the menu order (10-game comes before 20-tool). Stock
+stays first. No rebuild and no new check. The folder looks like this:
 
-  apps/lab-firmware/boot.entry
-  apps/lab-firmware/mpcfw
+  autorun/apps/lab-firmware/boot.entry
+  autorun/apps/lab-firmware/mpcfw
 
   title=Lab firmware
   run=mpcfw
@@ -76,8 +78,8 @@ starts in its folder. Lines starting with # and blank lines are ignored.
 A boot.entry missing title or run is skipped.
 
 A program that has no boot.entry can be placed with one command. This
-copies the executable into apps/ and writes boot.entry. It does not
-change autorun/:
+copies the executable into autorun/apps/ and writes boot.entry. It does
+not change the rest of autorun/:
 
   ./setup.sh --SD "/path/to/mounted/SD" --add /path/to/program --title "Lab firmware"
   ./setup.sh --ssh --add /path/to/program
@@ -89,7 +91,9 @@ that file and the program it names are copied. Other files in the
 project stay where they are.
 
 Older autorun/boot-menu/*.entry files still load. run in those files
-is relative to the card root.
+is relative to the card root, so a program in autorun/apps is
+run=autorun/apps/name/program. A boot.entry inside an app folder is
+relative to that folder.
 
 After the splash, the screen says "Hold SHIFT for boot thingy" and the
 SHIFT button lights. Press SHIFT while that text is up to open the menu.
@@ -106,13 +110,13 @@ turn the MPC on. The server identity lives in ssh/ssh_host_ed25519_key.
 A fresh card gets that same key, so known_hosts stays valid. A card that
 already has a key keeps it.
 
-SSH and the web terminal both start bash from os_tools/bin. Aliases and
-exports belong in os_tools/.bashrc on the card. Setup keeps that file
-when it updates the shell.
+SSH and the web terminal both start bash from autorun/os_tools/bin.
+Aliases and exports belong in autorun/os_tools/.bashrc on the card.
+Setup keeps that file when it updates the shell.
 
 --tools
   Also install vim, nano, busybox-full, rsync, curl, htop, and the
-  other shell utilities into os_tools/bin. Pass this when setting up
+  other shell utilities into autorun/os_tools/bin. Pass this when setting up
   a dev card. The GitHub release runs setup without this flag, so the
   published card has bash and omits these utilities. They are not
   boot-menu apps.
@@ -149,7 +153,7 @@ kind_of() {
     printf '%s' empty
     return
   fi
-  if [ -f "$A/mpc-boot-thingy.mark" ]; then
+  if [ -f "$A/system/mpc-boot-thingy.mark" ]; then
     printf '%s' ours
     return
   fi
@@ -170,7 +174,7 @@ warn_kind() {
   case "$kind" in
     ours)
       echo "This card already has mpc-boot-thingy."
-      echo "Found marker: $sd/autorun/mpc-boot-thingy.mark"
+      echo "Found marker: $sd/autorun/system/mpc-boot-thingy.mark"
       ;;
     ssh)
       echo "This card has the USB SSH kit (mpc-sample-root-ssh)."
@@ -285,7 +289,7 @@ install_app() {
       echo "ERROR: could not name the app folder" >&2
       exit 1
     fi
-    dest=$sd/apps/$name
+    dest=$sd/autorun/apps/$name
     mkdir -p "$dest"
     if [ -n "$title" ]; then
       printf 'title=%s\nrun=%s\n' "$label" "$run" > "$dest/boot.entry"
@@ -326,7 +330,7 @@ install_app() {
       exit 1
       ;;
   esac
-  dest=$sd/apps/$name
+  dest=$sd/autorun/apps/$name
   mkdir -p "$dest"
   card_cp "$src" "$dest/$bin"
   chmod 755 "$dest/$bin"
@@ -398,15 +402,16 @@ copy_toolkit() {
     exit 1
   fi
   hold=$(mktemp -d)
+  tools=$sd/autorun/os_tools
   for name in .bashrc .bash_profile; do
-    if [ -f "$sd/os_tools/$name" ]; then
-      card_cp "$sd/os_tools/$name" "$hold/$name"
+    if [ -f "$tools/$name" ]; then
+      card_cp "$tools/$name" "$hold/$name"
     fi
   done
-  rm -rf "$sd/os_tools"
-  mkdir -p "$sd/os_tools"
-  card_cp -R "$src/bin" "$src/toolkit" "$sd/os_tools/"
-  cat > "$sd/os_tools/bin/mpc-reload" <<'RELOAD'
+  rm -rf "$tools"
+  mkdir -p "$tools"
+  card_cp -R "$src/bin" "$src/toolkit" "$tools/"
+  cat > "$tools/bin/mpc-reload" <<'RELOAD'
 #!/bin/sh
 # Flush filesystem caches and signal mpc-boot-thingy to reload.
 sync
@@ -427,14 +432,14 @@ fi
 killall -HUP mpc-boot-thingy 2>/dev/null || true
 echo "Reloaded mpc-boot-thingy"
 RELOAD
-  chmod 755 "$sd/os_tools/bin/mpc-reload"
+  chmod 755 "$tools/bin/mpc-reload"
   for name in .bashrc .bash_profile; do
     if [ -f "$hold/$name" ]; then
-      card_cp "$hold/$name" "$sd/os_tools/$name"
+      card_cp "$hold/$name" "$tools/$name"
     fi
   done
   rm -rf "$hold"
-  write_shell_rc "$sd/os_tools"
+  write_shell_rc "$tools"
 }
 
 write_shell_rc() {
@@ -518,33 +523,35 @@ if mount -o remount,exec "$card"; then
 else
   echo "WARN: could not remount exec $card"
 fi
-cp "$D/mpc-boot-thingy" /run/mpc-boot-thingy
+cp "$D/system/mpc-boot-thingy" /run/mpc-boot-thingy
 chmod 755 /run/mpc-boot-thingy
 printf '%s\n' "$D" > /run/mpc-boot-autorun
 systemd-run --unit=mpc-boot-thingy --collect --no-block /run/mpc-boot-thingy "$D"
 
 if ! systemctl is-active --quiet mpc-boot-web.service; then
-  systemd-run --unit=mpc-boot-web --collect --no-block /bin/sh "$D/web.sh"
+  systemd-run --unit=mpc-boot-web --collect --no-block /bin/sh "$D/system/web.sh"
 fi
 if systemctl is-active --quiet mpc-boot-ssh.service; then
   exit 0
 fi
-systemd-run --unit=mpc-boot-ssh --collect --no-block /bin/sh "$D/ssh.sh"
+systemd-run --unit=mpc-boot-ssh --collect --no-block /bin/sh "$D/system/ssh.sh"
 EOF
   chmod 755 "$A/autorun.sh"
-  cat > "$A/ssh.sh" <<'EOF'
+  mkdir -p "$A/system"
+  cat > "$A/system/ssh.sh" <<'EOF'
 #!/bin/sh
 # Root shell on the USB link. No client key. The password is empty.
 set -eu
 umask 077
 D=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+A=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
 RAM=/run/mpc-boot-ssh
 mkdir -p "$RAM" /run/sshd
 chmod 700 "$RAM"
 chmod 755 /run/sshd
 : > "$RAM/ssh.log"
 exec >> "$RAM/ssh.log" 2>&1
-log_to_card() { cp "$RAM/ssh.log" "$D/ssh.log" 2>/dev/null || true; }
+log_to_card() { mkdir -p "$D/ssh"; cp "$RAM/ssh.log" "$D/ssh/ssh.log" 2>/dev/null || true; }
 trap log_to_card EXIT
 echo 'MPC_BOOT_SSH_START'
 date -u || true
@@ -556,11 +563,11 @@ if [ ! -x /usr/sbin/sshd ]; then
   echo 'ERROR: /usr/sbin/sshd missing'
   exit 1
 fi
-if [ ! -s "$D/ssh_host_ed25519_key" ]; then
+if [ ! -s "$D/ssh/ssh_host_ed25519_key" ]; then
   echo 'ERROR: host key missing'
   exit 1
 fi
-cp "$D/ssh_host_ed25519_key" "$RAM/ssh_host_ed25519_key"
+cp "$D/ssh/ssh_host_ed25519_key" "$RAM/ssh_host_ed25519_key"
 chmod 600 "$RAM/ssh_host_ed25519_key"
 if [ -r /etc/shadow ]; then
   sed 's/^root:[^:]*:/root::/' /etc/shadow > "$RAM/shadow"
@@ -602,37 +609,37 @@ while ! grep -q '192.168.155.1' /proc/net/fib_trie 2>/dev/null; do
   usb_wait=$((usb_wait + 1))
 done
 echo "USB_IP_READY waited_seconds=$usb_wait"
-card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
+card=$(CDPATH= cd -- "$(dirname -- "$A")" && pwd)
 mkdir -p /root
-if [ -f "$card/os_tools/.bashrc" ]; then
-  ln -sfn "$card/os_tools/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
+if [ -f "$A/os_tools/.bashrc" ]; then
+  ln -sfn "$A/os_tools/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
 else
   echo 'WARN: os_tools/.bashrc is missing'
 fi
-if [ -f "$card/os_tools/.bash_profile" ]; then
-  ln -sfn "$card/os_tools/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
+if [ -f "$A/os_tools/.bash_profile" ]; then
+  ln -sfn "$A/os_tools/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
 fi
-if [ -x "$card/os_tools/bin/bash" ] && [ -r /etc/passwd ]; then
-  awk -F: -v shell="$card/os_tools/bin/bash" 'BEGIN{OFS=":"} $1=="root" {$7=shell} {print}' /etc/passwd > "$RAM/passwd"
+if [ -x "$A/os_tools/bin/bash" ] && [ -r /etc/passwd ]; then
+  awk -F: -v shell="$A/os_tools/bin/bash" 'BEGIN{OFS=":"} $1=="root" {$7=shell} {print}' /etc/passwd > "$RAM/passwd"
   chmod 644 "$RAM/passwd"
   if mount --bind "$RAM/passwd" /etc/passwd; then
-    echo "SHELL_BASH $card/os_tools/bin/bash"
+    echo "SHELL_BASH $A/os_tools/bin/bash"
   else
     echo 'WARN: could not make bash the login shell'
   fi
 else
   echo 'WARN: bash is missing; login shell was not changed'
 fi
-if [ ! -d "$card/os_tools/bin" ]; then
+if [ ! -d "$A/os_tools/bin" ]; then
   echo 'WARN: os_tools/bin is missing; tools were not added to PATH'
 elif [ ! -r /etc/profile ]; then
   echo 'WARN: /etc/profile is not readable; tools were not added to PATH'
 elif ! cp /etc/profile "$RAM/profile"; then
   echo 'WARN: could not add os_tools to PATH'
 else
-  printf '\nexport PATH="%s:$PATH"\n' "$card/os_tools/bin" >> "$RAM/profile"
+  printf '\nexport PATH="%s:$PATH"\n' "$A/os_tools/bin" >> "$RAM/profile"
   if mount --bind "$RAM/profile" /etc/profile; then
-    echo "PATH_TOOLS $card/os_tools/bin"
+    echo "PATH_TOOLS $A/os_tools/bin"
   else
     echo 'WARN: could not add os_tools to PATH'
   fi
@@ -641,19 +648,20 @@ fi
 log_to_card
 exec /usr/sbin/sshd -D -e -f "$RAM/sshd_config"
 EOF
-  chmod 755 "$A/ssh.sh"
-  cat > "$A/web.sh" <<'EOF'
+  chmod 755 "$A/system/ssh.sh"
+  cat > "$A/system/web.sh" <<'EOF'
 #!/bin/sh
 # Web page on the USB link.
 set -eu
 D=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+A=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
 RAM=/run/mpc-boot-web
 mkdir -p "$RAM"
 : > "$RAM/web.log"
 exec >> "$RAM/web.log" 2>&1
 echo 'MPC_BOOT_WEB_START'
 remount_card() {
-  card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
+  card=$(CDPATH= cd -- "$(dirname -- "$A")" && pwd)
   if mount -o remount,exec "$card"; then
     echo "remount exec $card"
   else
@@ -679,18 +687,17 @@ while ! grep -q '192.168.155.1' /proc/net/fib_trie 2>/dev/null; do
 done
 echo "USB_IP_READY waited_seconds=$usb_wait"
 remount_card
-card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
 mkdir -p /root
-if [ -f "$card/os_tools/.bashrc" ]; then
-  ln -sfn "$card/os_tools/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
+if [ -f "$A/os_tools/.bashrc" ]; then
+  ln -sfn "$A/os_tools/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
 fi
-if [ -f "$card/os_tools/.bash_profile" ]; then
-  ln -sfn "$card/os_tools/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
+if [ -f "$A/os_tools/.bash_profile" ]; then
+  ln -sfn "$A/os_tools/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
 fi
-exec "$bin" "$D" 8080 192.168.155.1
+exec "$bin" "$A" 8080 192.168.155.1
 EOF
-  chmod 755 "$A/web.sh"
-  if [ ! -s "$A/ssh_host_ed25519_key" ]; then
+  chmod 755 "$A/system/web.sh"
+  if [ ! -s "$A/system/ssh/ssh_host_ed25519_key" ]; then
     id=$ROOT/ssh/ssh_host_ed25519_key
     if [ ! -s "$id" ]; then
       if ! command -v ssh-keygen >/dev/null 2>&1; then
@@ -704,11 +711,12 @@ EOF
     if [ ! -s "$id.pub" ] && command -v ssh-keygen >/dev/null 2>&1; then
       ssh-keygen -y -f "$id" > "$id.pub"
     fi
-    card_cp "$id" "$A/ssh_host_ed25519_key"
+    mkdir -p "$A/system/ssh"
+    card_cp "$id" "$A/system/ssh/ssh_host_ed25519_key"
     if [ -s "$id.pub" ]; then
-      card_cp "$id.pub" "$A/ssh_host_ed25519_key.pub"
+      card_cp "$id.pub" "$A/system/ssh/ssh_host_ed25519_key.pub"
     fi
-    chmod 600 "$A/ssh_host_ed25519_key" 2>/dev/null || true
+    chmod 600 "$A/system/ssh/ssh_host_ed25519_key" 2>/dev/null || true
   fi
   if command -v shasum >/dev/null 2>&1; then
     digest=$({ cat "$A/autorun.json" "$A/autorun.sh"; printf '%s' "$SALT"; } | shasum -a 256 | awk '{print $1}')
@@ -723,21 +731,22 @@ EOF
   # serves a fixed list and answers the rest with JSON, which the
   # browser will not run as a script.
   make -C "$ROOT" build/mpc-boot-web
-  card_cp "$ROOT/build/mpc-boot-thingy" "$A/mpc-boot-thingy"
-  chmod 755 "$A/mpc-boot-thingy"
-  card_cp "$ROOT/menu-patch/apply.sh" "$A/boot-menu-apply.sh"
-  mkdir -p "$A/patches" "$A/patch-catalog" "$A/boot-edits"
-  card_cp "$ROOT/menu-patch/patches.list" "$A/patches/boot-menu.list"
+  S=$A/system
+  mkdir -p "$S/patches" "$A/patch-catalog" "$A/boot-edits"
+  card_cp "$ROOT/build/mpc-boot-thingy" "$S/mpc-boot-thingy"
+  chmod 755 "$S/mpc-boot-thingy"
+  card_cp "$ROOT/menu-patch/apply.sh" "$S/boot-menu-apply.sh"
+  card_cp "$ROOT/menu-patch/patches.list" "$S/patches/boot-menu.list"
   card_cp "$ROOT/menu-patch/shift-reboot.list" "$A/patch-catalog/shift-reboot.list"
-  card_cp "$ROOT/build/loader.so" "$A/loader.so"
-  chmod 755 "$A/boot-menu-apply.sh" "$A/loader.so"
-  card_cp "$ROOT/build/mpc-boot-web" "$A/mpc-boot-web"
-  chmod 755 "$A/mpc-boot-web"
+  card_cp "$ROOT/build/loader.so" "$S/loader.so"
+  chmod 755 "$S/boot-menu-apply.sh" "$S/loader.so"
+  card_cp "$ROOT/build/mpc-boot-web" "$S/mpc-boot-web"
+  chmod 755 "$S/mpc-boot-web"
   build_web
-  rm -rf "$A/web"
-  mkdir -p "$A/web"
-  card_cp -R "$ROOT/webserver/content/." "$A/web/"
-  printf '%s\n' mpc-boot-thingy > "$A/mpc-boot-thingy.mark"
+  rm -rf "$S/web"
+  mkdir -p "$S/web"
+  card_cp -R "$ROOT/webserver/content/." "$S/web/"
+  printf '%s\n' mpc-boot-thingy > "$S/mpc-boot-thingy.mark"
   ensure_toolkit
   copy_toolkit "$sd"
   if [ "${2:-}" = quiet ]; then
@@ -746,15 +755,15 @@ EOF
   echo "Installed mpc-boot-thingy in $A"
   echo "SSH, no key file. Password is empty (press Enter):"
   echo "  ssh root@192.168.155.1"
-  echo "Bash is in $sd/os_tools/bin"
+  echo "Bash is in $sd/autorun/os_tools/bin"
   if [ -n "$TOOLS" ]; then
-    echo "Dev tools are in $sd/os_tools/bin"
+    echo "Dev tools are in $sd/autorun/os_tools/bin"
   fi
   echo "Web page:"
   echo "  http://192.168.155.1:8080"
-  if command -v ssh-keygen >/dev/null 2>&1 && [ -s "$A/ssh_host_ed25519_key.pub" ]; then
+  if command -v ssh-keygen >/dev/null 2>&1 && [ -s "$A/system/ssh/ssh_host_ed25519_key.pub" ]; then
     echo "This MPC's fingerprint:"
-    ssh-keygen -lf "$A/ssh_host_ed25519_key.pub"
+    ssh-keygen -lf "$A/system/ssh/ssh_host_ed25519_key.pub"
   fi
 }
 
@@ -806,7 +815,7 @@ add_over_ssh() {
   install_app "$stage" "$ADD" "$TITLE"
   {
     printf '%s\n' "$media"
-    tar -C "$stage" --format ustar -cf - apps
+    tar -C "$stage" --format ustar -cf - autorun
   } | ssh_mpc "$ask" 'IFS= read -r dest; tar -C "$dest" -xf -'
   ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
   echo "Updated the app on $media over SSH."
@@ -826,25 +835,25 @@ install_over_ssh() {
   stage=$(mktemp -d)
   trap 'rm -f "$ask"; rm -rf "$stage"' EXIT
   keep_key=0
-  if printf '%s\n' "$media" | ssh_mpc "$ask" 'IFS= read -r dest; test -s "$dest/autorun/ssh_host_ed25519_key"'; then
+  if printf '%s\n' "$media" | ssh_mpc "$ask" 'IFS= read -r dest; test -s "$dest/autorun/system/ssh/ssh_host_ed25519_key"'; then
     keep_key=1
   fi
   write_autorun "$stage" quiet
   if [ "$keep_key" = 1 ]; then
-    rm -f "$stage/autorun/ssh_host_ed25519_key" "$stage/autorun/ssh_host_ed25519_key.pub"
+    rm -f "$stage/autorun/system/ssh/ssh_host_ed25519_key" "$stage/autorun/system/ssh/ssh_host_ed25519_key.pub"
   fi
   {
     printf '%s\n' "$media"
-    tar -C "$stage" --format ustar -cf - autorun os_tools
-  } | ssh_mpc "$ask" 'IFS= read -r dest; mkdir -p "$dest"; hold=$(mktemp -d); for n in .bashrc .bash_profile; do if [ -f "$dest/os_tools/$n" ]; then cp "$dest/os_tools/$n" "$hold/$n"; fi; done; rm -rf "$dest/os_tools"; tar -C "$dest" -xf -; mkdir -p "$dest/os_tools"; for n in .bashrc .bash_profile; do if [ -f "$hold/$n" ]; then cp "$hold/$n" "$dest/os_tools/$n"; fi; done; rm -rf "$hold"'
+    tar -C "$stage" --format ustar -cf - autorun
+  } | ssh_mpc "$ask" 'IFS= read -r dest; mkdir -p "$dest"; hold=$(mktemp -d); for n in .bashrc .bash_profile; do if [ -f "$dest/autorun/os_tools/$n" ]; then cp "$dest/autorun/os_tools/$n" "$hold/$n"; fi; done; rm -rf "$dest/autorun/os_tools"; tar -C "$dest" -xf -; mkdir -p "$dest/autorun/os_tools"; for n in .bashrc .bash_profile; do if [ -f "$hold/$n" ]; then cp "$hold/$n" "$dest/autorun/os_tools/$n"; fi; done; rm -rf "$hold"'
   echo "Updated $media over SSH. Menu entries are kept."
-  echo "Bash is in $media/os_tools/bin"
+  echo "Bash is in $media/autorun/os_tools/bin"
   if [ -n "$TOOLS" ]; then
-    echo "Dev tools are in $media/os_tools/bin"
+    echo "Dev tools are in $media/autorun/os_tools/bin"
   fi
-  if [ "$keep_key" = 0 ] && command -v ssh-keygen >/dev/null 2>&1 && [ -s "$stage/autorun/ssh_host_ed25519_key.pub" ]; then
+  if [ "$keep_key" = 0 ] && command -v ssh-keygen >/dev/null 2>&1 && [ -s "$stage/autorun/system/ssh/ssh_host_ed25519_key.pub" ]; then
     echo "This MPC's fingerprint:"
-    ssh-keygen -lf "$stage/autorun/ssh_host_ed25519_key.pub"
+    ssh-keygen -lf "$stage/autorun/system/ssh/ssh_host_ed25519_key.pub"
   fi
   if [ -z "$REBOOT" ]; then
     ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
@@ -1037,7 +1046,7 @@ if [ -n "$ADD" ]; then
     exit 1
   fi
   install_app "$SD" "$ADD" "$TITLE"
-  if [ ! -f "$SD/autorun/mpc-boot-thingy.mark" ]; then
+  if [ ! -f "$SD/autorun/system/mpc-boot-thingy.mark" ]; then
     echo "The boot menu is not on this card yet. Run ./setup.sh --SD \"$SD\" to install it."
   fi
   exit 0
@@ -1060,7 +1069,8 @@ elif [ "$kind" != empty ]; then
   backup_autorun "$SD"
 fi
 
-probe=$SD/.mpc-boot-thingy-write-test
+mkdir -p "$SD/autorun"
+probe=$SD/autorun/.mpc-boot-thingy-write-test
 if ! touch "$probe" 2>/dev/null; then
   echo "ERROR: not writable: $SD" >&2
   exit 1
