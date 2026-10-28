@@ -81,6 +81,7 @@ jobs:
           test ! -d "$card/os_tools"
           test ! -d "$card/apps"
           test -s "$card/autorun/system/ssh/ssh_host_ed25519_key"
+          test -s "$card/autorun/splash-screen.png"
           test -s "$card/autorun/autorun.check"
           test -f "$card/autorun/system/web/index.html"
           test -f "$card/autorun/system/web/xterm.js"
@@ -109,6 +110,7 @@ jobs:
               "mpc-boot-thingy-sd/autorun/system/web/xterm-addon-fit.js",
               "mpc-boot-thingy-sd/autorun/system/ssh/ssh_host_ed25519_key",
               "mpc-boot-thingy-sd/autorun/autorun.check",
+              "mpc-boot-thingy-sd/autorun/splash-screen.png",
               "mpc-boot-thingy-sd/autorun/os_tools/bin/bash",
           ]
           banned = [

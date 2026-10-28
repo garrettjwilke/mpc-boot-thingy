@@ -95,8 +95,10 @@ is relative to the card root, so a program in autorun/apps is
 run=autorun/apps/name/program. A boot.entry inside an app folder is
 relative to that folder.
 
-After the splash, the screen says "Hold SHIFT for boot thingy" and the
-SHIFT button lights. Press SHIFT while that text is up to open the menu.
+The screen shows autorun/splash-screen.png. That file is a PNG, 320 by
+240. Replace it to change the picture. A missing file, or a PNG of the
+wrong size, shows the words "Hold SHIFT for boot thingy" instead.
+The SHIFT button lights. Press SHIFT while the picture is up to open the menu.
 The encoder moves the line. The encoder press confirms it.
 Waiting without pressing SHIFT starts the stock app.
 
@@ -747,6 +749,13 @@ EOF
   mkdir -p "$S/web"
   card_cp -R "$ROOT/webserver/content/." "$S/web/"
   printf '%s\n' mpc-boot-thingy > "$S/mpc-boot-thingy.mark"
+  if [ ! -s "$A/splash-screen.png" ]; then
+    if [ ! -s "$ROOT/splash-screen.png" ]; then
+      echo "ERROR: splash-screen.png is missing" >&2
+      exit 1
+    fi
+    card_cp "$ROOT/splash-screen.png" "$A/splash-screen.png"
+  fi
   ensure_toolkit
   copy_toolkit "$sd"
   if [ "${2:-}" = quiet ]; then
@@ -835,12 +844,19 @@ install_over_ssh() {
   stage=$(mktemp -d)
   trap 'rm -f "$ask"; rm -rf "$stage"' EXIT
   keep_key=0
+  keep_splash=0
   if printf '%s\n' "$media" | ssh_mpc "$ask" 'IFS= read -r dest; test -s "$dest/autorun/system/ssh/ssh_host_ed25519_key"'; then
     keep_key=1
+  fi
+  if printf '%s\n' "$media" | ssh_mpc "$ask" 'IFS= read -r dest; test -s "$dest/autorun/splash-screen.png"'; then
+    keep_splash=1
   fi
   write_autorun "$stage" quiet
   if [ "$keep_key" = 1 ]; then
     rm -f "$stage/autorun/system/ssh/ssh_host_ed25519_key" "$stage/autorun/system/ssh/ssh_host_ed25519_key.pub"
+  fi
+  if [ "$keep_splash" = 1 ]; then
+    rm -f "$stage/autorun/splash-screen.png"
   fi
   {
     printf '%s\n' "$media"

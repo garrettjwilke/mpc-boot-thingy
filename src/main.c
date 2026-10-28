@@ -5,6 +5,7 @@
 #include "boot_ui.h"
 #include "input.h"
 #include "menu.h"
+#include "png.h"
 #include "screen.h"
 #include "surface.h"
 #include "theme.h"
@@ -278,10 +279,22 @@ static void draw_pixels(struct screen *scr, uint32_t *back, uint32_t *front, str
         surface_pad(midi, u->led[i].index, u->led[i].r, u->led[i].g, u->led[i].b);
 }
 
-static void draw_prompt(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi, int theme) {
+static int draw_prompt(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi, const char *card,
+                       int theme) {
     struct ui u = {.px = back};
-    boot_draw_prompt(&u, theme);
+    char path[512];
+    int shown = 0;
+    int n = 0;
+    if (card && card[0]) n = snprintf(path, sizeof path, "%s/autorun/splash-screen.png", card);
+    if (n > 0 && (size_t)n < sizeof path && png_load_screen(path, back) == 0) {
+        shown = 1;
+    } else {
+        if (n > 0 && (size_t)n < sizeof path && access(path, R_OK) == 0)
+            fprintf(stderr, "splash skipped, need a 320x240 PNG: %s\n", path);
+        boot_draw_prompt(&u, theme);
+    }
     draw_pixels(scr, back, front, midi, &u);
+    return shown;
 }
 
 static int draw_menu_frame(struct screen *scr, uint32_t *back, uint32_t *front, struct surface *midi,
@@ -713,8 +726,10 @@ int main(int argc, char **argv) {
     int has_boot_now = check_boot_now_target(boot_now_id, sizeof boot_now_id);
     int held = 1;
     if (!open_menu && !has_boot_now) {
-        draw_prompt(&scr, back, front, &midi, theme);
-        printf("prompt: hold SHIFT for boot thingy\n");
+        if (draw_prompt(&scr, back, front, &midi, card, theme))
+            printf("prompt: splash, hold SHIFT for boot thingy\n");
+        else
+            printf("prompt: hold SHIFT for boot thingy\n");
         fflush(stdout);
         held = wait_shift(&midi, &parser, &dev);
     }
