@@ -12,7 +12,6 @@ enum {
     BOOT_SCREEN_THEME,
     BOOT_SCREEN_STORAGE,
     BOOT_SCREEN_POWER,
-    BOOT_SCREEN_EDIT,
     BOOT_SCREEN_ITEM_EDIT,
     BOOT_SCREEN_DELETE_CONFIRM,
     BOOT_SCREEN_ENTRY,
@@ -54,12 +53,10 @@ struct boot_ui {
     struct ui_list_state default_ls;
     struct ui_list_state theme_ls;
     struct ui_list_state power_ls;
-    struct ui_list_state edit_ls;
     struct ui_list_state item_ls;
     struct ui_list_state delete_confirm_ls;
     struct ui_list_state entry_ls;
     struct ui_list_state unsaved_ls;
-    int item_prev_screen;
     int soft_active;
     struct ui_soft_state soft_ks;
     struct boot_patch catalog[BOOT_PATCH_MAX];

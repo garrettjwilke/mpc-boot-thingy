@@ -73,15 +73,6 @@ static void trim(char *s) {
     while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) s[--n] = 0;
 }
 
-static int edit_count(const struct boot_ui *s) {
-    int n = 0;
-    if (!s->menu) return 0;
-    for (int i = 0; i < s->menu->n; i++) {
-        if (!s->menu->items[i].stock) n++;
-    }
-    return n;
-}
-
 static void mark_enabled(struct boot_ui *s, const char *list) {
     char buf[MENU_PATCHES];
     char *p;
@@ -100,13 +91,12 @@ static void mark_enabled(struct boot_ui *s, const char *list) {
     }
 }
 
-static int open_menu_item_edit(struct boot_ui *s, int menu_idx, int prev_screen) {
+static int open_menu_item_edit(struct boot_ui *s, int menu_idx) {
     if (!s->menu || menu_idx < 0 || menu_idx >= s->menu->n || s->menu->items[menu_idx].stock) return -1;
     memset(s->enabled, 0, sizeof s->enabled);
     memset(s->saved_on, 0, sizeof s->saved_on);
     s->entry_ls.cursor = 0;
     s->item_ls.cursor = 0;
-    s->item_prev_screen = prev_screen;
     s->edit_new = 0;
     snprintf(s->edit_id, sizeof s->edit_id, "%s", s->menu->items[menu_idx].id);
     snprintf(s->edit_title, sizeof s->edit_title, "%s", s->menu->items[menu_idx].title);
@@ -119,22 +109,11 @@ static int open_menu_item_edit(struct boot_ui *s, int menu_idx, int prev_screen)
     return 0;
 }
 
-static void open_entry(struct boot_ui *s, int cursor) {
-    int seen = 0;
-    if (cursor > 0 && s->menu) {
-        for (int i = 0; i < s->menu->n; i++) {
-            if (s->menu->items[i].stock) continue;
-            seen++;
-            if (seen != cursor) continue;
-            open_menu_item_edit(s, i, BOOT_SCREEN_EDIT);
-            return;
-        }
-    }
+static void open_new_entry(struct boot_ui *s) {
     memset(s->enabled, 0, sizeof s->enabled);
     memset(s->saved_on, 0, sizeof s->saved_on);
     s->entry_ls.cursor = 0;
     s->item_ls.cursor = 0;
-    s->item_prev_screen = BOOT_SCREEN_EDIT;
     s->edit_id[0] = 0;
     s->edit_title[0] = 0;
     s->edit_args[0] = 0;
@@ -168,7 +147,7 @@ static void queue_save(struct boot_ui *s) {
 
 static void discard_entry(struct boot_ui *s) {
     memcpy(s->enabled, s->saved_on, sizeof s->enabled);
-    s->screen = s->edit_new ? BOOT_SCREEN_EDIT : BOOT_SCREEN_ITEM_EDIT;
+    s->screen = s->edit_new ? BOOT_SCREEN_APPS : BOOT_SCREEN_ITEM_EDIT;
 }
 
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int default_index) {
@@ -181,7 +160,6 @@ void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme, int de
     ui->theme_ls.cursor = theme;
     ui->default_index = default_index;
     ui->default_ls.cursor = default_index;
-    ui->item_prev_screen = BOOT_SCREEN_EDIT;
     int n = menu ? menu->n : 0;
     int sel = (default_index >= 0 && default_index < n) ? default_index : 0;
     ui->apps_ls.cursor = 1 + sel;
@@ -202,7 +180,7 @@ int boot_ui_dirty(const struct boot_ui *ui) {
 
 void boot_ui_saved(struct boot_ui *ui) {
     if (!ui) return;
-    ui->screen = ui->item_prev_screen == BOOT_SCREEN_APPS ? BOOT_SCREEN_APPS : BOOT_SCREEN_EDIT;
+    ui->screen = BOOT_SCREEN_APPS;
     memset(ui->enabled, 0, sizeof ui->enabled);
     memset(ui->saved_on, 0, sizeof ui->saved_on);
     ui->edit_new = 0;
@@ -302,22 +280,20 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
 
     int screen = s->screen;
     int n = s->menu ? s->menu->n : 0;
-    int edits = 1 + edit_count(s);
-    if (edits > MENU_MAX) edits = MENU_MAX;
     if (screen == BOOT_SCREEN_SETTINGS) move_cursor(&s->settings_ls, 4, &ev);
     else if (screen == BOOT_SCREEN_DEFAULT) move_cursor(&s->default_ls, n, &ev);
     else if (screen == BOOT_SCREEN_THEME) {
         move_cursor(&s->theme_ls, theme_count(), &ev);
         s->theme = s->theme_ls.cursor;
     } else if (screen == BOOT_SCREEN_POWER) move_cursor(&s->power_ls, 3, &ev);
-    else if (screen == BOOT_SCREEN_EDIT) move_cursor(&s->edit_ls, edits, &ev);
     else if (screen == BOOT_SCREEN_ITEM_EDIT) move_cursor(&s->item_ls, s->edit_boot_ac50 ? 4 : 3, &ev);
     else if (screen == BOOT_SCREEN_DELETE_CONFIRM) move_cursor(&s->delete_confirm_ls, 2, &ev);
     else if (screen == BOOT_SCREEN_ENTRY) move_cursor(&s->entry_ls, s->ncatalog, &ev);
     else if (screen == BOOT_SCREEN_UNSAVED) move_cursor(&s->unsaved_ls, 3, &ev);
 
     int left = 0;
-    int shift_boot = (screen == BOOT_SCREEN_APPS && s->apps_ls.cursor > 0 && shift_held);
+    int shift_apps = (screen == BOOT_SCREEN_APPS && shift_held);
+    int shift_boot = (shift_apps && s->apps_ls.cursor > 0);
     if (screen == BOOT_SCREEN_STORAGE) {
         if (input_down(&ev, IN_B1) || ev.encoder_press) {
             if (s->storage_status == USB_STORAGE_STATUS_ACTIVE) {
@@ -328,21 +304,25 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
             }
             left = 1;
         }
-    } else if (shift_boot && input_down(&ev, IN_B1)) {
-        int sel = s->apps_ls.cursor - 1;
-        if (sel >= 0 && sel < n) note_default(s, sel);
-        left = 1;
-    } else if (shift_boot && input_down(&ev, IN_B2)) {
-        int sel = s->apps_ls.cursor - 1;
-        if (sel >= 0 && sel < n) {
-            if (s->menu->items[sel].stock) boot_ui_notice(s, "Stock cannot be edited");
-            else open_menu_item_edit(s, sel, BOOT_SCREEN_APPS);
+    } else if (shift_apps && input_down(&ev, IN_B1)) {
+        if (shift_boot) {
+            int sel = s->apps_ls.cursor - 1;
+            if (sel >= 0 && sel < n) note_default(s, sel);
         }
         left = 1;
-    } else if (shift_boot && input_down(&ev, IN_B3)) {
+    } else if (shift_apps && input_down(&ev, IN_B2)) {
+        if (shift_boot) {
+            int sel = s->apps_ls.cursor - 1;
+            if (sel >= 0 && sel < n) {
+                if (s->menu->items[sel].stock) boot_ui_notice(s, "Stock cannot be edited");
+                else open_menu_item_edit(s, sel);
+            }
+        }
+        left = 1;
+    } else if (shift_apps && input_down(&ev, IN_B3)) {
+        open_new_entry(s);
         left = 1;
     } else if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B1)) {
-        s->screen = BOOT_SCREEN_EDIT;
         left = 1;
     } else if (screen == BOOT_SCREEN_APPS && input_down(&ev, IN_B2)) {
         s->power_ls.cursor = 0;
@@ -367,15 +347,15 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
             s->theme_ls.cursor = s->saved_theme;
             s->screen = BOOT_SCREEN_SETTINGS;
         } else if (screen == BOOT_SCREEN_ENTRY) {
-            s->screen = boot_ui_dirty(s) ? BOOT_SCREEN_UNSAVED : (s->edit_new ? BOOT_SCREEN_EDIT : BOOT_SCREEN_ITEM_EDIT);
+            s->screen = boot_ui_dirty(s) ? BOOT_SCREEN_UNSAVED : (s->edit_new ? BOOT_SCREEN_APPS : BOOT_SCREEN_ITEM_EDIT);
             if (s->screen == BOOT_SCREEN_UNSAVED) s->unsaved_ls.cursor = 0;
         } else if (screen == BOOT_SCREEN_UNSAVED) {
             s->screen = BOOT_SCREEN_ENTRY;
         } else if (screen == BOOT_SCREEN_ITEM_EDIT) {
-            s->screen = s->item_prev_screen == BOOT_SCREEN_APPS ? BOOT_SCREEN_APPS : BOOT_SCREEN_EDIT;
+            s->screen = BOOT_SCREEN_APPS;
         } else if (screen == BOOT_SCREEN_DELETE_CONFIRM) {
             s->screen = BOOT_SCREEN_ITEM_EDIT;
-        } else if (screen == BOOT_SCREEN_EDIT || screen == BOOT_SCREEN_SETTINGS || screen == BOOT_SCREEN_POWER) {
+        } else if (screen == BOOT_SCREEN_SETTINGS || screen == BOOT_SCREEN_POWER) {
             s->screen = BOOT_SCREEN_APPS;
         } else {
             s->screen = BOOT_SCREEN_SETTINGS;
@@ -429,12 +409,12 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
 
     const char *labels[3];
     if (s->screen == BOOT_SCREEN_APPS) {
-        if (shift_held && next_apps_cursor > 0) {
-            labels[0] = "Set Default";
-            labels[1] = "Edit Entry";
-            labels[2] = "";
+        if (shift_held) {
+            labels[0] = next_apps_cursor > 0 ? "Set Default" : "";
+            labels[1] = next_apps_cursor > 0 ? "Edit Entry" : "";
+            labels[2] = "New Entry";
         } else {
-            labels[0] = "Boot Edit";
+            labels[0] = "";
             labels[1] = "Power";
             labels[2] = "Settings";
         }
@@ -474,13 +454,6 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         else if (s->storage_status == USB_STORAGE_STATUS_ACTIVE) hint = "connected via USB";
         else if (s->storage_status == USB_STORAGE_STATUS_EXITING) hint = "exiting USB storage...";
         else if (s->storage_status == USB_STORAGE_STATUS_ERROR) hint = "storage error";
-    } else if (s->screen == BOOT_SCREEN_EDIT) {
-        title = "Boot Edit";
-        if (s->edit_ls.cursor == 0) {
-            hint = "create custom boot with patches";
-        } else {
-            hint = "press to edit or delete";
-        }
     } else if (s->screen == BOOT_SCREEN_ITEM_EDIT) {
         fit_text(title_buf, sizeof title_buf, s->edit_title);
         title = title_buf;
@@ -615,21 +588,6 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         if (tn > 8) tn = 8;
         for (int i = 0; i < tn; i++) rows[i] = theme_at(i)->name;
         ui_list(u, 8, list_y, 304, list_h, rows, tn, rows_st, widget_in, &s->theme_ls);
-    } else if (s->screen == BOOT_SCREEN_EDIT) {
-        char text[MENU_MAX][48];
-        const char *rows[MENU_MAX];
-        int shown = 0;
-        rows[shown++] = "New entry";
-        if (s->menu) {
-            for (int i = 0; i < s->menu->n && shown < MENU_MAX; i++) {
-                if (s->menu->items[i].stock) continue;
-                fit_text(text[shown], sizeof text[shown], s->menu->items[i].title);
-                rows[shown] = text[shown];
-                shown++;
-            }
-        }
-        int hit = ui_list(u, 8, list_y, 304, list_h, rows, shown, rows_st, widget_in, &s->edit_ls);
-        if (hit >= 0) open_entry(s, hit);
     } else if (s->screen == BOOT_SCREEN_ITEM_EDIT) {
         const char *rows[4];
         int count = 0;
@@ -669,8 +627,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         } else if (hit == 1) {
             s->action = BOOT_ACT_DELETE_ENTRY;
             snprintf(s->action_id, sizeof s->action_id, "%s", s->edit_id);
-            s->screen = s->item_prev_screen == BOOT_SCREEN_APPS ? BOOT_SCREEN_APPS : BOOT_SCREEN_EDIT;
-            s->edit_ls.cursor = 0;
+            s->screen = BOOT_SCREEN_APPS;
         }
     } else if (s->screen == BOOT_SCREEN_ENTRY) {
         char text[BOOT_PATCH_MAX][48];

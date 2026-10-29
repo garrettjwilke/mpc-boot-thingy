@@ -240,7 +240,6 @@ int main(void) {
     assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
     assert(strcmp(boot.edit_id, "app:20-lab") == 0);
     assert(strcmp(boot.edit_title, "Lab firmware") == 0);
-    assert(boot.item_prev_screen == BOOT_SCREEN_APPS);
 
     /* Pressing B1 (Back) from Shift->Edit Entry returns directly to BOOT_SCREEN_APPS */
     input_begin(&in, 0);
@@ -556,12 +555,18 @@ int main(void) {
 
     boot_ui_init(&boot, &again, 0, 0);
     boot_ui_set_catalog(&boot, catalog, nc);
+
+    /* Pressing B1 without shift is a no-op on BOOT_SCREEN_APPS */
     input_begin(&in, 0);
     in.down = 1u << IN_B1;
     boot_frame(&view, &in, &boot);
-    assert(boot.screen == BOOT_SCREEN_EDIT);
+    assert(boot.screen == BOOT_SCREEN_APPS);
+
+    /* Shift + B3 opens New Entry (BOOT_SCREEN_ENTRY) */
     input_begin(&in, 0);
-    in.encoder_press = 1;
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    in.down = 1u << IN_B3;
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_ENTRY);
     assert(strcmp(boot.edit_title, "") == 0);
@@ -569,11 +574,13 @@ int main(void) {
     input_begin(&in, 0);
     in.down = 1u << IN_B1;
     boot_frame(&view, &in, &boot);
-    assert(boot.screen == BOOT_SCREEN_EDIT);
+    assert(boot.screen == BOOT_SCREEN_APPS);
     assert(boot.action == BOOT_ACT_NONE);
 
     input_begin(&in, 0);
-    in.encoder_press = 1;
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    in.down = 1u << IN_B3;
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_ENTRY);
     input_begin(&in, 0);
@@ -604,16 +611,16 @@ int main(void) {
     input_begin(&in, 0);
     in.encoder_press = 1;
     boot_frame(&view, &in, &boot);
-    assert(boot.screen == BOOT_SCREEN_EDIT);
+    assert(boot.screen == BOOT_SCREEN_APPS);
     assert(boot.action == BOOT_ACT_NONE);
     assert(!boot_ui_dirty(&boot));
 
+    /* Hover Lab mix (menu index `found` -> apps_ls.cursor = 1 + found) and Shift + B2 -> Edit Entry */
+    boot.apps_ls.cursor = 1 + found;
     input_begin(&in, 0);
-    in.encoder = 3; /* Move past New entry (0), Lab firmware (1), Snake (2) to Lab mix (3) */
-    boot_frame(&view, &in, &boot);
-    assert(boot.edit_ls.cursor == 3);
-    input_begin(&in, 0);
-    in.encoder_press = 1;
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    in.down = 1u << IN_B2;
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
     assert(strcmp(boot.edit_title, "Lab mix") == 0);
@@ -638,18 +645,16 @@ int main(void) {
     assert(boot.save_npatches == 1);
     assert(strcmp(boot.save_patches[0], "wide-screen.list") == 0);
     boot_ui_saved(&boot);
-    assert(boot.screen == BOOT_SCREEN_EDIT);
+    assert(boot.screen == BOOT_SCREEN_APPS);
 
-    /* Test selecting an installed app in Boot Edit (row 1: Lab firmware) */
+    /* Test editing an installed app via Shift + B2 on main menu (cursor 2: Lab firmware) */
     boot_ui_init(&boot, &again, 0, 0);
     boot_ui_set_catalog(&boot, catalog, nc);
-    boot.screen = BOOT_SCREEN_EDIT;
+    boot.apps_ls.cursor = 2;
     input_begin(&in, 0);
-    in.encoder = 1;
-    boot_frame(&view, &in, &boot);
-    assert(boot.edit_ls.cursor == 1);
-    input_begin(&in, 0);
-    in.encoder_press = 1;
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    in.down = 1u << IN_B2;
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
     assert(strcmp(boot.edit_id, "app:20-lab") == 0);
@@ -744,12 +749,13 @@ int main(void) {
     boot_frame(&view, &in, &boot);
     assert(boot.action == BOOT_ACT_DELETE_ENTRY);
     assert(strcmp(boot.action_id, "app:20-lab") == 0);
-    assert(boot.screen == BOOT_SCREEN_EDIT);
+    assert(boot.screen == BOOT_SCREEN_APPS);
 
-    /* Test B2 Rename button in BOOT_SCREEN_ENTRY */
+    /* Test B2 Rename button in BOOT_SCREEN_ENTRY opened via Shift + B3 */
     input_begin(&in, 0);
-    boot.edit_ls.cursor = 0; /* New entry */
-    in.encoder_press = 1;
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    in.down = 1u << IN_B3;
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_ENTRY);
     assert(boot.edit_new);

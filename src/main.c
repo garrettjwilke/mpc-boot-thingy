@@ -1061,12 +1061,9 @@ int main(int argc, char **argv) {
                 boot_ui_set_catalog(&ui, catalog, npatches);
                 ui.default_index = menu_default_index(&menu, card);
                 boot_ui_saved(&ui);
-                int seen = 0;
                 for (int j = 0; j < menu.n; j++) {
-                    if (menu.items[j].stock) continue;
-                    seen++;
                     if (strcmp(menu.items[j].id, out_id) == 0) {
-                        ui.edit_ls.cursor = seen;
+                        ui.apps_ls.cursor = 1 + j;
                         break;
                     }
                 }
@@ -1110,6 +1107,8 @@ int main(int argc, char **argv) {
                 npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
                 boot_ui_set_catalog(&ui, catalog, npatches);
                 ui.default_index = menu_default_index(&menu, card);
+                int dsel = (ui.default_index >= 0 && ui.default_index < menu.n) ? ui.default_index : 0;
+                ui.apps_ls.cursor = 1 + dsel;
                 boot_ui_notice(&ui, "Deleted");
             } else {
                 boot_ui_notice(&ui, "Could not delete");
