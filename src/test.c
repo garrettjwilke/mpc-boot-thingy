@@ -172,12 +172,12 @@ int main(void) {
     boot_frame(&view, &in, &boot);
     assert(boot.apps_ls.cursor == 0);
 
-    /* Shift menu should NOT open on row 0 (USB storage) */
+    /* Holding shift on row 0 (USB storage) should not trigger Set Default on B1 */
     input_begin(&in, 0);
     in.shift = 1;
     in.held = 1u << IN_SHIFT;
     boot_frame(&view, &in, &boot);
-    assert(boot.shift_menu.shown == 0);
+    assert(boot.action == BOOT_ACT_NONE);
 
     /* Pressing encoder on row 0 should start USB storage */
     input_begin(&in, 0);
@@ -196,30 +196,57 @@ int main(void) {
     boot_frame(&view, &in, &boot);
     assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
-    /* Test shift menu to set default on an app row (cursor > 0) */
+    /* Test shift + top buttons (Set Default, Edit Entry) on an app row (cursor > 0) */
     boot_ui_init(&boot, &m, 0, 0);
     assert(boot.apps_ls.cursor == 1);
+    /* On Stock (cursor == 1), Shift + B2 (Edit Entry) shows notice and stays on apps screen */
+    input_begin(&in, 0);
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    in.down = 1u << IN_B2;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_APPS);
+    assert(strcmp(boot.notice, "Stock cannot be edited") == 0);
+
+    /* Scroll to app:20-lab (cursor == 2) */
     input_begin(&in, 0);
     in.encoder = 1;
     boot_frame(&view, &in, &boot);
     assert(boot.apps_ls.cursor == 2);
     assert(boot.action == BOOT_ACT_NONE);
+
+    /* Holding shift does NOT draw a popup over the center of the screen */
     input_begin(&in, 0);
     in.shift = 1;
     in.held = 1u << IN_SHIFT;
     boot_frame(&view, &in, &boot);
-    assert(boot.shift_menu.shown == 1);
-    assert(boot.shift_menu.n == 2);
-    assert(strcmp(boot.shift_menu.items[0].label, "Yes") == 0);
-    assert(strcmp(boot.shift_menu.items[1].label, "No") == 0);
-    assert(px[50 * UI_W + 262] == theme_at(0)->menu_fill);
+    assert(px[50 * UI_W + 262] == theme_at(0)->bg);
+
+    /* Shift + B1 sets current item as default */
     input_begin(&in, 0);
     in.shift = 1;
     in.held = 1u << IN_SHIFT;
-    in.encoder_press = 1;
+    in.down = 1u << IN_B1;
     boot_frame(&view, &in, &boot);
     assert(boot.action == BOOT_ACT_SET_DEFAULT);
     assert(strcmp(boot.action_id, "app:20-lab") == 0);
+
+    /* Shift + B2 opens Edit Entry (BOOT_SCREEN_ITEM_EDIT) for the selected boot item */
+    input_begin(&in, 0);
+    in.shift = 1;
+    in.held = 1u << IN_SHIFT;
+    in.down = 1u << IN_B2;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_ITEM_EDIT);
+    assert(strcmp(boot.edit_id, "app:20-lab") == 0);
+    assert(strcmp(boot.edit_title, "Lab firmware") == 0);
+    assert(boot.item_prev_screen == BOOT_SCREEN_APPS);
+
+    /* Pressing B1 (Back) from Shift->Edit Entry returns directly to BOOT_SCREEN_APPS */
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_APPS);
 
     /* Test that default_index = 1 initializes cursor to 2 (pointing to app:20-lab) */
     boot_ui_init(&boot, &m, 0, 1);
@@ -385,7 +412,7 @@ int main(void) {
     boot_frame(&view, &in, &boot);
     assert(boot.action == BOOT_ACT_RELOAD);
 
-    /* Test reload from soft key 2 on apps screen */
+    /* Test Power button (soft key 2) on apps screen and Power page options */
     boot.action = BOOT_ACT_NONE;
     input_begin(&in, 0);
     in.down = 1u << IN_B1;
@@ -394,7 +421,46 @@ int main(void) {
     input_begin(&in, 0);
     in.down = 1u << IN_B2;
     boot_frame(&view, &in, &boot);
-    assert(boot.action == BOOT_ACT_RELOAD);
+    assert(boot.screen == BOOT_SCREEN_POWER);
+    assert(boot.power_ls.cursor == 0);
+    assert(boot.action == BOOT_ACT_NONE);
+
+    /* Row 0: Reboot */
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_REBOOT);
+
+    /* Row 1: Shut Down */
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.power_ls.cursor == 1);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.action == BOOT_ACT_SHUTDOWN);
+
+    /* Row 2: Cancel returns to BOOT_SCREEN_APPS */
+    input_begin(&in, 0);
+    in.encoder = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.power_ls.cursor == 2);
+    input_begin(&in, 0);
+    in.encoder_press = 1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_APPS);
+    assert(boot.action == BOOT_ACT_NONE);
+
+    /* Re-open Power page and press B1 (Back) to return to BOOT_SCREEN_APPS */
+    input_begin(&in, 0);
+    in.down = 1u << IN_B2;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_POWER);
+    input_begin(&in, 0);
+    in.down = 1u << IN_B1;
+    boot_frame(&view, &in, &boot);
+    assert(boot.screen == BOOT_SCREEN_APPS);
 
     snprintf(path, sizeof path, "%s/autorun/patch-catalog", dir);
     mkdir_p(path);

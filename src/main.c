@@ -671,6 +671,38 @@ static void release_devices(struct surface *midi, struct screen *scr) {
     if (scr->px || scr->fd >= 0) screen_close(scr);
 }
 
+static void reset_bootcount(void) {
+    int fd = open("/sys/devices/platform/fdc20000.syscon/fdc20000.syscon:bootcount/bootcount", O_WRONLY);
+    if (fd >= 0) {
+        ssize_t w = write(fd, "0\n", 2);
+        (void)w;
+        close(fd);
+    }
+}
+
+static void power_action(int shutdown, struct surface *midi, struct screen *scr, uint32_t *back, uint32_t *front) {
+    if (back && front && scr && scr->px) {
+        struct ui u = {.px = back};
+        ui_clear(&u, 0);
+        draw_pixels(scr, back, front, midi, &u);
+    }
+    reset_bootcount();
+    sync();
+    if (shutdown) {
+        char *argv1[] = {"poweroff", NULL};
+        if (run_cmd(argv1) != 0) {
+            char *argv2[] = {"systemctl", "poweroff", NULL};
+            run_cmd(argv2);
+        }
+    } else {
+        char *argv1[] = {"reboot", NULL};
+        if (run_cmd(argv1) != 0) {
+            char *argv2[] = {"systemctl", "reboot", NULL};
+            run_cmd(argv2);
+        }
+    }
+}
+
 static const char *boot_now_file_path(void) {
     const char *env = getenv("MPC_BOOT_NOW_FILE");
     return (env && env[0]) ? env : "/run/mpc-boot-now";
@@ -1140,6 +1172,18 @@ int main(int argc, char **argv) {
                 started = mono_ms();
                 wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
             }
+        }
+        if (ui.action == BOOT_ACT_REBOOT || ui.action == BOOT_ACT_SHUTDOWN) {
+            int shutdown = (ui.action == BOOT_ACT_SHUTDOWN);
+            if (ui.storage_status == USB_STORAGE_STATUS_ACTIVE) {
+                usb_storage_stop(NULL, 0);
+                ui.storage_status = USB_STORAGE_STATUS_IDLE;
+            }
+            remove_pid_file();
+            power_action(shutdown, &midi, &scr, back, front);
+            release_devices(&midi, &scr);
+            rc = 0;
+            break;
         }
     }
 
