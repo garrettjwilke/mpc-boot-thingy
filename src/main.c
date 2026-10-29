@@ -12,6 +12,7 @@
 #include "ui.h"
 #include "usb_storage.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -310,6 +311,7 @@ static int wait_shift(struct surface *midi, struct parser *p, struct input_dev *
     double start = mono_ms();
     int held = 0;
     while (mono_ms() - start < WINDOW_MS) {
+        if (g_reload_requested || g_boot_now_requested) break;
         struct pollfd pf = {.fd = midi->fd, .events = POLLIN};
         int left = (int)(WINDOW_MS - (mono_ms() - start));
         if (left < 1) left = 1;
@@ -325,8 +327,40 @@ static int wait_shift(struct surface *midi, struct parser *p, struct input_dev *
     return held;
 }
 
-static void card_root_of(const char *autorun, char *out, size_t n) {
-    snprintf(out, n, "%s", autorun ? autorun : "");
+static int has_autorun_dir(const char *card) {
+    char path[512];
+    struct stat st;
+    if (!card || !card[0]) return 0;
+    if (snprintf(path, sizeof path, "%s/autorun", card) >= (int)sizeof path) return 0;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static void write_autorun_stamp(const char *card) {
+    char path[512];
+    if (!has_autorun_dir(card)) return;
+    if (snprintf(path, sizeof path, "%s/autorun\n", card) >= (int)sizeof path) return;
+    FILE *f = fopen("/run/mpc-boot-autorun", "w");
+    if (f) {
+        fputs(path, f);
+        fclose(f);
+    }
+}
+
+static void strip_to_card_root(char *out, size_t n) {
+    size_t len = strlen(out);
+    while (len > 1 && out[len - 1] == '/') out[--len] = 0;
+
+    char *ar = NULL;
+    for (char *p = out; (p = strstr(p, "/autorun")) != NULL; p += 8) {
+        if (p[8] == 0 || p[8] == '/') ar = p;
+    }
+    if (ar) {
+        if (ar == out) out[1] = 0;
+        else *ar = 0;
+        return;
+    }
+    if (has_autorun_dir(out)) return;
+
     char *slash = strrchr(out, '/');
     if (!slash) {
         snprintf(out, n, ".");
@@ -334,6 +368,53 @@ static void card_root_of(const char *autorun, char *out, size_t n) {
     }
     if (slash == out) out[1] = 0;
     else *slash = 0;
+}
+
+static void card_root_of(const char *autorun, char *out, size_t n) {
+    snprintf(out, n, "%s", autorun ? autorun : "");
+    strip_to_card_root(out, n);
+
+    if (!has_autorun_dir(out)) {
+        FILE *f = fopen("/run/mpc-boot-autorun", "r");
+        if (f) {
+            char line[512];
+            if (fgets(line, sizeof line, f)) {
+                size_t l = strlen(line);
+                while (l > 0 && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = 0;
+                strip_to_card_root(line, sizeof line);
+                if (has_autorun_dir(line)) snprintf(out, n, "%s", line);
+            }
+            fclose(f);
+        }
+    }
+
+    if (!has_autorun_dir(out)) {
+        DIR *d = opendir("/media");
+        if (d) {
+            struct dirent *de;
+            char fallback[512] = {0};
+            while ((de = readdir(d)) != NULL) {
+                if (de->d_name[0] == '.') continue;
+                if (strncmp(de->d_name, "az01-internal", 13) == 0) continue;
+                char cand[512];
+                struct stat st;
+                if (snprintf(cand, sizeof cand, "/media/%s", de->d_name) >= (int)sizeof cand) continue;
+                if (stat(cand, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+                if (has_autorun_dir(cand)) {
+                    snprintf(out, n, "%s", cand);
+                    fallback[0] = 0;
+                    break;
+                }
+                if (!fallback[0]) snprintf(fallback, sizeof fallback, "%s", cand);
+            }
+            closedir(d);
+            if (!has_autorun_dir(out) && fallback[0]) {
+                snprintf(out, n, "%s", fallback);
+            }
+        }
+    }
+
+    write_autorun_stamp(out);
 }
 
 /* Longest mount point that contains path. Spaces in /proc/mounts are octal escapes. */
@@ -393,9 +474,13 @@ static void app_log(const char *fmt, ...) {
 }
 
 static int copy_file(const char *src, const char *dst) {
+    char tmp[512];
+    int use_tmp = snprintf(tmp, sizeof tmp, "%s.tmp.%d", dst, (int)getpid()) < (int)sizeof tmp;
+    const char *write_path = use_tmp ? tmp : dst;
+    if (!use_tmp) unlink(dst);
     FILE *in = fopen(src, "rb");
     if (!in) return -1;
-    FILE *out = fopen(dst, "wb");
+    FILE *out = fopen(write_path, "wb");
     if (!out) {
         fclose(in);
         return -1;
@@ -411,10 +496,17 @@ static int copy_file(const char *src, const char *dst) {
     }
     if (ferror(in)) rc = -1;
     fclose(in);
-    fclose(out);
-    if (rc) unlink(dst);
-    else chmod(dst, 0755);
-    return rc;
+    if (fclose(out) != 0) rc = -1;
+    if (rc) {
+        unlink(write_path);
+        return -1;
+    }
+    chmod(write_path, 0755);
+    if (use_tmp && rename(tmp, dst) != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
 }
 
 static void resolve_run(const char *card, const char *run, char *out, size_t n) {
@@ -629,35 +721,31 @@ static void flush_and_drop_caches(const char *card) {
 
 static void update_run_binary(const char *card) {
     char src[512];
-    if (snprintf(src, sizeof src, "%s/autorun/mpc-boot-thingy", card) >= (int)sizeof src) return;
+    if (snprintf(src, sizeof src, "%s/autorun/system/mpc-boot-thingy", card) >= (int)sizeof src) return;
     if (access(src, R_OK) == 0) {
         copy_file(src, "/run/mpc-boot-thingy");
     }
 }
 
-static void reload_and_reexec(struct surface *midi, struct screen *scr, const char *card, int argc, char **argv) {
+static void reload_menu_state(char *card, size_t card_n, struct menu *menu, struct boot_ui *ui,
+                              struct boot_patch *catalog, int *npatches_out, int *theme_out, int *def_out) {
+    if (!has_autorun_dir(card)) {
+        card_root_of(card, card, card_n);
+    } else {
+        write_autorun_stamp(card);
+    }
     flush_and_drop_caches(card);
     update_run_binary(card);
-    release_devices(midi, scr);
-    remove_pid_file();
-
-    char *new_av[32];
-    int na = 0;
-    new_av[na++] = argv[0];
-    new_av[na++] = "--menu";
-    for (int i = 1; i < argc && na < 30; i++) {
-        if (strcmp(argv[i], "--menu") != 0) {
-            new_av[na++] = argv[i];
-        }
-    }
-    new_av[na] = NULL;
-
-    execv(new_av[0], new_av);
-    if (strcmp(new_av[0], "/run/mpc-boot-thingy") != 0 && access("/run/mpc-boot-thingy", X_OK) == 0) {
-        new_av[0] = "/run/mpc-boot-thingy";
-        execv(new_av[0], new_av);
-    }
-    perror("execv reload");
+    menu_load(menu, card);
+    int theme = theme_load(card);
+    int def = menu_default_index(menu, card);
+    if (theme_out) *theme_out = theme;
+    if (def_out) *def_out = def;
+    boot_ui_init(ui, menu, theme, def);
+    int npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
+    if (npatches_out) *npatches_out = npatches;
+    boot_ui_set_catalog(ui, catalog, npatches);
+    boot_ui_notice(ui, "Reloaded menu");
 }
 
 static int wants_menu(int argc, char **argv) {
@@ -752,8 +840,8 @@ int main(int argc, char **argv) {
                 free(front);
                 return 0;
             }
+            memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
             if (ran != 2) {
-                memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
                 if (reopen_after_app(&midi, &scr) != 0) {
                     release_devices(&midi, &scr);
                     restore_stock_if_stopped(card);
@@ -765,7 +853,7 @@ int main(int argc, char **argv) {
                 dev = (struct input_dev){0};
             }
         }
-    } else if (!held) {
+    } else if (!held && !g_reload_requested && !g_boot_now_requested) {
         if (def <= 0) {
             if (!stock_ready(card)) show_loading(&scr, &midi, theme);
             mount_patched_stock(card);
@@ -784,8 +872,8 @@ int main(int argc, char **argv) {
             free(front);
             return 0;
         }
+        memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
         if (ran != 2) {
-            memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
             if (reopen_after_app(&midi, &scr) != 0) {
                 release_devices(&midi, &scr);
                 restore_stock_if_stopped(card);
@@ -813,30 +901,28 @@ int main(int argc, char **argv) {
     for (;;) {
         if (g_reload_requested) {
             g_reload_requested = 0;
-            show_loading(&scr, &midi, theme_load(card));
-            reload_and_reexec(&midi, &scr, card, argc, argv);
-            if (reopen_after_app(&midi, &scr) != 0) break;
-            menu_load(&menu, card);
-            theme = theme_load(card);
-            def = menu_default_index(&menu, card);
-            boot_ui_init(&ui, &menu, theme, def);
-            npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
-            boot_ui_set_catalog(&ui, catalog, npatches);
-            boot_ui_notice(&ui, "Reloaded menu");
+            reload_menu_state(card, sizeof card, &menu, &ui, catalog, &npatches, &theme, &def);
+            memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
+            input_begin(&quiet, &dev);
+            started = mono_ms();
+            wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            print_menu(&menu, ui.apps_ls.cursor);
         }
         if (g_boot_now_requested || access(boot_now_file_path(), F_OK) == 0) {
             g_boot_now_requested = 0;
             char b_id[MENU_ID] = {0};
             if (check_boot_now_target(b_id, sizeof b_id)) {
                 if (strcmp(b_id, MENU_BOOT_THINGY_ID) == 0) {
-                    ui.screen = BOOT_SCREEN_APPS;
-                    ui.action = BOOT_ACT_NONE;
+                    reload_menu_state(card, sizeof card, &menu, &ui, catalog, &npatches, &theme, &def);
                     ui.notice[0] = 0;
+                    memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
                     input_begin(&quiet, &dev);
                     started = mono_ms();
                     wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
                     continue;
                 }
+                if (!has_autorun_dir(card)) card_root_of(card, card, sizeof card);
+                flush_and_drop_caches(card);
                 menu_load(&menu, card);
                 int sel = -1;
                 for (int i = 0; i < menu.n; i++) {
@@ -851,8 +937,8 @@ int main(int argc, char **argv) {
                         rc = 0;
                         break;
                     }
+                    memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
                     if (ran != 2) {
-                        memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
                         if (reopen_after_app(&midi, &scr) != 0) break;
                         parser = (struct parser){0};
                         dev = (struct input_dev){0};
@@ -900,8 +986,8 @@ int main(int argc, char **argv) {
                 rc = 0;
                 break;
             }
+            memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
             if (ran != 2) {
-                memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
                 if (reopen_after_app(&midi, &scr) != 0) break;
                 parser = (struct parser){0};
                 dev = (struct input_dev){0};
@@ -921,37 +1007,43 @@ int main(int argc, char **argv) {
         }
         if (ui.action == BOOT_ACT_RELOAD) {
             ui.action = BOOT_ACT_NONE;
-            show_loading(&scr, &midi, theme_load(card));
-            reload_and_reexec(&midi, &scr, card, argc, argv);
-            if (reopen_after_app(&midi, &scr) != 0) break;
-            menu_load(&menu, card);
-            theme = theme_load(card);
-            def = menu_default_index(&menu, card);
-            boot_ui_init(&ui, &menu, theme, def);
-            npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
-            boot_ui_set_catalog(&ui, catalog, npatches);
-            boot_ui_notice(&ui, "Reloaded menu");
+            reload_menu_state(card, sizeof card, &menu, &ui, catalog, &npatches, &theme, &def);
+            memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
             input_begin(&quiet, &dev);
             started = mono_ms();
             wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+            print_menu(&menu, ui.apps_ls.cursor);
             continue;
         }
         if (ui.action == BOOT_ACT_SAVE_BOOT) {
             const char *ids[BOOT_PATCH_MAX];
             char out_id[MENU_ID];
-            int i, rc;
+            int i, s_rc;
             for (i = 0; i < ui.save_npatches && i < BOOT_PATCH_MAX; i++) ids[i] = ui.save_patches[i];
-            rc = boot_edit_save(card, ui.save_id[0] ? ui.save_id : NULL, ui.save_title[0] ? ui.save_title : NULL, ids,
-                                ui.save_npatches, out_id, sizeof out_id);
-            if (rc == 0) {
+            s_rc = boot_edit_save(card, ui.save_id[0] ? ui.save_id : NULL, ui.save_title[0] ? ui.save_title : NULL, ids,
+                                  ui.save_npatches, out_id, sizeof out_id);
+            if (s_rc == 0) {
+                flush_and_drop_caches(card);
                 menu_load(&menu, card);
+                npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
+                boot_ui_set_catalog(&ui, catalog, npatches);
                 ui.default_index = menu_default_index(&menu, card);
                 boot_ui_saved(&ui);
-            } else if (rc == BOOT_EDIT_BAD_PATCH) {
+                int seen = 0;
+                for (int j = 0; j < menu.n; j++) {
+                    if (menu.items[j].stock) continue;
+                    seen++;
+                    if (strcmp(menu.items[j].id, out_id) == 0) {
+                        ui.edit_ls.cursor = seen;
+                        break;
+                    }
+                }
+                boot_ui_notice(&ui, "Saved boot entry");
+            } else if (s_rc == BOOT_EDIT_BAD_PATCH) {
                 boot_ui_notice(&ui, "That patch is not on the card");
-            } else if (rc == BOOT_EDIT_BAD_TITLE) {
+            } else if (s_rc == BOOT_EDIT_BAD_TITLE) {
                 boot_ui_notice(&ui, "Title is not valid");
-            } else if (rc == BOOT_EDIT_BAD_ID) {
+            } else if (s_rc == BOOT_EDIT_BAD_ID) {
                 boot_ui_notice(&ui, "That entry cannot be edited");
             } else {
                 boot_ui_notice(&ui, boot_edit_last_error());
@@ -1023,6 +1115,8 @@ int main(int argc, char **argv) {
 
             char err_buf[128] = {0};
             usb_storage_stop(err_buf, sizeof err_buf);
+            if (!has_autorun_dir(card)) card_root_of(card, card, sizeof card);
+            else write_autorun_stamp(card);
             flush_and_drop_caches(card);
             menu_load(&menu, card);
             npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);

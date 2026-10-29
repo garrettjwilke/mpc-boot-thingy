@@ -609,8 +609,23 @@ static int find_sep(const char *buf, size_t n, size_t *at) {
     return 0;
 }
 
+static int reload_boot_thingy(void);
+
 static void card_of(const char *autorun, char *out, size_t n) {
-    snprintf(out, n, "%s", autorun);
+    snprintf(out, n, "%s", autorun ? autorun : "");
+    size_t len = strlen(out);
+    while (len > 1 && out[len - 1] == '/') out[--len] = 0;
+
+    char *ar = NULL;
+    for (char *p = out; (p = strstr(p, "/autorun")) != NULL; p += 8) {
+        if (p[8] == 0 || p[8] == '/') ar = p;
+    }
+    if (ar) {
+        if (ar == out) out[1] = 0;
+        else *ar = 0;
+        return;
+    }
+
     char *slash = strrchr(out, '/');
     if (!slash) {
         snprintf(out, n, ".");
@@ -1035,6 +1050,7 @@ static void handle_upload(int fd, struct io *io, int has_len, size_t content_len
             unlink(oldp);
         }
     }
+    reload_boot_thingy();
     snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"app:%s\"}\n", slug);
     send_json(fd, 200, "OK", resp);
 }
@@ -1094,6 +1110,22 @@ static void handle_delete(int fd, const char *query) {
             return;
         }
     }
+    {
+        char def_path[PATH_MAX], line[MENU_ID];
+        if (snprintf(def_path, sizeof def_path, "%s/autorun/system/boot-default", g_card) < (int)sizeof def_path) {
+            FILE *df = fopen(def_path, "r");
+            if (df) {
+                int is_def = 0;
+                if (fgets(line, sizeof line, df)) {
+                    trim_inplace(line);
+                    if (strcmp(line, id) == 0) is_def = 1;
+                }
+                fclose(df);
+                if (is_def) menu_set_default(g_card, "stock");
+            }
+        }
+    }
+    reload_boot_thingy();
     send_json(fd, 200, "OK", "{\"ok\":true}\n");
 }
 
@@ -1156,6 +1188,7 @@ static void handle_default(int fd, struct io *io, int has_len, size_t content_le
         send_err(fd, 500, "Internal Server Error", "could not save the default");
         return;
     }
+    reload_boot_thingy();
     snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"%s\"}\n", id);
     /* ids are single-line menu keys without quotes */
     if (strchr(id, '"') || strchr(id, '\\') || strchr(id, '\n')) {
@@ -1195,22 +1228,47 @@ static int trigger_boot_now(const char *id) {
     if (pid == 0) {
         setsid();
         sync();
-        int running = 0;
         FILE *pf = fopen(pid_path, "r");
         if (pf) {
             int target_pid = 0;
             if (fscanf(pf, "%d", &target_pid) == 1 && target_pid > 1) {
-                if (kill(target_pid, 0) == 0) {
-                    kill(target_pid, SIGUSR2);
-                    running = 1;
+                if (kill(target_pid, SIGUSR2) == 0) {
+                    fclose(pf);
+                    _exit(0);
                 }
             }
             fclose(pf);
         }
-        if (running) {
+        pid_t kpid = fork();
+        if (kpid == 0) {
+            int null_fd = open("/dev/null", O_RDWR);
+            if (null_fd >= 0) {
+                dup2(null_fd, STDOUT_FILENO);
+                dup2(null_fd, STDERR_FILENO);
+                if (null_fd > STDERR_FILENO) close(null_fd);
+            }
             execlp("killall", "killall", "-USR2", "mpc-boot-thingy", (char *)NULL);
-            _exit(0);
+            _exit(127);
         }
+        if (kpid > 0) {
+            int kst = 0;
+            if (waitpid(kpid, &kst, 0) > 0 && WIFEXITED(kst) && WEXITSTATUS(kst) == 0) {
+                _exit(0);
+            }
+        }
+        pid_t rpid = fork();
+        if (rpid == 0) {
+            int null_fd = open("/dev/null", O_RDWR);
+            if (null_fd >= 0) {
+                dup2(null_fd, STDOUT_FILENO);
+                dup2(null_fd, STDERR_FILENO);
+                if (null_fd > STDERR_FILENO) close(null_fd);
+            }
+            execlp("systemctl", "systemctl", "reset-failed", "mpc-boot-thingy.service", (char *)NULL);
+            _exit(127);
+        }
+        if (rpid > 0) waitpid(rpid, NULL, 0);
+
         char run_bin[512];
         snprintf(run_bin, sizeof run_bin, "%s/system/mpc-boot-thingy", g_autorun);
         if (access("/run/mpc-boot-thingy", X_OK) == 0) {
@@ -1300,7 +1358,10 @@ static int reload_boot_thingy(void) {
         if (pf) {
             int target_pid = 0;
             if (fscanf(pf, "%d", &target_pid) == 1 && target_pid > 1) {
-                kill(target_pid, SIGHUP);
+                if (kill(target_pid, SIGHUP) == 0) {
+                    fclose(pf);
+                    _exit(0);
+                }
             }
             fclose(pf);
         }
@@ -1815,6 +1876,7 @@ static void handle_boot_edit(int fd, struct io *io, int has_len, size_t content_
         send_err(fd, 500, "Internal Server Error", boot_edit_last_error());
         return;
     }
+    reload_boot_thingy();
     if (strchr(out_id, '"') || strchr(out_id, '\\')) {
         send_json(fd, 200, "OK", "{\"ok\":true}\n");
         return;
@@ -1922,6 +1984,15 @@ int main(int argc, char **argv) {
         return 1;
     }
     card_of(g_autorun, g_card, sizeof g_card);
+    if (strcmp(g_card, ".") != 0) {
+        char norm_autorun[PATH_MAX];
+        struct stat st;
+        if (snprintf(norm_autorun, sizeof norm_autorun, "%s/autorun", g_card) < (int)sizeof norm_autorun &&
+            stat(norm_autorun, &st) == 0 && S_ISDIR(st.st_mode)) {
+            snprintf(g_autorun, sizeof g_autorun, "%s", norm_autorun);
+        }
+    }
+    (void)chdir("/");
     g_port = 8080;
     snprintf(g_bind, sizeof g_bind, "%s", "127.0.0.1");
     if (argc > 2) {
