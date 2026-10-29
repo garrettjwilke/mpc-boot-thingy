@@ -113,6 +113,26 @@ int usb_storage_find_sd_device(char *out, size_t n) {
     return -1;
 }
 
+static int sd_is_mounted(const char *sd_dev) {
+    if (!sd_dev || !sd_dev[0]) return 0;
+    FILE *f = fopen("/proc/mounts", "r");
+    if (!f) return 0;
+    char line[1024];
+    size_t dev_len = strlen(sd_dev);
+    int mounted = 0;
+    while (fgets(line, sizeof line, f)) {
+        char dev[256], mnt[512];
+        if (sscanf(line, "%255s %511s", dev, mnt) == 2) {
+            if (strncmp(dev, sd_dev, dev_len) == 0 && strncmp(mnt, "/media/", 7) == 0) {
+                mounted = 1;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    return mounted;
+}
+
 static void unmount_sd_partitions(const char *sd_dev) {
     sync();
 
@@ -120,6 +140,7 @@ static void unmount_sd_partitions(const char *sd_dev) {
     if (!f) return;
 
     char line[1024];
+    char devs[32][256];
     char mounts[32][512];
     int nmounts = 0;
 
@@ -143,25 +164,30 @@ static void unmount_sd_partitions(const char *sd_dev) {
                     }
                 }
                 decoded[di] = 0;
-                snprintf(mounts[nmounts++], sizeof mounts[0], "%s", decoded);
+                snprintf(devs[nmounts], sizeof devs[0], "%s", dev);
+                snprintf(mounts[nmounts], sizeof mounts[0], "%s", decoded);
+                nmounts++;
             }
         }
     }
     fclose(f);
 
-    /* Unmount identified mount points */
+    /* Unmount identified partitions cleanly via edisksctl (<device>) and umount */
     for (int i = 0; i < nmounts; i++) {
-        char *av_edisks[] = {EDISKSCTL, "unmount", mounts[i], NULL};
         if (access(EDISKSCTL, X_OK) == 0) {
-            run_cmd(av_edisks);
+            char *av_edisks_dev[] = {EDISKSCTL, "unmount", devs[i], NULL};
+            run_cmd(av_edisks_dev);
         }
 #ifdef __linux__
-        if (umount2(mounts[i], MNT_DETACH) != 0) {
-            umount(mounts[i]);
+        if (umount(mounts[i]) != 0) {
+            umount2(mounts[i], MNT_DETACH);
         }
 #endif
-        char *av_umount[] = {"umount", "-l", mounts[i], NULL};
-        run_cmd(av_umount);
+        char *av_umount[] = {"umount", mounts[i], NULL};
+        if (run_cmd(av_umount) != 0) {
+            char *av_lazy[] = {"umount", "-l", mounts[i], NULL};
+            run_cmd(av_lazy);
+        }
     }
 }
 
@@ -260,14 +286,21 @@ int usb_storage_stop(char *err_buf, size_t err_len) {
     char *av_udev[] = {"udevadm", "trigger", "--subsystem-match=block", NULL};
     run_cmd(av_udev);
 
-    /* Also attempt explicit edisksctl mount if partition is known */
+    /* Wait up to 5 seconds for edisksd / udev to remount the SD card,
+       trying explicit edisksctl mount if not yet mounted. */
     char part[64];
     if (usb_storage_find_sd_device(part, sizeof part) == 0) {
         char part1[80];
         snprintf(part1, sizeof part1, "%sp1", part);
-        if (access(part1, F_OK) == 0 && access(EDISKSCTL, X_OK) == 0) {
-            char *av_mount[] = {EDISKSCTL, "mount", part1, NULL};
-            run_cmd(av_mount);
+        for (int retry = 0; retry < 50; retry++) {
+            if (sd_is_mounted(part)) break;
+            if ((retry == 3 || retry == 15 || retry == 30) && access(EDISKSCTL, X_OK) == 0) {
+                const char *target = access(part1, F_OK) == 0 ? part1 : part;
+                char *av_mount[] = {EDISKSCTL, "mount", (char *)target, NULL};
+                run_cmd(av_mount);
+                if (sd_is_mounted(part)) break;
+            }
+            usleep(100 * 1000);
         }
     }
 

@@ -116,6 +116,8 @@ static const char LAUNCH_BODY[] =
     "chmod 755 \"$WRAP\"\n"
     "mount --bind \"$WRAP\" \"$LAUNCH\" || die \"could not mount the patch loader\"\n"
     "printf '%s\\n' \"$PATCH_DIR\" > \"$STAMP\" || die \"could not record the patch directory\"\n"
+    "AUTORUN=$(CDPATH= cd -- \"$HERE/../..\" && pwd)\n"
+    "printf '%s\\n' \"$AUTORUN\" > /run/mpc-boot-autorun 2>/dev/null || true\n"
     "log \"patch loader mounted\"\n";
 
 static void trim(char *s) {

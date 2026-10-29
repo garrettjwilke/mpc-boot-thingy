@@ -671,12 +671,11 @@ remount_card() {
   fi
 }
 remount_card
-bin=$D/mpc-boot-web
+cp "$D/mpc-boot-web" "$RAM/mpc-boot-web"
+chmod 755 "$RAM/mpc-boot-web"
+bin=$RAM/mpc-boot-web
 if ! "$bin" --check >/dev/null 2>&1; then
-  echo 'card binary did not run, copying into /run'
-  cp "$D/mpc-boot-web" "$RAM/mpc-boot-web"
-  chmod 755 "$RAM/mpc-boot-web"
-  bin=$RAM/mpc-boot-web
+  bin=$D/mpc-boot-web
 fi
 usb_wait=0
 while ! grep -q '192.168.155.1' /proc/net/fib_trie 2>/dev/null; do
@@ -733,6 +732,8 @@ EOF
   # serves a fixed list and answers the rest with JSON, which the
   # browser will not run as a script.
   make -C "$ROOT" build/mpc-boot-web
+  rm -f "$A/mpc-boot-thingy" "$A/mpc-boot-web" "$A/boot-menu-apply.sh" "$A/loader.so" "$A/web.sh" "$A/ssh.sh" "$A/mpc-boot-thingy.mark"
+  rm -rf "$A/web" "$A/patches"
   S=$A/system
   mkdir -p "$S/patches" "$A/patch-catalog" "$A/boot-edits"
   card_cp "$ROOT/build/mpc-boot-thingy" "$S/mpc-boot-thingy"
@@ -826,7 +827,7 @@ add_over_ssh() {
     printf '%s\n' "$media"
     tar -C "$stage" --format ustar -cf - autorun
   } | ssh_mpc "$ask" 'IFS= read -r dest; tar -C "$dest" -xf -'
-  ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
+  ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; card=$(find /media -mindepth 1 -maxdepth 1 -type d ! -name "az01-internal*" 2>/dev/null | head -n 1); if [ -n "$card" ] && [ -d "$card/autorun" ]; then printf "%s\n" "$card/autorun" > /run/mpc-boot-autorun 2>/dev/null || true; mount -o remount,exec "$card" 2>/dev/null || true; fi; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
   echo "Updated the app on $media over SSH."
 }
 
@@ -872,7 +873,7 @@ install_over_ssh() {
     ssh-keygen -lf "$stage/autorun/system/ssh/ssh_host_ed25519_key.pub"
   fi
   if [ -z "$REBOOT" ]; then
-    ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
+    ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; card=$(find /media -mindepth 1 -maxdepth 1 -type d ! -name "az01-internal*" 2>/dev/null | head -n 1); if [ -n "$card" ] && [ -d "$card/autorun" ]; then rm -f "$card/autorun/mpc-boot-thingy" "$card/autorun/mpc-boot-web" "$card/autorun/boot-menu-apply.sh" "$card/autorun/loader.so" "$card/autorun/web.sh" "$card/autorun/ssh.sh" "$card/autorun/mpc-boot-thingy.mark"; rm -rf "$card/autorun/web" "$card/autorun/patches"; printf "%s\n" "$card/autorun" > /run/mpc-boot-autorun 2>/dev/null || true; if [ -f "$card/autorun/system/mpc-boot-thingy" ]; then cp "$card/autorun/system/mpc-boot-thingy" /run/mpc-boot-thingy.tmp 2>/dev/null && chmod 755 /run/mpc-boot-thingy.tmp 2>/dev/null && mv /run/mpc-boot-thingy.tmp /run/mpc-boot-thingy 2>/dev/null || true; fi; mount -o remount,exec "$card" 2>/dev/null || true; fi; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
     echo "Reloaded mpc-boot-thingy over SSH."
   fi
 }

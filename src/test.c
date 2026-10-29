@@ -454,6 +454,7 @@ int main(void) {
     assert(strstr(body, "wide-screen.list"));
     assert(strstr(body, "extra-pads.list"));
     assert(strstr(body, "../../system/loader.so"));
+    assert(strstr(body, "/run/mpc-boot-autorun"));
     free(body);
     {
         struct stat st;
