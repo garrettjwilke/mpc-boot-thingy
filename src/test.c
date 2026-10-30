@@ -6,7 +6,7 @@
 #include "png.h"
 #include "theme.h"
 #include "ui.h"
-#include "usb_storage.h"
+#include "usb_sd.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -181,16 +181,16 @@ int main(void) {
   boot_frame(&view, &in, &boot);
   assert(boot.action == BOOT_ACT_NONE);
 
-  /* Pressing encoder on row 0 should start USB storage */
+  /* Pressing encoder on row 0 opens USB storage. Start waits for the next frame. */
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_STORAGE);
-  assert(boot.action == BOOT_ACT_START_USB_STORAGE);
+  assert(boot.action == BOOT_ACT_NONE);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_PREPARING);
 
-  /* Return to apps screen */
+  /* Return to apps screen. The card is not bound yet. */
   boot.screen = BOOT_SCREEN_APPS;
-  boot.storage_status = USB_STORAGE_STATUS_IDLE;
   boot.action = BOOT_ACT_NONE;
   boot.apps_ls.cursor = 1;
 
@@ -329,6 +329,7 @@ int main(void) {
   assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
   /* Test USB storage from settings menu (index 2) */
+  ui_usb_sd_set_mock(1, 0);
   boot.action = BOOT_ACT_NONE;
   input_begin(&in, 0);
   in.encoder = 2;
@@ -338,75 +339,81 @@ int main(void) {
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_STORAGE);
-  assert(boot.action == BOOT_ACT_START_USB_STORAGE);
-  assert(boot.storage_status == USB_STORAGE_STATUS_PREPARING);
+  assert(boot.action == BOOT_ACT_NONE);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_PREPARING);
 
-  /* Storage screen: simulate start succeeded */
-  char dev_path[64];
-  assert(usb_storage_find_sd_device(dev_path, sizeof dev_path) == 0);
-  assert(strcmp(dev_path, "/dev/mock_mmcblk1") == 0);
-  char err_buf[128];
-  assert(usb_storage_start(err_buf, sizeof err_buf) == 0);
-  boot.storage_status = USB_STORAGE_STATUS_ACTIVE;
-  boot.action = BOOT_ACT_NONE;
+  /* Next frame runs the mock start. */
+  input_begin(&in, 0);
+  boot_frame(&view, &in, &boot);
+  assert(boot.screen == BOOT_SCREEN_STORAGE);
+  assert(boot.action == BOOT_ACT_NONE);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_ACTIVE);
+  assert(ui_usb_sd_is_active(&boot.usb));
 
-  /* Verify lockout: encoder rotation and other keys do not leave storage screen
-   */
+  /* Encoder rotation and B2/B3 stay on the storage screen. */
   input_begin(&in, 0);
   in.encoder = 5;
   in.down = (1u << IN_B2) | (1u << IN_B3);
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_STORAGE);
   assert(boot.action == BOOT_ACT_NONE);
-  assert(boot.storage_status == USB_STORAGE_STATUS_ACTIVE);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_ACTIVE);
 
-  /* Test exit via soft key B1 */
+  /* B1 draws the eject screen. The following frame finishes and asks main to reload. */
   input_begin(&in, 0);
   in.down = 1u << IN_B1;
   boot_frame(&view, &in, &boot);
-  assert(boot.action == BOOT_ACT_STOP_USB_STORAGE);
-  assert(boot.storage_status == USB_STORAGE_STATUS_EXITING);
-
-  /* Simulate main loop finishing stop */
-  assert(usb_storage_stop(err_buf, sizeof err_buf) == 0);
+  assert(boot.action == BOOT_ACT_NONE);
+  assert(boot.screen == BOOT_SCREEN_STORAGE);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_EXITING);
+  input_begin(&in, 0);
+  boot_frame(&view, &in, &boot);
+  assert(boot.action == BOOT_ACT_USB_SD_DONE);
+  assert(!ui_usb_sd_is_active(&boot.usb));
+  /* Main reloads the card and returns to the apps list. Stay here to re-enter. */
   boot.action = BOOT_ACT_NONE;
-  boot.storage_status = USB_STORAGE_STATUS_IDLE;
   boot.screen = BOOT_SCREEN_SETTINGS;
 
-  /* Test exit via Encoder press */
+  /* Exit via encoder press. */
   boot.settings_ls.cursor = 2;
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_STORAGE);
-  assert(boot.action == BOOT_ACT_START_USB_STORAGE);
-  boot.storage_status = USB_STORAGE_STATUS_ACTIVE;
-  boot.action = BOOT_ACT_NONE;
+  assert(boot.action == BOOT_ACT_NONE);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_PREPARING);
+  input_begin(&in, 0);
+  boot_frame(&view, &in, &boot);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_ACTIVE);
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
-  assert(boot.action == BOOT_ACT_STOP_USB_STORAGE);
-  assert(boot.storage_status == USB_STORAGE_STATUS_EXITING);
+  assert(boot.action == BOOT_ACT_NONE);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_EXITING);
+  input_begin(&in, 0);
+  boot_frame(&view, &in, &boot);
+  assert(boot.action == BOOT_ACT_USB_SD_DONE);
   boot.action = BOOT_ACT_NONE;
-  boot.storage_status = USB_STORAGE_STATUS_IDLE;
   boot.screen = BOOT_SCREEN_SETTINGS;
 
-  /* Test storage error state and Back button */
+  /* A failed start returns to Settings from the error screen. */
+  ui_usb_sd_set_mock(1, 1);
   boot.settings_ls.cursor = 2;
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_STORAGE);
-  usb_storage_set_mock(1, 1);
-  assert(usb_storage_start(err_buf, sizeof err_buf) != 0);
-  boot.storage_status = USB_STORAGE_STATUS_ERROR;
-  snprintf(boot.storage_err, sizeof boot.storage_err, "%s", err_buf);
-  boot.action = BOOT_ACT_NONE;
+  assert(boot.usb.phase == UI_USB_SD_PHASE_PREPARING);
+  input_begin(&in, 0);
+  boot_frame(&view, &in, &boot);
+  assert(boot.screen == BOOT_SCREEN_STORAGE);
+  assert(boot.usb.phase == UI_USB_SD_PHASE_ERROR);
+  assert(!ui_usb_sd_is_active(&boot.usb));
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_SETTINGS);
-  usb_storage_set_mock(1, 0);
+  ui_usb_sd_set_mock(1, 0);
 
   /* Test reload from settings menu (now index 3) */
   boot.action = BOOT_ACT_NONE;
