@@ -2,16 +2,16 @@
 WARN = -Wall -Wextra
 UI = mpc-ui-toolkit/src
 INC = -Iinc -I$(UI)
-DEV_SRC = src/main.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c \
+DEV_SRC = src/main.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c src/format_sd.c \
 	$(UI)/ui.c $(UI)/widgets.c $(UI)/usb_sd.c $(UI)/input.c $(UI)/screen.c $(UI)/surface.c
-HOST_SRC = src/test.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c \
+HOST_SRC = src/test.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c src/format_sd.c \
 	$(UI)/ui.c $(UI)/widgets.c $(UI)/usb_sd.c $(UI)/input.c
 
 .PHONY: all test clean web-host
 
 all: build/mpc-boot-thingy build/mpc-boot-web build/loader.so
 
-build/mpc-boot-thingy: $(DEV_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h inc/sd_check.h $(UI)/usb_sd.h
+build/mpc-boot-thingy: $(DEV_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h inc/sd_check.h inc/format_sd.h $(UI)/usb_sd.h
 	mkdir -p build
 	zig cc -target aarch64-linux-musl -static -O2 -s -D_DEFAULT_SOURCE -std=c11 $(WARN) $(INC) \
 	  -o $@ $(DEV_SRC)
@@ -40,7 +40,7 @@ build/mpc-boot-web-host: webserver/server.c src/menu.c src/boot_edit.c inc/menu.
 
 web-host: build/mpc-boot-web-host
 
-build/menu-test: $(HOST_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h $(UI)/usb_sd.h
+build/menu-test: $(HOST_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h inc/sd_check.h inc/format_sd.h $(UI)/usb_sd.h
 	mkdir -p build
 	cc -std=c11 -D_DEFAULT_SOURCE -g $(WARN) $(INC) -o $@ $(HOST_SRC)
 

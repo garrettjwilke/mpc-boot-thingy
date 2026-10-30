@@ -16,7 +16,9 @@ enum {
   BOOT_SCREEN_DELETE_CONFIRM,
   BOOT_SCREEN_ENTRY,
   BOOT_SCREEN_UNSAVED,
-  BOOT_SCREEN_TEXT_EDIT
+  BOOT_SCREEN_TEXT_EDIT,
+  BOOT_SCREEN_FORMAT_CONFIRM,
+  BOOT_SCREEN_FORMAT_PROGRESS
 };
 
 enum {
@@ -30,10 +32,11 @@ enum {
   BOOT_ACT_UPDATE_ENTRY,
   BOOT_ACT_DELETE_ENTRY,
   BOOT_ACT_REBOOT,
-  BOOT_ACT_SHUTDOWN
+  BOOT_ACT_SHUTDOWN,
+  BOOT_ACT_FORMAT_SD
 };
 
-enum { BOOT_TEXT_RENAME = 0, BOOT_TEXT_ARGS = 1 };
+enum { BOOT_TEXT_RENAME = 0, BOOT_TEXT_ARGS = 1, BOOT_TEXT_FORMAT_LABEL = 2 };
 
 struct boot_ui {
   const struct menu *menu;
@@ -51,6 +54,7 @@ struct boot_ui {
   struct ui_list_state power_ls;
   struct ui_list_state item_ls;
   struct ui_list_state delete_confirm_ls;
+  struct ui_list_state format_confirm_ls;
   struct ui_list_state entry_ls;
   struct ui_list_state unsaved_ls;
   int soft_active;
@@ -75,6 +79,8 @@ struct boot_ui {
   int text_edit_mode;
   int text_prev_screen;
   char notice[96];
+  char format_label[32];
+  char format_status[128];
   struct ui_usb_sd usb;
 };
 

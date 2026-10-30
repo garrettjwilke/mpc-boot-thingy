@@ -1,6 +1,7 @@
 /* Host self-test: Stock first, drop-in apps and older boot-menu files, bad
  * files skipped. */
 #include "boot_ui.h"
+#include "format_sd.h"
 #include "input.h"
 #include "menu.h"
 #include "png.h"
@@ -16,6 +17,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+static void dummy_progress(const char *phase, void *user) {
+  if (phase && user)
+    snprintf((char *)user, 128, "%s", phase);
+}
 
 static void write_file(const char *path, const char *body) {
   FILE *f = fopen(path, "w");
@@ -885,6 +891,41 @@ int main(void) {
   assert(sd_find_device(NULL, dev_dummy, sizeof dev_dummy, fs_dummy, sizeof fs_dummy) != 0);
   assert(sd_check_repair(NULL) != 0);
   assert(sd_check_repair("/nonexistent/path/for/sd") != 0);
+
+  /* SD format UI & backend sanity tests */
+  struct boot_ui ui_fmt;
+  boot_ui_init(&ui_fmt, &m, 0, 0);
+  assert(strcmp(ui_fmt.format_label, "MPC-Sample") == 0);
+
+  /* Navigate Settings -> Format SD Card */
+  ui_fmt.screen = BOOT_SCREEN_SETTINGS;
+  ui_fmt.settings_ls.cursor = 4;
+  struct input in_press = {.encoder_press = 1};
+  struct ui ui_test = {.px = px};
+  boot_frame(&ui_test, &in_press, &ui_fmt);
+  assert(ui_fmt.screen == BOOT_SCREEN_FORMAT_CONFIRM);
+
+  /* Cancel on Format Confirm returns to Settings */
+  ui_fmt.format_confirm_ls.cursor = 0;
+  boot_frame(&ui_test, &in_press, &ui_fmt);
+  assert(ui_fmt.screen == BOOT_SCREEN_SETTINGS);
+
+  /* Confirm on Format Confirm transitions to text editor */
+  ui_fmt.screen = BOOT_SCREEN_FORMAT_CONFIRM;
+  ui_fmt.format_confirm_ls.cursor = 1;
+  boot_frame(&ui_test, &in_press, &ui_fmt);
+  assert(ui_fmt.screen == BOOT_SCREEN_TEXT_EDIT);
+  assert(ui_fmt.text_edit_mode == BOOT_TEXT_FORMAT_LABEL);
+
+  /* Mock format_sd_card test */
+  format_sd_set_mock(1, 0);
+  char last_status[128] = {0};
+  assert(format_sd_card(dir, "MPC-Sample", dummy_progress, last_status) == 0);
+  assert(strcmp(last_status, "Format complete! Rebooting...") == 0);
+
+  format_sd_set_mock(1, 1);
+  assert(format_sd_card(dir, "MPC-Sample", dummy_progress, last_status) != 0);
+  format_sd_set_mock(0, 0);
 
   puts("selftest ok");
   return 0;

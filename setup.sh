@@ -757,6 +757,7 @@ EOF
     fi
     card_cp "$ROOT/splash-screen.png" "$A/splash-screen.png"
   fi
+  tar --exclude='autorun/apps' --exclude='autorun/boot-edits' -czf "$S/boot-clean.tar.gz" -C "$sd" autorun 2>/dev/null || true
   ensure_toolkit
   copy_toolkit "$sd"
   if [ "${2:-}" = quiet ]; then

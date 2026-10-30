@@ -4,6 +4,7 @@
    that. */
 #include "boot_edit.h"
 #include "boot_ui.h"
+#include "format_sd.h"
 #include "input.h"
 #include "menu.h"
 #include "png.h"
@@ -358,6 +359,23 @@ static int draw_menu_frame(struct screen *scr, uint32_t *back, uint32_t *front,
   boot_frame(&u, in, ui);
   draw_pixels(scr, back, front, midi, &u);
   return u.wake_ms;
+}
+
+struct format_ctx {
+  struct screen *scr;
+  uint32_t *back;
+  uint32_t *front;
+  struct surface *midi;
+  struct boot_ui *ui;
+};
+
+static void on_format_progress(const char *phase, void *userdata) {
+  struct format_ctx *ctx = (struct format_ctx *)userdata;
+  if (!ctx || !ctx->ui)
+    return;
+  snprintf(ctx->ui->format_status, sizeof ctx->ui->format_status, "%s", phase);
+  struct input quiet = {0};
+  draw_menu_frame(ctx->scr, ctx->back, ctx->front, ctx->midi, &quiet, ctx->ui);
 }
 
 static int wait_shift(struct surface *midi, struct parser *p,
@@ -1299,6 +1317,34 @@ int main(int argc, char **argv) {
         input_begin(&quiet, &dev);
         started = mono_ms();
         wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+      }
+    }
+    if (ui.action == BOOT_ACT_FORMAT_SD) {
+      ui.action = BOOT_ACT_NONE;
+      ui.screen = BOOT_SCREEN_FORMAT_PROGRESS;
+      struct format_ctx fctx = {
+          .scr = &scr,
+          .back = back,
+          .front = front,
+          .midi = &midi,
+          .ui = &ui,
+      };
+      on_format_progress("Starting SD format...", &fctx);
+      int frc = format_sd_card(card, ui.format_label, on_format_progress, &fctx);
+      if (frc == 0) {
+        on_format_progress("Format complete! Rebooting now...", &fctx);
+        remove_pid_file();
+        power_action(0, &midi, &scr, back, front);
+        release_devices(&midi, &scr);
+        rc = 0;
+        break;
+      } else {
+        boot_ui_notice(&ui, "Format failed");
+        ui.screen = BOOT_SCREEN_SETTINGS;
+        input_begin(&quiet, &dev);
+        started = mono_ms();
+        wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+        continue;
       }
     }
     if (ui.action == BOOT_ACT_REBOOT || ui.action == BOOT_ACT_SHUTDOWN) {
