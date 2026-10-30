@@ -4,6 +4,7 @@
 #include "input.h"
 #include "menu.h"
 #include "png.h"
+#include "sd_check.h"
 #include "theme.h"
 #include "ui.h"
 #include "usb_sd.h"
@@ -876,6 +877,14 @@ int main(void) {
   write_file(tiny_path, "not a png");
   assert(png_load_screen(tiny_path, px) != 0);
   unlink(tiny_path);
+
+  /* SD sync and check sanity tests */
+  sd_sync_and_drop_caches(NULL);
+  sd_sync_and_drop_caches(dir);
+  char dev_dummy[64], fs_dummy[64];
+  assert(sd_find_device(NULL, dev_dummy, sizeof dev_dummy, fs_dummy, sizeof fs_dummy) != 0);
+  assert(sd_check_repair(NULL) != 0);
+  assert(sd_check_repair("/nonexistent/path/for/sd") != 0);
 
   puts("selftest ok");
   return 0;

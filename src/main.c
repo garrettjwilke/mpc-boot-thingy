@@ -8,6 +8,7 @@
 #include "menu.h"
 #include "png.h"
 #include "screen.h"
+#include "sd_check.h"
 #include "surface.h"
 #include "theme.h"
 #include "ui.h"
@@ -73,6 +74,7 @@ static int run_cmd(char *const argv[]) {
 }
 
 static int remount_exec(const char *card);
+static void flush_and_drop_caches(const char *card);
 
 static int systemctl_ac50(const char *verb) {
   if (verb && strcmp(verb, "stop") == 0) {
@@ -544,7 +546,7 @@ static int remount_exec(const char *card) {
   char target[512];
   if (mount_point(card, target, sizeof target) != 0)
     return -1;
-  char *argv[] = {"mount", "-o", "remount,exec", target, NULL};
+  char *argv[] = {"mount", "-o", "remount,exec,dirsync", target, NULL};
   return run_cmd(argv);
 }
 
@@ -661,6 +663,7 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
       fprintf(stderr, "boot entry failed\n");
       return 2;
     }
+    flush_and_drop_caches(card);
     surface_all_off(midi);
     surface_close(midi);
     screen_close(scr);
@@ -734,8 +737,11 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
     code = WEXITSTATUS(st);
   else if (WIFSIGNALED(st))
     code = 128 + WTERMSIG(st);
-  if (code != 0)
+  if (code != 0) {
     app_log("exit %d\n", code);
+    sd_check_repair(card);
+  }
+  flush_and_drop_caches(card);
   return 0;
 }
 
@@ -863,13 +869,7 @@ static int check_boot_now_target(char *out_id, size_t n) {
 }
 
 static void flush_and_drop_caches(const char *card) {
-  sync();
-  FILE *f = fopen("/proc/sys/vm/drop_caches", "w");
-  if (f) {
-    fputs("3\n", f);
-    fclose(f);
-  }
-  remount_exec(card);
+  sd_sync_and_drop_caches(card);
 }
 
 static void update_run_binary(const char *card) {
@@ -941,6 +941,8 @@ int main(int argc, char **argv) {
   }
   char card[512];
   card_root_of(autorun, card, sizeof card);
+  flush_and_drop_caches(card);
+  sd_check_repair(card);
 
   struct surface midi = {.fd = -1};
   struct screen scr = {.fd = -1};
