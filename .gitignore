@@ -5,3 +5,4 @@ webserver/content/
 *__pycache__*
 dist/
 .zig-cache/
+ignore/
