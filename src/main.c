@@ -564,7 +564,7 @@ static int remount_exec(const char *card) {
   char target[512];
   if (mount_point(card, target, sizeof target) != 0)
     return -1;
-  char *argv[] = {"mount", "-o", "remount,exec,dirsync", target, NULL};
+  char *argv[] = {"mount", "-o", "remount,exec", target, NULL};
   return run_cmd(argv);
 }
 

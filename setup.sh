@@ -520,10 +520,10 @@ EOF
 set -eu
 D=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
-if mount -o remount,exec,dirsync "$card"; then
-  echo "remount exec,dirsync $card"
+if mount -o remount,exec "$card"; then
+  echo "remount exec $card"
 else
-  echo "WARN: could not remount exec,dirsync $card"
+  echo "WARN: could not remount exec $card"
 fi
 cp "$D/system/mpc-boot-thingy" /run/mpc-boot-thingy
 chmod 755 /run/mpc-boot-thingy

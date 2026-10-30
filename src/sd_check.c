@@ -104,7 +104,7 @@ void sd_sync_and_drop_caches(const char *card) {
   if (card && card[0]) {
     char mnt[512];
     if (get_mount_info(card, NULL, 0, mnt, sizeof mnt, NULL, 0) == 0) {
-      char *argv[] = {"mount", "-o", "remount,exec,dirsync", mnt, NULL};
+      char *argv[] = {"mount", "-o", "remount,exec", mnt, NULL};
       run_cmd(argv);
     }
   }
@@ -129,8 +129,8 @@ int sd_check_repair(const char *card) {
   if (!card || !card[0])
     return -1;
 
-  char dev[256] = {0}, mnt[512] = {0}, fstype[64] = {0};
-  if (get_mount_info(card, dev, sizeof dev, mnt, sizeof mnt, fstype,
+  char dev[256] = {0}, fstype[64] = {0};
+  if (get_mount_info(card, dev, sizeof dev, NULL, 0, fstype,
                      sizeof fstype) != 0) {
     return -1;
   }
@@ -147,10 +147,6 @@ int sd_check_repair(const char *card) {
     }
     close(cfd);
   }
-
-  /* Attempt to remount read-only during the check */
-  char *ro_argv[] = {"mount", "-o", "remount,ro", mnt, NULL};
-  run_cmd(ro_argv);
 
   int rc = -1;
   if (strstr(fstype, "exfat") != NULL) {
@@ -183,10 +179,6 @@ int sd_check_repair(const char *card) {
       rc = run_cmd(av);
     }
   }
-
-  /* Always restore read-write with dirsync and exec */
-  char *rw_argv[] = {"mount", "-o", "remount,exec,dirsync", mnt, NULL};
-  run_cmd(rw_argv);
 
   /* Invalidate page cache again so Linux sees any on-disk repairs */
   sync();
