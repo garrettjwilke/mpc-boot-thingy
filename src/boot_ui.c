@@ -226,6 +226,7 @@ void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme,
   ui->theme_ls.cursor = theme;
   ui->default_index = default_index;
   ui->default_ls.cursor = default_index;
+  snprintf(ui->format_label, sizeof ui->format_label, "MPC-Sample");
   int n = menu ? menu->n : 0;
   int sel = (default_index >= 0 && default_index < n) ? default_index : 0;
   ui->apps_ls.cursor = 1 + sel;
@@ -328,7 +329,16 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     int res = ui_text_editor(u, 0, 0, UI_W, UI_H, &s->text_ed, ed_st, &ev);
     if (res == UI_TEXT_OK) {
       trim(s->text_buf);
-      if (s->text_edit_mode == BOOT_TEXT_RENAME) {
+      if (s->text_edit_mode == BOOT_TEXT_FORMAT_LABEL) {
+        if (s->text_buf[0])
+          snprintf(s->format_label, sizeof s->format_label, "%s", s->text_buf);
+        else
+          snprintf(s->format_label, sizeof s->format_label, "MPC-Sample");
+        s->screen = BOOT_SCREEN_FORMAT_PROGRESS;
+        snprintf(s->format_status, sizeof s->format_status,
+                 "Preparing to format...");
+        s->action = BOOT_ACT_FORMAT_SD;
+      } else if (s->text_edit_mode == BOOT_TEXT_RENAME) {
         if (s->text_buf[0]) {
           snprintf(s->edit_title, sizeof s->edit_title, "%s", s->text_buf);
           if (s->text_prev_screen == BOOT_SCREEN_ITEM_EDIT) {
@@ -360,7 +370,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   int screen = s->screen;
   int n = s->menu ? s->menu->n : 0;
   if (screen == BOOT_SCREEN_SETTINGS)
-    move_cursor(&s->settings_ls, 4, &ev);
+    move_cursor(&s->settings_ls, 5, &ev);
   else if (screen == BOOT_SCREEN_DEFAULT)
     move_cursor(&s->default_ls, n, &ev);
   else if (screen == BOOT_SCREEN_THEME) {
@@ -372,6 +382,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     move_cursor(&s->item_ls, s->edit_boot_ac50 ? 4 : 3, &ev);
   else if (screen == BOOT_SCREEN_DELETE_CONFIRM)
     move_cursor(&s->delete_confirm_ls, 2, &ev);
+  else if (screen == BOOT_SCREEN_FORMAT_CONFIRM)
+    move_cursor(&s->format_confirm_ls, 2, &ev);
   else if (screen == BOOT_SCREEN_ENTRY)
     move_cursor(&s->entry_ls, s->ncatalog, &ev);
   else if (screen == BOOT_SCREEN_UNSAVED)
@@ -439,6 +451,10 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       s->screen = BOOT_SCREEN_APPS;
     } else if (screen == BOOT_SCREEN_DELETE_CONFIRM) {
       s->screen = BOOT_SCREEN_ITEM_EDIT;
+    } else if (screen == BOOT_SCREEN_FORMAT_CONFIRM) {
+      s->screen = BOOT_SCREEN_SETTINGS;
+    } else if (screen == BOOT_SCREEN_FORMAT_PROGRESS) {
+      /* cannot cancel format progress */
     } else if (screen == BOOT_SCREEN_SETTINGS || screen == BOOT_SCREEN_POWER) {
       s->screen = BOOT_SCREEN_APPS;
     } else {
@@ -462,8 +478,25 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       } else if (s->settings_ls.cursor == 2) {
         s->screen = BOOT_SCREEN_STORAGE;
         ui_usb_sd_init(&s->usb);
-      } else {
+      } else if (s->settings_ls.cursor == 3) {
         s->action = BOOT_ACT_RELOAD;
+      } else if (s->settings_ls.cursor == 4) {
+        s->screen = BOOT_SCREEN_FORMAT_CONFIRM;
+        s->format_confirm_ls.cursor = 0;
+      }
+      ev.encoder_press = 0;
+    } else if (screen == BOOT_SCREEN_FORMAT_CONFIRM) {
+      if (s->format_confirm_ls.cursor == 0) {
+        s->screen = BOOT_SCREEN_SETTINGS;
+      } else {
+        const char *init_lbl =
+            s->format_label[0] ? s->format_label : "MPC-Sample";
+        snprintf(s->text_buf, sizeof s->text_buf, "%s", init_lbl);
+        ui_text_editor_init(&s->text_ed, s->text_buf, sizeof s->format_label,
+                            "SD CARD LABEL");
+        s->text_edit_mode = BOOT_TEXT_FORMAT_LABEL;
+        s->text_prev_screen = BOOT_SCREEN_FORMAT_CONFIRM;
+        s->screen = BOOT_SCREEN_TEXT_EDIT;
       }
       ev.encoder_press = 0;
     } else if (screen == BOOT_SCREEN_DEFAULT) {
@@ -517,6 +550,10 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     labels[0] = "Back";
     labels[1] = "";
     labels[2] = "Save";
+  } else if (s->screen == BOOT_SCREEN_FORMAT_PROGRESS) {
+    labels[0] = "";
+    labels[1] = "";
+    labels[2] = "";
   } else {
     labels[0] = "Back";
     labels[1] = "";
@@ -563,6 +600,12 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   } else if (s->screen == BOOT_SCREEN_DELETE_CONFIRM) {
     title = s->edit_is_app ? "Delete App?" : "Delete Boot Entry?";
     hint = "this cannot be undone";
+  } else if (s->screen == BOOT_SCREEN_FORMAT_CONFIRM) {
+    title = "Format SD Card?";
+    hint = "ALL data on card will be erased";
+  } else if (s->screen == BOOT_SCREEN_FORMAT_PROGRESS) {
+    title = "Formatting SD Card";
+    hint = "system will reboot when done";
   } else if (s->screen == BOOT_SCREEN_ENTRY) {
     fit_text(title_buf, sizeof title_buf,
              s->edit_new ? (s->edit_title[0] ? s->edit_title : "New entry")
@@ -623,9 +666,40 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       s->screen = BOOT_SCREEN_APPS;
   } else if (s->screen == BOOT_SCREEN_SETTINGS) {
     const char *rows[] = {"Set default app", "Set theme", UI_USB_SD_LABEL,
-                          "Reload menu & SD"};
-    ui_list(u, 8, list_y, 304, list_h, rows, 4, rows_st, widget_in,
+                          "Reload menu & SD", "Format SD Card"};
+    ui_list(u, 8, list_y, 304, list_h, rows, 5, rows_st, widget_in,
             &s->settings_ls);
+  } else if (s->screen == BOOT_SCREEN_FORMAT_CONFIRM) {
+    const char *rows[] = {"No, cancel", "Yes, erase and format"};
+    int hit = ui_list(u, 8, list_y, 304, list_h, rows, 2, rows_st, widget_in,
+                      &s->format_confirm_ls);
+    if (hit == 0) {
+      s->screen = BOOT_SCREEN_SETTINGS;
+    } else if (hit == 1) {
+      const char *init_lbl =
+          s->format_label[0] ? s->format_label : "MPC-Sample";
+      snprintf(s->text_buf, sizeof s->text_buf, "%s", init_lbl);
+      ui_text_editor_init(&s->text_ed, s->text_buf, sizeof s->format_label,
+                          "SD CARD LABEL");
+      s->text_edit_mode = BOOT_TEXT_FORMAT_LABEL;
+      s->text_prev_screen = BOOT_SCREEN_FORMAT_CONFIRM;
+      s->screen = BOOT_SCREEN_TEXT_EDIT;
+    }
+  } else if (s->screen == BOOT_SCREEN_FORMAT_PROGRESS) {
+    struct ui_paint card_paint = {
+        .fill_set = 1,
+        .fill = th->box,
+        .border_set = 1,
+        .border = th->border,
+        .border_px = 1,
+    };
+    ui_box(u, 16, 76, 288, 144, card_paint);
+    ui_text(u, 28, 96, "FORMATTING SD CARD", th->hl, 1);
+    ui_text(u, 28, 120,
+            s->format_status[0] ? s->format_status : "Please wait...",
+            th->text, 1);
+    ui_text(u, 28, 144, "Do not turn off power.", th->dim, 1);
+    ui_text(u, 28, 164, "System will reboot automatically.", th->dim, 1);
   } else if (s->screen == BOOT_SCREEN_DEFAULT) {
     char text[MENU_MAX][48];
     const char *rows[MENU_MAX];
