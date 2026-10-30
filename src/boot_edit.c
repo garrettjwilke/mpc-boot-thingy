@@ -563,14 +563,17 @@ static int safe_component(const char *s) {
 }
 
 int boot_entry_update(const char *card, const char *id, const char *new_title, const char *new_args) {
-    char path[512];
+    char path[512], app_dir[512];
+    const char *folder = NULL;
+    struct stat st;
     if (!card || !card[0] || !id || !id[0]) return -1;
     remount_card(card);
 
     if (strncmp(id, "app:", 4) == 0) {
-        const char *folder = id + 4;
+        folder = id + 4;
         if (!safe_component(folder)) return -1;
-        if (snprintf(path, sizeof path, "%s/autorun/apps/%s/boot.entry", card, folder) >= (int)sizeof path) return -1;
+        if (snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/%s", card, folder) >= (int)sizeof app_dir) return -1;
+        if (snprintf(path, sizeof path, "%s/boot.entry", app_dir) >= (int)sizeof path) return -1;
     } else if (strncmp(id, "entry:", 6) == 0) {
         const char *file = id + 6;
         if (!safe_component(file) || !ends_with(file, ".entry")) return -1;
@@ -580,7 +583,13 @@ int boot_entry_update(const char *card, const char *id, const char *new_title, c
     }
 
     struct menu_entry existing;
-    if (menu_parse_entry(path, &existing) != 0) return -1;
+    memset(&existing, 0, sizeof existing);
+    if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        if (!folder || menu_nested_run(app_dir, existing.run, sizeof existing.run) != 0) return -1;
+        if (snprintf(existing.title, sizeof existing.title, "%s", folder) >= (int)sizeof existing.title) return -1;
+    } else if (menu_parse_entry(path, &existing) != 0) {
+        return -1;
+    }
 
     const char *title = (new_title && new_title[0]) ? new_title : existing.title;
     if (!one_line(title) || strlen(title) >= MENU_TITLE) return -1;

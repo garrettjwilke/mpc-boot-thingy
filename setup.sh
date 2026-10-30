@@ -90,6 +90,16 @@ If --add is a project folder that already contains boot.entry, only
 that file and the program it names are copied. Other files in the
 project stay where they are.
 
+If --add is an autorun package, the whole package is copied to
+autorun/apps/<name>/autorun/ and a boot.entry is written next to it.
+The package is a folder of autorun.json or autorun.sh, or a folder or
+zip that contains one autorun directory. Files outside that directory
+are left out. A path or link that escapes the package is refused.
+Replacing an existing name replaces that app folder.
+
+  ./setup.sh --SD "/path/to/mounted/SD" --add /path/to/autorun --title "Lab"
+  ./setup.sh --SD "/path/to/mounted/SD" --add /path/to/lab.zip
+
 Older autorun/boot-menu/*.entry files still load. run in those files
 is relative to the card root, so a program in autorun/apps is
 run=autorun/apps/name/program. A boot.entry inside an app folder is
@@ -253,14 +263,295 @@ entry_field() {
   ' "$file"
 }
 
+is_zip_file() {
+  sig=$(od -An -t x1 -N 4 "$1" 2>/dev/null | tr -d ' \n')
+  case "$sig" in
+    504b0304|504b0506) return 0 ;;
+  esac
+  return 1
+}
+
+install_autorun_package() {
+  sd=$1
+  src=$2
+  title=$3
+  if [ -z "$title" ]; then
+    title=$(basename "$src")
+    case "$title" in
+      *.zip) title=${title%.zip} ;;
+      *.ZIP) title=${title%.ZIP} ;;
+    esac
+  fi
+  if ! one_line "$title"; then
+    echo "ERROR: title must be one line" >&2
+    exit 1
+  fi
+  name=$(slug_of "$title")
+  if [ -z "$name" ]; then
+    echo "ERROR: could not name the app folder" >&2
+    exit 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 is required to add an autorun package" >&2
+    exit 1
+  fi
+  dest=$sd/autorun/apps/$name
+  python3 - "$src" "$dest" "$title" <<'PY'
+import os, re, shutil, stat, sys, zipfile
+
+src, dest, title = sys.argv[1:]
+CAP = 64 * 1024 * 1024
+ENTRY_CAP = 32 * 1024 * 1024
+
+def die(msg):
+    sys.stderr.write("ERROR: %s\n" % msg)
+    sys.exit(1)
+
+def remove_path(path):
+    if not path or not os.path.lexists(path):
+        return
+    if os.path.islink(path) or not os.path.isdir(path):
+        os.unlink(path)
+        return
+    shutil.rmtree(path)
+
+def name_ok(name):
+    if not name or name[:1] in ("/", "\\") or "\\" in name:
+        return False
+    for ch in ':*?"<>|':
+        if ch in name:
+            return False
+    parts = name.split("/")
+    if name.endswith("/"):
+        parts = parts[:-1]
+    if not parts:
+        return False
+    for part in parts:
+        if part in ("", ".", ".."):
+            return False
+        for ch in part:
+            o = ord(ch)
+            if o < 32 or o == 127:
+                return False
+    return True
+
+def has_component(name, want):
+    parts = name.split("/")
+    return want in parts
+
+def parent_of(name):
+    if "/" not in name:
+        return ""
+    return name.rsplit("/", 1)[0] + "/"
+
+def base_of(name):
+    return name[:-1].rsplit("/", 1)[-1] if name.endswith("/") else name.rsplit("/", 1)[-1]
+
+def script_of(pkg):
+    js = os.path.join(pkg, "autorun.json")
+    rel = None
+    if os.path.isfile(js) and not os.path.islink(js):
+        with open(js, "r", errors="replace") as f:
+            text = f.read(65536)
+        m = re.search(r'"path"\s*:\s*"([^"\\\r\n]*)"', text)
+        if m and m.group(1):
+            rel = m.group(1)
+        elif m and not m.group(1):
+            die("script path leaves the package")
+        elif len(text) == 65536:
+            extra = open(js, "rb")
+            extra.seek(65536)
+            if extra.read(1):
+                extra.close()
+                die("script path leaves the package")
+            extra.close()
+    if rel is None:
+        rel = "autorun.sh"
+    if rel.startswith("./"):
+        rel = rel[2:]
+    if not name_ok(rel) or rel.endswith("/"):
+        die("script path leaves the package")
+    full = os.path.join(pkg, *rel.split("/"))
+    if os.path.islink(full) or not os.path.isfile(full):
+        die("autorun script is missing")
+    return rel
+
+def has_marker(path):
+    if os.path.islink(path) or not os.path.isdir(path):
+        return False
+    for base in ("autorun.json", "autorun.sh"):
+        p = os.path.join(path, base)
+        if os.path.isfile(p) and not os.path.islink(p):
+            return True
+    return False
+
+def locate_dir(path):
+    if os.path.islink(path) or not os.path.isdir(path):
+        die("folder has no boot.entry and is not an autorun package")
+    if has_marker(path):
+        return path
+    nested = os.path.join(path, "autorun")
+    if has_marker(nested):
+        return nested
+    die("folder has no boot.entry and is not an autorun package")
+
+def copy_tree(root, pkg):
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        rel_dir = os.path.relpath(dirpath, root)
+        if rel_dir == ".":
+            rel_dir = ""
+        elif not name_ok(rel_dir.replace(os.sep, "/")):
+            die("path leaves the package")
+        for d in list(dirnames):
+            if os.path.islink(os.path.join(dirpath, d)):
+                die("refusing a symlink")
+        if rel_dir:
+            os.makedirs(os.path.join(pkg, rel_dir), exist_ok=True)
+        for fname in filenames:
+            sp = os.path.join(dirpath, fname)
+            if os.path.islink(sp):
+                die("refusing a symlink")
+            rel = fname if not rel_dir else rel_dir.replace(os.sep, "/") + "/" + fname
+            if not name_ok(rel):
+                die("path leaves the package")
+            n = os.path.getsize(sp)
+            total += n
+            if n > ENTRY_CAP or total > CAP:
+                die("package is too large")
+            dp = os.path.join(pkg, *rel.split("/"))
+            os.makedirs(os.path.dirname(dp), exist_ok=True)
+            with open(sp, "rb") as inp, open(dp, "wb") as out:
+                shutil.copyfileobj(inp, out)
+
+def zip_prefix(z):
+    json_dirs = []
+    sh_dirs = []
+    for info in z.infolist():
+        name = info.filename.replace("\\", "/")
+        if not name_ok(name):
+            die("zip path leaves the package")
+        if has_component(name, "__MACOSX"):
+            continue
+        base = base_of(name)
+        parent = parent_of(name)
+        if base == "autorun.json" and not name.endswith("/"):
+            json_dirs.append(parent)
+        elif base == "autorun.sh" and not name.endswith("/"):
+            sh_dirs.append(parent)
+    def one(dirs):
+        found = []
+        for d in dirs:
+            if d not in found:
+                found.append(d)
+        if len(found) > 1:
+            die("zip has more than one autorun package")
+        return found[0] if found else None
+    chosen = one(json_dirs)
+    if chosen is not None:
+        return chosen
+    if not sh_dirs:
+        return None
+    return one(sh_dirs)
+
+def extract_zip(src, pkg):
+    if not zipfile.is_zipfile(src):
+        die("not a zip file")
+    with zipfile.ZipFile(src) as z:
+        prefix = zip_prefix(z)
+        if prefix is None:
+            die("zip is not an autorun package")
+        total = 0
+        plan = []
+        for info in z.infolist():
+            name = info.filename.replace("\\", "/")
+            if has_component(name, "__MACOSX"):
+                continue
+            if prefix and not name.startswith(prefix):
+                continue
+            rel = name[len(prefix):] if prefix else name
+            if not rel:
+                continue
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if stat.S_ISLNK(mode):
+                die("refusing a symlink")
+            if info.flag_bits & 1:
+                die("zip is encrypted")
+            if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                die("zip method is not supported")
+            if info.file_size > ENTRY_CAP or total + info.file_size > CAP:
+                die("zip is too large")
+            if info.compress_type == zipfile.ZIP_DEFLATED and info.compress_size and info.file_size > 256 * 1024 and info.file_size // info.compress_size > 64:
+                die("zip is too large")
+            total += info.file_size
+            plan.append((info, rel))
+        for info, rel in plan:
+            if rel.endswith("/"):
+                rel = rel[:-1]
+                if not rel or not name_ok(rel):
+                    die("zip path leaves the package")
+                os.makedirs(os.path.join(pkg, *rel.split("/")), exist_ok=True)
+                continue
+            if not name_ok(rel):
+                die("zip path leaves the package")
+            try:
+                data = z.read(info)
+            except Exception:
+                die("zip is truncated")
+            if len(data) != info.file_size:
+                die("zip is truncated")
+            dp = os.path.join(pkg, *rel.split("/"))
+            os.makedirs(os.path.dirname(dp), exist_ok=True)
+            with open(dp, "wb") as out:
+                out.write(data)
+
+stage = None
+try:
+    if os.path.isdir(src) and not os.path.islink(src):
+        root = locate_dir(src)
+        kind = "dir"
+    elif os.path.isfile(src) and zipfile.is_zipfile(src):
+        root = src
+        kind = "zip"
+    else:
+        die("not an autorun package")
+    parent = os.path.dirname(dest)
+    os.makedirs(parent, exist_ok=True)
+    stage = os.path.join(parent, "." + os.path.basename(dest) + ".incoming")
+    remove_path(stage)
+    pkg = os.path.join(stage, "autorun")
+    os.makedirs(pkg)
+    if kind == "dir":
+        copy_tree(root, pkg)
+    else:
+        extract_zip(root, pkg)
+    rel = script_of(pkg)
+    os.chmod(os.path.join(pkg, *rel.split("/")), 0o755)
+    with open(os.path.join(stage, "boot.entry"), "w") as f:
+        f.write("title=%s\nrun=autorun/%s\n" % (title, rel))
+    remove_path(dest)
+    os.rename(stage, dest)
+    stage = None
+except SystemExit:
+    if stage:
+        remove_path(stage)
+    raise
+except Exception:
+    if stage:
+        remove_path(stage)
+    die("could not store the package")
+PY
+  echo "Installed $title in $dest"
+}
+
 install_app() {
   sd=$1
   src=$2
   title=$3
   if [ -d "$src" ]; then
     if [ ! -f "$src/boot.entry" ]; then
-      echo "ERROR: $src has no boot.entry. Pass the executable: --add /path/to/program --title \"Name\"" >&2
-      exit 1
+      install_autorun_package "$sd" "$src" "$title"
+      return
     fi
     run=$(entry_field run "$src/boot.entry")
     label=$(entry_field title "$src/boot.entry")
@@ -315,6 +606,16 @@ install_app() {
     echo "ERROR: not a file or folder: $src" >&2
     exit 1
   fi
+  if is_zip_file "$src"; then
+    install_autorun_package "$sd" "$src" "$title"
+    return
+  fi
+  case "$src" in
+    *.zip|*.ZIP)
+      echo "ERROR: not a zip file: $src" >&2
+      exit 1
+      ;;
+  esac
   if [ -z "$title" ]; then title=$(basename "$src"); fi
   if ! one_line "$title"; then
     echo "ERROR: title must be one line" >&2
@@ -824,10 +1125,23 @@ add_over_ssh() {
   trap 'rm -f "$ask"; rm -rf "$stage"' EXIT
   media=$(mpc_media_path) || exit 1
   install_app "$stage" "$ADD" "$TITLE"
+  app=$(find "$stage/autorun/apps" -mindepth 1 -maxdepth 1 -type d)
+  if [ -z "$app" ] || [ "$(printf '%s\n' "$app" | wc -l | tr -d ' ')" != 1 ]; then
+    echo "ERROR: expected one app folder" >&2
+    exit 1
+  fi
+  appname=$(basename "$app")
+  case "$appname" in
+    ""|*[!a-z0-9-]*)
+      echo "ERROR: refusing app folder: $appname" >&2
+      exit 1
+      ;;
+  esac
   {
     printf '%s\n' "$media"
+    printf '%s\n' "$appname"
     tar -C "$stage" --format ustar -cf - autorun
-  } | ssh_mpc "$ask" 'IFS= read -r dest; tar -C "$dest" -xf -'
+  } | ssh_mpc "$ask" 'IFS= read -r dest; IFS= read -r app; case "$app" in ""|*[!a-z0-9-]*) exit 1 ;; esac; rm -rf "$dest/autorun/apps/$app"; tar -C "$dest" -xf -'
   ssh_mpc "$ask" 'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; card=$(find /media -mindepth 1 -maxdepth 1 -type d ! -name "az01-internal*" 2>/dev/null | head -n 1); if [ -n "$card" ] && [ -d "$card/autorun" ]; then printf "%s\n" "$card/autorun" > /run/mpc-boot-autorun 2>/dev/null || true; mount -o remount,exec "$card" 2>/dev/null || true; fi; if [ -f /run/mpc-boot-thingy.pid ]; then kill -HUP $(cat /run/mpc-boot-thingy.pid 2>/dev/null) 2>/dev/null || killall -HUP mpc-boot-thingy 2>/dev/null || true; else killall -HUP mpc-boot-thingy 2>/dev/null || true; fi'
   echo "Updated the app on $media over SSH."
 }

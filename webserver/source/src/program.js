@@ -1,5 +1,12 @@
 export const PROGRAM_ERROR = "program must be an aarch64 Linux executable or a sh/bash script";
 
+export function isZip(bytes, name) {
+  const lower = String(name || "").toLowerCase();
+  if (lower.endsWith(".zip")) return true;
+  if (!bytes || bytes.length < 4) return false;
+  return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
 function shName(name) {
   return name === "sh" || name === "bash";
 }

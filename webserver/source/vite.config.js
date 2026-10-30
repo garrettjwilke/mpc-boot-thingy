@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { programError } from "./src/program.js";
+import { isZip, programError } from "./src/program.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const contentDir = path.resolve(here, "../content");
@@ -149,10 +149,13 @@ async function handleMock(req, res, url, state) {
       sendJson(res, 400, { error: "program body is empty" });
       return;
     }
-    const why = programError(body);
-    if (why) {
-      sendJson(res, 400, { error: why });
-      return;
+    const zip = isZip(body, name);
+    if (!zip) {
+      const why = programError(body);
+      if (why) {
+        sendJson(res, 400, { error: why });
+        return;
+      }
     }
     if (!oneLine(title) || !title || title.length >= 64) {
       sendJson(res, 400, { error: "title must be one short line" });
@@ -168,12 +171,12 @@ async function handleMock(req, res, url, state) {
       return;
     }
     if (!name) name = slug;
-    if (!safeComponent(name) || name === "boot.entry" || name.length >= 256) {
+    if (!safeComponent(name) || name.length >= 256 || (!zip && name === "boot.entry")) {
       sendJson(res, 400, { error: "executable name is not allowed" });
       return;
     }
     const id = "app:" + slug;
-    const next = { id, title, run: name, args, stock: false };
+    const next = { id, title, run: zip ? "autorun/autorun.sh" : name, args, stock: false };
     const existing = state.apps.findIndex((app) => app.id === id);
     if (existing >= 0) state.apps[existing] = next;
     else state.apps.push(next);
