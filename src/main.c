@@ -730,8 +730,18 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
       if (logfd > STDERR_FILENO)
         close(logfd);
     }
-    if (e->base[0])
-      chdir(e->base);
+    {
+      char workdir[512];
+      char *slash;
+      snprintf(workdir, sizeof workdir, "%s", path);
+      slash = strrchr(workdir, '/');
+      if (slash && slash != workdir) {
+        *slash = 0;
+        chdir(workdir);
+      } else if (e->base[0]) {
+        chdir(e->base);
+      }
+    }
     execv(execpath, av);
     perror(execpath);
     _exit(127);

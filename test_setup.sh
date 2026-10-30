@@ -388,6 +388,16 @@ case "$last" in
     IFS= read -r dest
     test -s "$FAKE_ROOT$dest/autorun/system/ssh/ssh_host_ed25519_key"
     ;;
+  *'autorun/apps/$app'*)
+    IFS= read -r dest
+    IFS= read -r app
+    case "$app" in
+      ""|*[!a-z0-9-]*) echo "bad app $app" >&2; exit 1 ;;
+    esac
+    rm -rf "$FAKE_ROOT$dest/autorun/apps/$app"
+    mkdir -p "$FAKE_ROOT$dest"
+    tar -C "$FAKE_ROOT$dest" -xf -
+    ;;
   *'tar -C'*)
     IFS= read -r dest
     mkdir -p "$FAKE_ROOT$dest"
@@ -569,5 +579,86 @@ cmp "$fix/toolkit/marker" "$devcard/autorun/os_tools/toolkit/marker"
 grep -q 'alias ll=' "$devcard/autorun/os_tools/.bashrc" || fail "update without --tools replaced .bashrc"
 test ! -d "$devcard/os_tools"
 test ! -d "$devcard/apps"
+
+# An autorun package is copied whole. A boot.entry project still copies one file.
+pkg=$work/box
+mkdir -p "$pkg/nested"
+printf '%s\n' '{"value0":{"scripts":[{"path":"autorun.sh"}]}}' > "$pkg/autorun.json"
+printf '%s\n' '#!/bin/sh' 'echo box' > "$pkg/autorun.sh"
+printf '%s\n' keep > "$pkg/payload.bin"
+printf '%s\n' inner > "$pkg/nested/a"
+./setup.sh --SD "$empty" --add "$pkg" --title "Box" >/tmp/mpc-boot-out
+grep -q 'Installed Box' /tmp/mpc-boot-out
+printf '%s\n' 'title=Box' 'run=autorun/autorun.sh' > "$work/box.entry"
+cmp "$work/box.entry" "$empty/autorun/apps/box/boot.entry"
+cmp "$pkg/autorun.sh" "$empty/autorun/apps/box/autorun/autorun.sh"
+cmp "$pkg/payload.bin" "$empty/autorun/apps/box/autorun/payload.bin"
+cmp "$pkg/nested/a" "$empty/autorun/apps/box/autorun/nested/a"
+test -x "$empty/autorun/apps/box/autorun/autorun.sh"
+printf '%s\n' stale > "$empty/autorun/apps/box/stale"
+./setup.sh --SD "$empty" --add "$pkg" --title "Box" >/tmp/mpc-boot-out
+test ! -e "$empty/autorun/apps/box/stale" || fail "reinstall left a stale file"
+cmp "$pkg/payload.bin" "$empty/autorun/apps/box/autorun/payload.bin"
+
+repo=$work/repo-src
+mkdir -p "$repo/autorun" "$repo/DATA"
+printf '%s\n' '#!/bin/sh' > "$repo/autorun/autorun.sh"
+printf '%s\n' keep > "$repo/autorun/note"
+printf '%s\n' nope > "$repo/DATA/x"
+printf '%s\n' readme > "$repo/README"
+./setup.sh --SD "$empty" --add "$repo" --title "Repo" >/tmp/mpc-boot-out
+cmp "$repo/autorun/note" "$empty/autorun/apps/repo/autorun/note"
+printf '%s\n' 'title=Repo' 'run=autorun/autorun.sh' > "$work/repo.entry"
+cmp "$work/repo.entry" "$empty/autorun/apps/repo/boot.entry"
+test ! -e "$empty/autorun/apps/repo/README" || fail "repo add copied a file outside autorun"
+test ! -e "$empty/autorun/apps/repo/DATA/x" || fail "repo add copied a sibling folder"
+test ! -e "$empty/autorun/apps/repo/autorun/DATA/x" || fail "repo add copied DATA into the package"
+
+python3 - "$work/hub.zip" <<'PY'
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED)
+z.writestr("proj-1.0/README.md", "skip")
+z.writestr("proj-1.0/autorun/autorun.json", '{"value0":{"scripts":[{"path":"autorun.sh"}]}}')
+z.writestr("proj-1.0/autorun/autorun.sh", "#!/bin/sh\necho hi\n")
+z.writestr("proj-1.0/autorun/extra.txt", "keep\n")
+z.writestr("proj-1.0/DATA/nope.txt", "nope\n")
+z.close()
+PY
+./setup.sh --SD "$empty" --add "$work/hub.zip" --title "Hub" >/tmp/mpc-boot-out
+grep -q 'Installed Hub' /tmp/mpc-boot-out
+printf '%s\n' 'title=Hub' 'run=autorun/autorun.sh' > "$work/hub.entry"
+cmp "$work/hub.entry" "$empty/autorun/apps/hub/boot.entry"
+printf '%s\n' 'keep' > "$work/hub-extra"
+cmp "$work/hub-extra" "$empty/autorun/apps/hub/autorun/extra.txt"
+test ! -e "$empty/autorun/apps/hub/README.md" || fail "zip add copied a file outside autorun"
+test ! -e "$empty/autorun/apps/hub/autorun/README.md" || fail "zip add copied README into the package"
+test ! -e "$empty/autorun/apps/hub/DATA/nope.txt" || fail "zip add copied a sibling folder"
+
+python3 - "$work/slip.zip" <<'PY'
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1], "w")
+z.writestr("autorun/autorun.sh", "#!/bin/sh\n")
+z.writestr("autorun/../escaped.txt", "nope\n")
+z.close()
+PY
+if ./setup.sh --SD "$empty" --add "$work/slip.zip" --title "Slip" >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
+  fail "zip slip should fail"
+fi
+grep -q 'leaves the package' /tmp/mpc-boot-err || fail "zip slip should say the path leaves the package"
+test ! -e "$empty/escaped.txt" || fail "zip slip wrote next to the card"
+test ! -e "$empty/autorun/escaped.txt" || fail "zip slip wrote into autorun"
+test ! -e "$empty/autorun/apps/slip" || fail "zip slip left an app folder"
+test ! -e "$empty/autorun/apps/.slip.incoming" || fail "zip slip left a staging folder"
+test ! -e "$work/escaped.txt" || fail "zip slip wrote next to the work dir"
+
+linked=$work/linked
+mkdir "$linked"
+printf '%s\n' '#!/bin/sh' > "$linked/autorun.sh"
+ln -s /tmp "$linked/out"
+if ./setup.sh --SD "$empty" --add "$linked" --title "Linked" >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
+  fail "symlink package should fail"
+fi
+grep -q 'symlink' /tmp/mpc-boot-err || fail "symlink package should say it is refusing a symlink"
+test ! -e "$empty/autorun/apps/linked" || fail "symlink package left an app folder"
 
 echo "setup fixtures ok"

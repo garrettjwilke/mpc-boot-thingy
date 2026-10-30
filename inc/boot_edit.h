@@ -39,6 +39,8 @@ int boot_edit_remove(const char *card, const char *id);
 /* Update title and/or arguments of an existing entry (app:<folder> or entry:<file>.entry).
    If new_title is NULL, existing title is kept.
    If new_args is NULL, existing args are kept.
+   An app folder that has a nested autorun package and no boot.entry gets one,
+   so a title edit sticks. An existing boot.entry is kept as the source.
    Returns 0 on success, negative on error. */
 int boot_entry_update(const char *card, const char *id, const char *new_title, const char *new_args);
 

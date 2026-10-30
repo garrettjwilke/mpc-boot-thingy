@@ -8,6 +8,7 @@
 
 #include "boot_edit.h"
 #include "menu.h"
+#include "unzip.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -200,6 +201,7 @@ static int dig_is(const unsigned char *d, const char *hex) {
 }
 
 static int runnable_program(const unsigned char *buf, size_t n);
+static int origin_ok(const char *origin, const char *host);
 
 static int selftest(void) {
     unsigned char d[20];
@@ -283,6 +285,23 @@ static int selftest(void) {
             fprintf(stderr, "bad script accepted\n");
             return 1;
         }
+    }
+    snprintf(g_bind, sizeof g_bind, "%s", "192.168.155.1");
+    g_port = 8080;
+    if (!origin_ok("http://192.168.155.1:8080", "192.168.155.1:8080") ||
+        !origin_ok("http://mpc-sample.local:8080", "mpc-sample.local:8080") ||
+        !origin_ok("http://mpc-sample.local:8080", "mpc-sample.local") ||
+        !origin_ok("http://MPC-Sample.local:8080", "mpc-sample.local:8080")) {
+        fprintf(stderr, "page origin rejected\n");
+        return 1;
+    }
+    if (origin_ok("http://other.example:8080", "mpc-sample.local:8080") ||
+        origin_ok("http://mpc-sample.local:8080", "other.example:8080") ||
+        origin_ok("http://mpc-sample.local:8080", "mpc-sample.local:9") ||
+        origin_ok("http://other.example:8080", "other.example:8080\r\n") ||
+        origin_ok("null", "mpc-sample.local:8080")) {
+        fprintf(stderr, "mismatched origin accepted\n");
+        return 1;
     }
     puts("web-check ok");
     return 0;
@@ -488,11 +507,75 @@ static void trim_inplace(char *s) {
     while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) s[--n] = 0;
 }
 
-static int origin_ok(const char *origin) {
-    char expect[96];
-    int n = snprintf(expect, sizeof expect, "http://%s:%d", g_bind, g_port);
-    if (n < 0 || (size_t)n >= sizeof expect || !origin) return 0;
-    return strcmp(origin, expect) == 0;
+static int eq_ci(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
+        a++;
+        b++;
+    }
+    return *a == 0 && *b == 0;
+}
+
+/* Host is hostname[:port] or [ipv6][:port]. Anything else is not a page we served. */
+static int host_header_ok(const char *host) {
+    size_t i, n;
+    int colon = 0;
+    if (!host || !host[0]) return 0;
+    n = strlen(host);
+    if (n >= 160) return 0;
+    if (host[0] == '[') {
+        const char *end = strchr(host, ']');
+        if (!end || end == host + 1) return 0;
+        for (const char *p = host + 1; p < end; p++) {
+            unsigned char c = (unsigned char)*p;
+            if (!isxdigit(c) && c != ':' && c != '.') return 0;
+        }
+        if (end[1] == 0) return 1;
+        if (end[1] != ':' || !end[2]) return 0;
+        for (const char *p = end + 2; *p; p++) {
+            if (!isdigit((unsigned char)*p)) return 0;
+        }
+        return 1;
+    }
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)host[i];
+        if (c == ':') {
+            if (colon || i == 0 || i + 1 == n) return 0;
+            colon = 1;
+            continue;
+        }
+        if (colon) {
+            if (!isdigit(c)) return 0;
+        } else if (!isalnum(c) && c != '.' && c != '-' && c != '_') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int host_has_port(const char *host) {
+    if (host[0] == '[') {
+        const char *end = strchr(host, ']');
+        return end && end[1] == ':';
+    }
+    return strchr(host, ':') != NULL;
+}
+
+static int origin_ok(const char *origin, const char *host) {
+    char expect[192];
+    int n;
+    if (!origin || !origin[0]) return 0;
+    n = snprintf(expect, sizeof expect, "http://%s:%d", g_bind, g_port);
+    if (n > 0 && (size_t)n < sizeof expect && eq_ci(origin, expect)) return 1;
+    if (!host_header_ok(host)) return 0;
+    n = snprintf(expect, sizeof expect, "http://%s", host);
+    if (n > 0 && (size_t)n < sizeof expect && eq_ci(origin, expect)) return 1;
+    if (!host_has_port(host)) {
+        n = snprintf(expect, sizeof expect, "http://%s:%d", host, g_port);
+        if (n > 0 && (size_t)n < sizeof expect && eq_ci(origin, expect)) return 1;
+    }
+    return 0;
 }
 
 static void json_escape_print(FILE *fp, const char *s) {
@@ -931,6 +1014,66 @@ static int runnable_program(const unsigned char *buf, size_t n) {
     return aarch64_exec(buf, n) || shell_script(buf, n);
 }
 
+static void install_zip_package(int fd, const char *part, const char *dir, const char *slug,
+                                const char *title, const char *args) {
+    char stage[PATH_MAX], backup[PATH_MAX], entry[PATH_MAX], run[MENU_RUN], body[640], resp[160];
+    int bn, entryfd = -1;
+    if (snprintf(stage, sizeof stage, "%s/autorun/apps/.%s.incoming", g_card, slug) >= (int)sizeof stage ||
+        snprintf(backup, sizeof backup, "%s/autorun/apps/.%s.bak", g_card, slug) >= (int)sizeof backup ||
+        snprintf(entry, sizeof entry, "%s/boot.entry", stage) >= (int)sizeof entry) {
+        unlink(part);
+        send_err(fd, 400, "Bad Request", "path is too long");
+        return;
+    }
+    rm_tree(stage, 0);
+    rm_tree(backup, 0);
+    if (mkdir(stage, 0755) != 0) {
+        unlink(part);
+        send_err(fd, 500, "Internal Server Error", "could not create the app folder");
+        return;
+    }
+    if (unzip_autorun(part, stage, run, sizeof run) != 0) {
+        rm_tree(stage, 0);
+        unlink(part);
+        rmdir(dir);
+        send_err(fd, 400, "Bad Request", unzip_error());
+        return;
+    }
+    if (args[0]) bn = snprintf(body, sizeof body, "title=%s\nrun=%s\nargs=%s\n", title, run, args);
+    else bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n", title, run);
+    if (bn < 0 || (size_t)bn >= sizeof body) {
+        rm_tree(stage, 0);
+        unlink(part);
+        send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
+        return;
+    }
+    entryfd = open(entry, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (entryfd < 0 || write_full(entryfd, body, (size_t)bn) != 0 || close(entryfd) != 0) {
+        if (entryfd >= 0) close(entryfd);
+        rm_tree(stage, 0);
+        unlink(part);
+        send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
+        return;
+    }
+    if (rename(dir, backup) != 0) {
+        rm_tree(stage, 0);
+        unlink(part);
+        send_err(fd, 500, "Internal Server Error", "could not store the program");
+        return;
+    }
+    if (rename(stage, dir) != 0) {
+        rename(backup, dir);
+        rm_tree(stage, 0);
+        unlink(part);
+        send_err(fd, 500, "Internal Server Error", "could not store the program");
+        return;
+    }
+    rm_tree(backup, 0);
+    reload_boot_thingy();
+    snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"app:%s\"}\n", slug);
+    send_json(fd, 200, "OK", resp);
+}
+
 static void handle_upload(int fd, struct io *io, int has_len, size_t content_len, const char *query) {
     char title[512], args[512], name[256], slug[80];
     char dir[PATH_MAX], apps[PATH_MAX], part[PATH_MAX], dest[PATH_MAX], entry[PATH_MAX];
@@ -977,7 +1120,8 @@ static void handle_upload(int fd, struct io *io, int has_len, size_t content_len
         return;
     }
     entry_run(entry, old, sizeof old);
-    partfd = open(part, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    /* Read-write so the stored header can be checked. A write-only fd cannot be read back. */
+    partfd = open(part, O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
     if (partfd < 0) {
         send_err(fd, 500, "Internal Server Error", "could not store the program");
         return;
@@ -1005,7 +1149,26 @@ static void handle_upload(int fd, struct io *io, int has_len, size_t content_len
             send_err(fd, 500, "Internal Server Error", "could not store the program");
             return;
         }
-        got = read(partfd, magic, sizeof magic);
+        got = 0;
+        while (got < (ssize_t)sizeof magic) {
+            ssize_t r = read(partfd, magic + got, sizeof magic - (size_t)got);
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                got = -1;
+                break;
+            }
+            if (r == 0) break;
+            got += r;
+        }
+        if (got >= 4 && magic[0] == 'P' && magic[1] == 'K' && magic[2] == 3 && magic[3] == 4) {
+            if (close(partfd) != 0) {
+                unlink(part);
+                send_err(fd, 500, "Internal Server Error", "could not store the program");
+                return;
+            }
+            install_zip_package(fd, part, dir, slug, title, args);
+            return;
+        }
         if (got < 0 || !runnable_program(magic, (size_t)got)) {
             close(partfd);
             unlink(part);
@@ -1905,13 +2068,15 @@ static void handle_client(int client) {
     }
     needs_origin = strcmp(method, "POST") == 0 || strcmp(method, "DELETE") == 0 || strcmp(path, "/ws/term") == 0;
     if (needs_origin) {
-        char origin[160];
+        char origin[160], host[160];
         if (header_value(headers, "Origin", origin, sizeof origin) != 0) {
             send_err(client, 403, "Forbidden", "origin is not this page");
             goto out;
         }
         trim_inplace(origin);
-        if (!origin_ok(origin)) {
+        if (header_value(headers, "Host", host, sizeof host) != 0) host[0] = 0;
+        else trim_inplace(host);
+        if (!origin_ok(origin, host)) {
             send_err(client, 403, "Forbidden", "origin is not this page");
             goto out;
         }

@@ -8,6 +8,7 @@
 #include "sd_check.h"
 #include "theme.h"
 #include "ui.h"
+#include "unzip.h"
 #include "usb_sd.h"
 
 #include <assert.h>
@@ -854,6 +855,145 @@ int main(void) {
   assert(access(path, F_OK) != 0);
   snprintf(path, sizeof path, "%s/autorun/boot-menu/boot-1.entry", dir);
   assert(access(path, F_OK) != 0);
+
+  /* A nested autorun package is a boot entry. boot.entry wins when it exists. */
+  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun", dir);
+  mkdir_p(path);
+  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun/autorun.json", dir);
+  write_file(path, "{\"value0\":{\"scripts\":[{\"path\":\"start.sh\"}]}}\n");
+  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun/start.sh", dir);
+  write_file(path, "#!/bin/sh\n");
+  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun/payload.bin", dir);
+  write_file(path, "data\n");
+  snprintf(path, sizeof path, "%s/autorun/apps/named-mod/autorun", dir);
+  mkdir_p(path);
+  snprintf(path, sizeof path, "%s/autorun/apps/named-mod/autorun/autorun.sh", dir);
+  write_file(path, "#!/bin/sh\n");
+  snprintf(path, sizeof path, "%s/autorun/apps/named-mod/boot.entry", dir);
+  write_file(path, "title=Named mod\nrun=autorun/autorun.sh\n");
+  snprintf(path, sizeof path, "%s/autorun/apps/sh-only/autorun", dir);
+  mkdir_p(path);
+  snprintf(path, sizeof path, "%s/autorun/apps/sh-only/autorun/autorun.sh", dir);
+  write_file(path, "#!/bin/sh\n");
+  snprintf(path, sizeof path, "%s/autorun/apps/evil/autorun", dir);
+  mkdir_p(path);
+  snprintf(path, sizeof path, "%s/autorun/apps/evil/autorun/autorun.json", dir);
+  write_file(path, "{\"value0\":{\"scripts\":[{\"path\":\"../out.sh\"}]}}\n");
+  snprintf(path, sizeof path, "%s/autorun/apps/evil/autorun/autorun.sh", dir);
+  write_file(path, "#!/bin/sh\n");
+  assert(menu_load(&updated, dir) >= 4);
+  {
+    int hand = -1, named = -1, shonly = -1, evil = -1, i;
+    for (i = 0; i < updated.n; i++) {
+      if (strcmp(updated.items[i].id, "app:hand-mod") == 0) hand = i;
+      if (strcmp(updated.items[i].id, "app:named-mod") == 0) named = i;
+      if (strcmp(updated.items[i].id, "app:sh-only") == 0) shonly = i;
+      if (strcmp(updated.items[i].id, "app:evil") == 0) evil = i;
+    }
+    assert(hand > 0);
+    assert(strcmp(updated.items[hand].title, "hand-mod") == 0);
+    assert(strcmp(updated.items[hand].run, "autorun/start.sh") == 0);
+    snprintf(path, sizeof path, "%s/autorun/apps/hand-mod", dir);
+    assert(strcmp(updated.items[hand].base, path) == 0);
+    assert(named > 0);
+    assert(strcmp(updated.items[named].title, "Named mod") == 0);
+    assert(strcmp(updated.items[named].run, "autorun/autorun.sh") == 0);
+    assert(shonly > 0);
+    assert(strcmp(updated.items[shonly].title, "sh-only") == 0);
+    assert(strcmp(updated.items[shonly].run, "autorun/autorun.sh") == 0);
+    assert(evil < 0);
+  }
+  assert(boot_entry_update(dir, "app:loose-binary", "Nope", NULL) != 0);
+  assert(boot_entry_update(dir, "app:hand-mod", "Hand Mod", NULL) == 0);
+  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/boot.entry", dir);
+  {
+    char *body = read_all(path);
+    assert(strcmp(body, "title=Hand Mod\nrun=autorun/start.sh\n") == 0);
+    free(body);
+  }
+  assert(menu_load(&updated, dir) >= 4);
+  {
+    int hand = -1, i;
+    for (i = 0; i < updated.n; i++) {
+      if (strcmp(updated.items[i].id, "app:hand-mod") == 0) hand = i;
+    }
+    assert(hand > 0);
+    assert(strcmp(updated.items[hand].title, "Hand Mod") == 0);
+  }
+
+  /* Device unzip: a deflated archive, a root package, and a path that escapes. */
+  {
+    char script[2048], cmd[640], run[256], zipout[512];
+    snprintf(path, sizeof path, "%s/mkzip.py", dir);
+    snprintf(script, sizeof script,
+             "import zipfile, sys\n"
+             "kind = sys.argv[1]\n"
+             "dest = sys.argv[2]\n"
+             "if kind == 'hub':\n"
+             "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_DEFLATED)\n"
+             "    z.writestr('proj-1.0/README.md', 'skip')\n"
+             "    z.writestr('proj-1.0/DATA/nope.txt', 'nope')\n"
+             "    z.writestr('proj-1.0/autorun/autorun.json', '{\"value0\":{\"scripts\":[{\"path\":\"autorun.sh\"}]}}')\n"
+             "    z.writestr('proj-1.0/autorun/autorun.sh', '#!/bin/sh\\necho hi\\n')\n"
+             "    z.writestr('proj-1.0/autorun/note.txt', 'keep')\n"
+             "    z.close()\n"
+             "elif kind == 'root':\n"
+             "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED)\n"
+             "    z.writestr('autorun.sh', '#!/bin/sh\\n')\n"
+             "    z.writestr('extra.txt', 'keep')\n"
+             "    z.close()\n"
+             "elif kind == 'slip':\n"
+             "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED)\n"
+             "    z.writestr('autorun/autorun.sh', '#!/bin/sh\\n')\n"
+             "    z.writestr('autorun/../escaped.txt', 'nope')\n"
+             "    z.close()\n");
+    write_file(path, script);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' hub '%s/hub.zip'", dir, dir);
+    assert(system(cmd) == 0);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' root '%s/root.zip'", dir, dir);
+    assert(system(cmd) == 0);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' slip '%s/slip.zip'", dir, dir);
+    assert(system(cmd) == 0);
+
+    snprintf(zipout, sizeof zipout, "%s/zip-hub", dir);
+    assert(mkdir(zipout, 0755) == 0);
+    snprintf(path, sizeof path, "%s/hub.zip", dir);
+    assert(unzip_autorun(path, zipout, run, sizeof run) == 0);
+    assert(strcmp(run, "autorun/autorun.sh") == 0);
+    snprintf(path, sizeof path, "%s/autorun/note.txt", zipout);
+    assert(access(path, F_OK) == 0);
+    snprintf(path, sizeof path, "%s/autorun/autorun.sh", zipout);
+    assert(access(path, X_OK) == 0);
+    snprintf(path, sizeof path, "%s/README.md", zipout);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/autorun/README.md", zipout);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/DATA/nope.txt", zipout);
+    assert(access(path, F_OK) != 0);
+
+    snprintf(zipout, sizeof zipout, "%s/zip-root", dir);
+    assert(mkdir(zipout, 0755) == 0);
+    snprintf(path, sizeof path, "%s/root.zip", dir);
+    assert(unzip_autorun(path, zipout, run, sizeof run) == 0);
+    assert(strcmp(run, "autorun/autorun.sh") == 0);
+    snprintf(path, sizeof path, "%s/autorun/extra.txt", zipout);
+    {
+      char *body = read_all(path);
+      assert(strcmp(body, "keep") == 0);
+      free(body);
+    }
+
+    snprintf(zipout, sizeof zipout, "%s/zip-slip", dir);
+    assert(mkdir(zipout, 0755) == 0);
+    snprintf(path, sizeof path, "%s/slip.zip", dir);
+    assert(unzip_autorun(path, zipout, run, sizeof run) != 0);
+    snprintf(path, sizeof path, "%s/escaped.txt", dir);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/escaped.txt", zipout);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/autorun/escaped.txt", zipout);
+    assert(access(path, F_OK) != 0);
+  }
 
   assert(png_load_screen("splash-screen.png", px) == 0);
   uint64_t sum = 0;

@@ -33,12 +33,22 @@ struct menu {
 /* Stock is always first. Then, sorted by name:
    every .entry file in card/autorun/boot-menu (run is relative to the card root) and
    card/autorun/apps/<name>/boot.entry (run is relative to that folder).
-   A file without both title and run is skipped. A missing card yields Stock only.
+   An app folder with no boot.entry is still listed when it holds
+   autorun/autorun.json or autorun/autorun.sh. Its title is the folder name
+   and its run is autorun/<script>. A file without both title and run is skipped.
+   A missing card yields Stock only.
    Each row gets an id: "stock", "app:<folder>", or "entry:<file>". */
 int menu_load(struct menu *m, const char *card);
 
 /* Parse a single .entry file into e. Returns 0 on success, -1 on failure. */
 int menu_parse_entry(const char *path, struct menu_entry *e);
+
+/* app_dir is autorun/apps/<name>. When it contains a nested autorun package,
+   run receives the path relative to app_dir (autorun/<script>).
+   The script is the first "path" in autorun.json, or autorun.sh when that
+   file has no path. The script must be a regular file inside the package.
+   Returns 0 when a script is found. */
+int menu_nested_run(const char *app_dir, char *run, size_t n);
 
 /* Index of the id saved in card/autorun/system/boot-default.
    A missing file, a blank line, "stock", or an unknown id returns 0. */

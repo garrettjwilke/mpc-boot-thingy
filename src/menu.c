@@ -53,6 +53,7 @@ struct found {
     char path[512];
     char base[512];
     char id[MENU_ID];
+    int synthetic; /* path is a run string; title is the folder name in key */
 };
 
 static int found_cmp(const void *a, const void *b) {
@@ -67,12 +68,99 @@ static int push_found(struct found *f, int n, int max, const char *key, const ch
     snprintf(f[n].path, sizeof f[n].path, "%s", path);
     snprintf(f[n].base, sizeof f[n].base, "%s", base);
     snprintf(f[n].id, sizeof f[n].id, "%s", id);
+    f[n].synthetic = 0;
     return n + 1;
 }
 
 static int join2(char *out, size_t n, const char *a, const char *b) {
     int wr = snprintf(out, n, "%s/%s", a, b);
     return wr < 0 || (size_t)wr >= n ? -1 : 0;
+}
+
+/* 0 when rel stays inside the package. -1 when it does not. */
+static int script_rel_ok(const char *rel) {
+    const char *p;
+    if (!rel || !rel[0] || rel[0] == '/' || rel[0] == '\\') return 0;
+    p = rel;
+    while (*p) {
+        const char *start;
+        size_t len;
+        if (*p == '/' || *p == '\\') return 0;
+        if ((unsigned char)*p < 0x20 || *p == 0x7f) return 0;
+        start = p;
+        while (*p && *p != '/' && *p != '\\') {
+            if ((unsigned char)*p < 0x20 || *p == 0x7f) return 0;
+            p++;
+        }
+        len = (size_t)(p - start);
+        if (len == 0 || (len == 1 && start[0] == '.') || (len == 2 && start[0] == '.' && start[1] == '.')) return 0;
+        if (*p == '\\') return 0;
+        if (*p == '/') {
+            p++;
+            if (!*p) return 0;
+        }
+    }
+    return 1;
+}
+
+/* 0 and the path is in out. -1 when the file has no path. -2 when a path is broken. */
+static int json_first_path(const char *file, char *out, size_t n) {
+    FILE *f = fopen(file, "r");
+    char buf[65536];
+    size_t got, len;
+    char *p;
+    int full;
+    if (!f) return -1;
+    got = fread(buf, 1, sizeof buf - 1, f);
+    full = got < sizeof buf - 1;
+    fclose(f);
+    buf[got] = 0;
+    p = buf;
+    while ((p = strstr(p, "\"path\"")) != NULL) {
+        char *q;
+        p += 6;
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        if (*p != ':') continue;
+        p++;
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        if (*p != '"') continue;
+        p++;
+        q = p;
+        while (*q && *q != '"' && *q != '\n' && *q != '\r' && *q != '\\') q++;
+        if (*q != '"') return -2;
+        len = (size_t)(q - p);
+        if (len == 0 || len + 1 > n) return -2;
+        memcpy(out, p, len);
+        out[len] = 0;
+        return 0;
+    }
+    if (!full) return -2;
+    return -1;
+}
+
+int menu_nested_run(const char *app_dir, char *run, size_t n) {
+    char pkg[512], json[512], script[512], rel[MENU_RUN];
+    struct stat st;
+    int from_json = 0;
+    if (!app_dir || !app_dir[0] || !run || n == 0) return -1;
+    if (join2(pkg, sizeof pkg, app_dir, "autorun") != 0) return -1;
+    if (lstat(pkg, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) return -1;
+    rel[0] = 0;
+    if (join2(json, sizeof json, pkg, "autorun.json") == 0 &&
+        lstat(json, &st) == 0 && S_ISREG(st.st_mode)) {
+        int jr = json_first_path(json, rel, sizeof rel);
+        if (jr == -2) return -1;
+        if (jr == 0) from_json = 1;
+    }
+    if (!from_json) {
+        if (snprintf(rel, sizeof rel, "autorun.sh") >= (int)sizeof rel) return -1;
+    }
+    if (rel[0] == '.' && rel[1] == '/') memmove(rel, rel + 2, strlen(rel + 2) + 1);
+    if (!script_rel_ok(rel)) return -1;
+    if (join2(script, sizeof script, pkg, rel) != 0) return -1;
+    if (lstat(script, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
+    if (snprintf(run, n, "autorun/%s", rel) >= (int)n) return -1;
+    return 0;
 }
 
 /* *.entry files in dir. run is relative to base. key is the filename. */
@@ -92,7 +180,8 @@ static int collect_entries(struct found *f, int n, int max, const char *dir, con
     return n;
 }
 
-/* autorun/apps/<name>/boot.entry. run is relative to that folder. key is the folder name. */
+/* autorun/apps/<name>/boot.entry. run is relative to that folder. key is the folder name.
+   A nested autorun package with no boot.entry is listed from its script. */
 static int collect_apps(struct found *f, int n, int max, const char *apps) {
     DIR *d = opendir(apps);
     if (!d) return n;
@@ -104,10 +193,20 @@ static int collect_apps(struct found *f, int n, int max, const char *apps) {
         struct stat st;
         if (stat(folder, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
         if (join2(path, sizeof path, folder, "boot.entry") != 0) continue;
-        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
         char id[MENU_ID];
         if (snprintf(id, sizeof id, "app:%s", de->d_name) >= (int)sizeof id) continue;
-        n = push_found(f, n, max, de->d_name, path, folder, id);
+        if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+            n = push_found(f, n, max, de->d_name, path, folder, id);
+            continue;
+        }
+        {
+            char run[MENU_RUN];
+            int next;
+            if (menu_nested_run(folder, run, sizeof run) != 0) continue;
+            next = push_found(f, n, max, de->d_name, run, folder, id);
+            if (next > n) f[n].synthetic = 1;
+            n = next;
+        }
     }
     closedir(d);
     return n;
@@ -133,7 +232,14 @@ int menu_load(struct menu *m, const char *card) {
 
     for (int i = 0; i < nc && m->n < MENU_MAX; i++) {
         struct menu_entry e;
-        if (menu_parse_entry(found[i].path, &e) != 0) continue;
+        if (found[i].synthetic) {
+            memset(&e, 0, sizeof e);
+            if (!found[i].key[0] || !found[i].path[0]) continue;
+            if (snprintf(e.title, sizeof e.title, "%s", found[i].key) >= (int)sizeof e.title) continue;
+            if (snprintf(e.run, sizeof e.run, "%s", found[i].path) >= (int)sizeof e.run) continue;
+        } else if (menu_parse_entry(found[i].path, &e) != 0) {
+            continue;
+        }
         snprintf(e.base, sizeof e.base, "%s", found[i].base);
         snprintf(e.id, sizeof e.id, "%s", found[i].id);
         m->items[m->n++] = e;

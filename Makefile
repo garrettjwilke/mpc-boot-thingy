@@ -5,6 +5,7 @@ INC = -Iinc -I$(UI)
 DEV_SRC = src/main.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c src/format_sd.c \
 	$(UI)/ui.c $(UI)/widgets.c $(UI)/usb_sd.c $(UI)/input.c $(UI)/screen.c $(UI)/surface.c
 HOST_SRC = src/test.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c src/format_sd.c \
+	webserver/unzip.c \
 	$(UI)/ui.c $(UI)/widgets.c $(UI)/usb_sd.c $(UI)/input.c
 
 .PHONY: all test clean web-host
@@ -29,14 +30,14 @@ build/loader-test: menu-patch/loader.c
 	mkdir -p build
 	cc -std=c11 -D_DEFAULT_SOURCE -DMPC_LOADER_TEST -g $(WARN) -o $@ menu-patch/loader.c
 
-build/mpc-boot-web: webserver/server.c src/menu.c src/boot_edit.c inc/menu.h inc/boot_edit.h
+build/mpc-boot-web: webserver/server.c webserver/unzip.c src/menu.c src/boot_edit.c inc/menu.h inc/boot_edit.h inc/unzip.h
 	mkdir -p build
 	zig cc -target aarch64-linux-musl -static -O2 -s $(WARN) -Iinc \
-	  -o $@ webserver/server.c src/menu.c src/boot_edit.c
+	  -o $@ webserver/server.c webserver/unzip.c src/menu.c src/boot_edit.c
 
-build/mpc-boot-web-host: webserver/server.c src/menu.c src/boot_edit.c inc/menu.h inc/boot_edit.h
+build/mpc-boot-web-host: webserver/server.c webserver/unzip.c src/menu.c src/boot_edit.c inc/menu.h inc/boot_edit.h inc/unzip.h
 	mkdir -p build
-	cc -D_DARWIN_C_SOURCE -D_GNU_SOURCE -g $(WARN) -Iinc -o $@ webserver/server.c src/menu.c src/boot_edit.c
+	cc -D_DARWIN_C_SOURCE -D_GNU_SOURCE -g $(WARN) -Iinc -o $@ webserver/server.c webserver/unzip.c src/menu.c src/boot_edit.c
 
 web-host: build/mpc-boot-web-host
 
