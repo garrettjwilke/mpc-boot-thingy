@@ -2,7 +2,7 @@
 #include "font.h"
 #include "input.h"
 #include "theme.h"
-#include "usb_storage.h"
+#include "usb_sd.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -74,6 +74,35 @@ static struct ui_list_style list_style(const struct boot_theme *th) {
       .current_fill = th->bar,
   };
   return st;
+}
+
+static struct ui_usb_sd_style usb_style(const struct boot_theme *th) {
+  struct ui_usb_sd_style st = {
+      .bg = th->bg,
+      .text = th->text,
+      .dim = th->dim,
+      .hl = th->hl,
+      .box = th->box,
+      .border = th->border,
+      .bar = th->bar,
+      .active_text = th->active_text,
+  };
+  return st;
+}
+
+/* 1 when this frame belongs to the USB screen. 0 when the caller should draw
+   the screen underneath, which is Settings after a failed start. */
+static int run_usb_sd(struct ui *u, struct boot_ui *s, const struct input *in) {
+  int rc = ui_usb_sd(u, &s->usb, usb_style(theme_at(s->theme)), in);
+  if (rc == UI_USB_SD_DONE) {
+    s->action = BOOT_ACT_USB_SD_DONE;
+    return 1;
+  }
+  if (rc == UI_USB_SD_FAILED) {
+    s->screen = BOOT_SCREEN_SETTINGS;
+    return 0;
+  }
+  return 1;
 }
 
 static void note_default(struct boot_ui *s, int index) {
@@ -351,17 +380,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   int left = 0;
   int shift_apps = (screen == BOOT_SCREEN_APPS && shift_held);
   int shift_boot = (shift_apps && s->apps_ls.cursor > 0);
-  if (screen == BOOT_SCREEN_STORAGE) {
-    if (input_down(&ev, IN_B1) || ev.encoder_press) {
-      if (s->storage_status == USB_STORAGE_STATUS_ACTIVE) {
-        s->action = BOOT_ACT_STOP_USB_STORAGE;
-        s->storage_status = USB_STORAGE_STATUS_EXITING;
-      } else if (s->storage_status == USB_STORAGE_STATUS_ERROR) {
-        s->screen = BOOT_SCREEN_SETTINGS;
-      }
-      left = 1;
-    }
-  } else if (shift_apps && input_down(&ev, IN_B1)) {
+  if (shift_apps && input_down(&ev, IN_B1)) {
     if (shift_boot) {
       int sel = s->apps_ls.cursor - 1;
       if (sel >= 0 && sel < n)
@@ -402,7 +421,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
              input_down(&ev, IN_B3)) {
     queue_save(s);
     left = 1;
-  } else if (screen != BOOT_SCREEN_APPS && input_down(&ev, IN_B1)) {
+  } else if (screen != BOOT_SCREEN_APPS && screen != BOOT_SCREEN_STORAGE &&
+             input_down(&ev, IN_B1)) {
     if (screen == BOOT_SCREEN_THEME) {
       s->theme = s->saved_theme;
       s->theme_ls.cursor = s->saved_theme;
@@ -441,9 +461,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
         s->theme_ls.cursor = s->saved_theme;
       } else if (s->settings_ls.cursor == 2) {
         s->screen = BOOT_SCREEN_STORAGE;
-        s->storage_status = USB_STORAGE_STATUS_PREPARING;
-        s->storage_err[0] = 0;
-        s->action = BOOT_ACT_START_USB_STORAGE;
+        ui_usb_sd_init(&s->usb);
       } else {
         s->action = BOOT_ACT_RELOAD;
       }
@@ -460,6 +478,12 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       s->screen = BOOT_SCREEN_SETTINGS;
       ev.encoder_press = 0;
     }
+  }
+
+  if (s->screen == BOOT_SCREEN_STORAGE) {
+    if (run_usb_sd(u, s, &ev))
+      return 0;
+    input_begin(&ev, 0);
   }
 
   const struct boot_theme *th = theme_at(s->theme);
@@ -493,10 +517,6 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     labels[0] = "Back";
     labels[1] = "";
     labels[2] = "Save";
-  } else if (s->screen == BOOT_SCREEN_STORAGE) {
-    labels[0] = "Exit";
-    labels[1] = "";
-    labels[2] = "";
   } else {
     labels[0] = "Back";
     labels[1] = "";
@@ -519,16 +539,6 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   else if (s->screen == BOOT_SCREEN_POWER) {
     title = "Power";
     hint = "choose a power option";
-  } else if (s->screen == BOOT_SCREEN_STORAGE) {
-    title = "SD Card Access";
-    if (s->storage_status == USB_STORAGE_STATUS_PREPARING)
-      hint = "preparing USB interface...";
-    else if (s->storage_status == USB_STORAGE_STATUS_ACTIVE)
-      hint = "connected via USB";
-    else if (s->storage_status == USB_STORAGE_STATUS_EXITING)
-      hint = "exiting USB storage...";
-    else if (s->storage_status == USB_STORAGE_STATUS_ERROR)
-      hint = "storage error";
   } else if (s->screen == BOOT_SCREEN_ITEM_EDIT) {
     fit_text(title_buf, sizeof title_buf, s->edit_title);
     title = title_buf;
@@ -563,7 +573,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     title = "Not saved yet";
     hint = "this entry has changes";
   } else if (next_apps_cursor == 0)
-    hint = "press to mount SD card over USB";
+    hint = UI_USB_SD_HINT;
   else
     hint = "hold shift for options";
   if (s->notice[0])
@@ -582,7 +592,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     char text[MENU_MAX][48];
     const char *rows[MENU_MAX];
     int count = 0;
-    rows[count++] = "USB storage (SD card)";
+    rows[count++] = UI_USB_SD_LABEL;
     for (int i = 0; i < n && count < MENU_MAX; i++) {
       row_label(text[i], sizeof text[i], s->menu->items[i].title,
                 i == s->default_index);
@@ -592,9 +602,9 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
                       widget_in, &s->apps_ls);
     if (hit == 0) {
       s->screen = BOOT_SCREEN_STORAGE;
-      s->storage_status = USB_STORAGE_STATUS_PREPARING;
-      s->storage_err[0] = 0;
-      s->action = BOOT_ACT_START_USB_STORAGE;
+      ui_usb_sd_init(&s->usb);
+      run_usb_sd(u, s, &ev);
+      return 0;
     } else if (hit > 0) {
       int sel = hit - 1;
       s->action = BOOT_ACT_LAUNCH;
@@ -612,62 +622,10 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     else if (hit == 2)
       s->screen = BOOT_SCREEN_APPS;
   } else if (s->screen == BOOT_SCREEN_SETTINGS) {
-    const char *rows[] = {"Set default app", "Set theme",
-                          "USB storage (SD card)", "Reload menu & SD"};
+    const char *rows[] = {"Set default app", "Set theme", UI_USB_SD_LABEL,
+                          "Reload menu & SD"};
     ui_list(u, 8, list_y, 304, list_h, rows, 4, rows_st, widget_in,
             &s->settings_ls);
-  } else if (s->screen == BOOT_SCREEN_STORAGE) {
-    struct ui_paint card_bg = {.fill_set = 1,
-                               .fill = th->box,
-                               .border_set = 1,
-                               .border = th->border,
-                               .border_px = 1};
-    ui_box(u, 16, 76, 288, 144, card_bg);
-
-    if (s->storage_status == USB_STORAGE_STATUS_ACTIVE) {
-      ui_text(u, 28, 92, "USB STORAGE ACTIVE", th->hl, 1);
-      ui_text(u, 28, 114, "SD card is mounted on your PC.", th->text, 1);
-      ui_text(u, 28, 132, "Do not unplug until safely", th->dim, 1);
-      ui_text(u, 28, 146, "ejected on your computer.", th->dim, 1);
-
-      struct ui_button btn_st = {.fill = th->bar,
-                                 .text = th->active_text,
-                                 .border_set = 1,
-                                 .border = th->hl,
-                                 .border_px = 1,
-                                 .highlighted = 1,
-                                 .highlight = th->hl,
-                                 .highlight_px = 2};
-      if (ui_button(u, 64, 172, 192, 32, "Exit USB Mode", btn_st, widget_in)) {
-        s->action = BOOT_ACT_STOP_USB_STORAGE;
-        s->storage_status = USB_STORAGE_STATUS_EXITING;
-      }
-    } else if (s->storage_status == USB_STORAGE_STATUS_PREPARING) {
-      ui_text(u, 28, 96, "Preparing USB interface...", th->hl, 1);
-      ui_text(u, 28, 120, "Unmounting local SD partitions...", th->text, 1);
-      ui_text(u, 28, 140, "Please wait...", th->dim, 1);
-    } else if (s->storage_status == USB_STORAGE_STATUS_EXITING) {
-      ui_text(u, 28, 96, "Exiting USB storage...", th->hl, 1);
-      ui_text(u, 28, 120, "Restoring network & remounting...", th->text, 1);
-      ui_text(u, 28, 140, "Please wait...", th->dim, 1);
-    } else if (s->storage_status == USB_STORAGE_STATUS_ERROR) {
-      ui_text(u, 28, 92, "Could not start USB storage", th->hl, 1);
-      const char *msg =
-          s->storage_err[0] ? s->storage_err : "Unknown error occurred";
-      ui_text(u, 28, 116, msg, th->text, 1);
-
-      struct ui_button btn_st = {.fill = th->bar,
-                                 .text = th->active_text,
-                                 .border_set = 1,
-                                 .border = th->hl,
-                                 .border_px = 1,
-                                 .highlighted = 1,
-                                 .highlight = th->hl,
-                                 .highlight_px = 2};
-      if (ui_button(u, 80, 172, 160, 32, "Back", btn_st, widget_in)) {
-        s->screen = BOOT_SCREEN_SETTINGS;
-      }
-    }
   } else if (s->screen == BOOT_SCREEN_DEFAULT) {
     char text[MENU_MAX][48];
     const char *rows[MENU_MAX];

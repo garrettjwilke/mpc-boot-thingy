@@ -11,7 +11,7 @@
 #include "surface.h"
 #include "theme.h"
 #include "ui.h"
-#include "usb_storage.h"
+#include "usb_sd.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -1269,35 +1269,8 @@ int main(int argc, char **argv) {
       wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
       continue;
     }
-    if (ui.action == BOOT_ACT_START_USB_STORAGE) {
+    if (ui.action == BOOT_ACT_USB_SD_DONE) {
       ui.action = BOOT_ACT_NONE;
-      input_begin(&quiet, &dev);
-      started = mono_ms();
-      wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
-
-      char err_buf[128] = {0};
-      int rc_st = usb_storage_start(err_buf, sizeof err_buf);
-      if (rc_st == 0) {
-        ui.storage_status = USB_STORAGE_STATUS_ACTIVE;
-        ui.storage_err[0] = 0;
-      } else {
-        ui.storage_status = USB_STORAGE_STATUS_ERROR;
-        snprintf(ui.storage_err, sizeof ui.storage_err, "%s",
-                 err_buf[0] ? err_buf : "Failed to start");
-      }
-      input_begin(&quiet, &dev);
-      started = mono_ms();
-      wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
-      continue;
-    }
-    if (ui.action == BOOT_ACT_STOP_USB_STORAGE) {
-      ui.action = BOOT_ACT_NONE;
-      input_begin(&quiet, &dev);
-      started = mono_ms();
-      wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
-
-      char err_buf[128] = {0};
-      usb_storage_stop(err_buf, sizeof err_buf);
       if (!has_autorun_dir(card))
         card_root_of(card, card, sizeof card);
       else
@@ -1307,8 +1280,6 @@ int main(int argc, char **argv) {
       npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
       boot_ui_set_catalog(&ui, catalog, npatches);
       ui.default_index = menu_default_index(&menu, card);
-      ui.storage_status = USB_STORAGE_STATUS_IDLE;
-      ui.storage_err[0] = 0;
       int dsel = (ui.default_index >= 0 && ui.default_index < menu.n)
                      ? ui.default_index
                      : 0;
@@ -1330,10 +1301,8 @@ int main(int argc, char **argv) {
     }
     if (ui.action == BOOT_ACT_REBOOT || ui.action == BOOT_ACT_SHUTDOWN) {
       int shutdown = (ui.action == BOOT_ACT_SHUTDOWN);
-      if (ui.storage_status == USB_STORAGE_STATUS_ACTIVE) {
-        usb_storage_stop(NULL, 0);
-        ui.storage_status = USB_STORAGE_STATUS_IDLE;
-      }
+      if (ui_usb_sd_is_active(&ui.usb))
+        ui_usb_sd_stop(&ui.usb);
       remove_pid_file();
       power_action(shutdown, &midi, &scr, back, front);
       release_devices(&midi, &scr);
@@ -1342,9 +1311,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (ui.storage_status == USB_STORAGE_STATUS_ACTIVE) {
-    usb_storage_stop(NULL, 0);
-  }
+  if (ui_usb_sd_is_active(&ui.usb))
+    ui_usb_sd_stop(&ui.usb);
 
   remove_pid_file();
   if (rc != 0) {

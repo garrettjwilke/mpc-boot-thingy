@@ -26,8 +26,7 @@ enum {
   BOOT_ACT_SAVE_THEME,
   BOOT_ACT_SAVE_BOOT,
   BOOT_ACT_RELOAD,
-  BOOT_ACT_START_USB_STORAGE,
-  BOOT_ACT_STOP_USB_STORAGE,
+  BOOT_ACT_USB_SD_DONE,
   BOOT_ACT_UPDATE_ENTRY,
   BOOT_ACT_DELETE_ENTRY,
   BOOT_ACT_REBOOT,
@@ -76,8 +75,7 @@ struct boot_ui {
   int text_edit_mode;
   int text_prev_screen;
   char notice[96];
-  int storage_status;
-  char storage_err[128];
+  struct ui_usb_sd usb;
 };
 
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme,
