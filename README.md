@@ -17,8 +17,9 @@ You can install or update mpc-boot-thingy directly over USB without requiring an
    ./setup.sh --usb
    ```
 3. Look at the MPC screen:
-   - If an existing autoboot is on the SD card, a dialog shows its name (default **Previous Autoboot**) and asks **Rename this app?** Yes opens the text editor. No keeps the name shown.
-   - The installer then asks **"Install boot thingy?"** (or **"Update boot thingy?"**). An existing autoboot is saved into `autorun/apps/` under the name from the previous step.
+   - If an existing autoboot is on the SD card, the installer says boot thingy can add it as a boot entry and asks whether to **keep** or **delete** it.
+   - **Keep** opens the text editor with the name **old autoboot**. Leave that name or change it, then confirm. **Delete** removes the old autoboot when boot thingy is installed.
+   - The installer then asks **"Install boot thingy?"** (or **"Update boot thingy?"**).
    - Press **Yes** (top right button / PLAY / Data Wheel Click) to install and reboot into mpc-boot-thingy.
    - Press **No** (top left button / STOP) to cancel without making changes.
 
