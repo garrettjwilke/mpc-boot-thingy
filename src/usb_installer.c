@@ -87,12 +87,23 @@ static void do_reboot(void) {
   }
   sync();
 
-  char *argv1[] = {"/bin/systemctl", "reboot", "-i", NULL};
-  run_cmd(argv1);
-  char *argv2[] = {"/sbin/reboot", "-f", NULL};
-  run_cmd(argv2);
-  char *argv3[] = {"reboot", "-f", NULL};
-  run_cmd(argv3);
+  log_msg("Invoking reboot commands");
+  pid_t pid = fork();
+  if (pid == 0) {
+    char *const r_argv[] = {"reboot", NULL};
+    execvp(r_argv[0], r_argv);
+    _exit(0);
+  }
+  usleep(500 * 1000);
+  pid = fork();
+  if (pid == 0) {
+    char *const s_argv[] = {"systemctl", "reboot", "-i", NULL};
+    execvp(s_argv[0], s_argv);
+    _exit(0);
+  }
+  usleep(500 * 1000);
+  sync();
+  log_msg("Calling kernel reboot syscall");
   reboot(RB_AUTOBOOT);
 }
 
@@ -292,6 +303,7 @@ static int perform_install(const char *card, const char *staged,
 
     char path[512], hold_target[512];
     /* Hold SSH key */
+    log_msg("Preserving SSH host key if present");
     snprintf(path, sizeof path, "%s/autorun/system/ssh/ssh_host_ed25519_key",
              card);
     struct stat st;
@@ -299,9 +311,11 @@ static int perform_install(const char *card, const char *staged,
       snprintf(hold_target, sizeof hold_target, "%s/ssh_key", hold_dir);
       char *cp_k[] = {"cp", "-a", path, hold_target, NULL};
       run_cmd(cp_k);
+      log_msg("SSH host key preserved");
     }
 
     /* Hold os_tools rc files */
+    log_msg("Preserving shell rc files if present");
     const char *rc_files[] = {".bashrc", ".bash_profile", NULL};
     for (int i = 0; rc_files[i]; i++) {
       const char *rc = rc_files[i];
@@ -310,11 +324,14 @@ static int perform_install(const char *card, const char *staged,
         snprintf(hold_target, sizeof hold_target, "%s/%s", hold_dir, rc);
         char *cp_rc[] = {"cp", "-a", path, hold_target, NULL};
         run_cmd(cp_rc);
+        log_msg("Preserved rc file: %s", rc);
       }
     }
 
     /* Copy staged payload over autorun */
+    log_msg("Copying staged tree from %s to %s", staged, card);
     copy_tree(staged, (char *)card);
+    log_msg("Copy staged tree finished");
 
     /* Restore SSH key if was preserved */
     snprintf(hold_target, sizeof hold_target, "%s/ssh_key", hold_dir);
@@ -323,6 +340,7 @@ static int perform_install(const char *card, const char *staged,
                card);
       char *cp_back[] = {"cp", "-f", hold_target, path, NULL};
       run_cmd(cp_back);
+      log_msg("Restored SSH host key");
     }
 
     /* Restore os_tools rc */
@@ -333,6 +351,7 @@ static int perform_install(const char *card, const char *staged,
         snprintf(path, sizeof path, "%s/autorun/os_tools/%s", card, rc);
         char *cp_back[] = {"cp", "-f", hold_target, path, NULL};
         run_cmd(cp_back);
+        log_msg("Restored rc file: %s", rc);
       }
     }
     char *rm_tmp[] = {"rm", "-rf", hold_dir, NULL};
@@ -576,7 +595,7 @@ int main(int argc, char **argv) {
     ui_text(&u, 20, 48, "USB INSTALLER", 0xffb000, 1);
 
     /* Question */
-    ui_text(&u, 20, 72, question, 0xffffff, 2);
+    ui_text(&u, 20, 72, question, 0xffffff, 1);
 
     /* Subtitle */
     ui_text(&u, 20, 104, subtitle, 0x9aa4b0, 1);
@@ -623,21 +642,26 @@ int main(int argc, char **argv) {
   if (choice == 1) {
     draw_status_screen(&scr, back, front, &midi, "Installing...",
                        "Copying boot thingy to SD card...");
+    log_msg("Calling perform_install");
     perform_install(card, staged, mode);
+    log_msg("Drawing Complete! status screen");
     draw_status_screen(&scr, back, front, &midi, "Complete!",
                        "Boot thingy is installed. Rebooting...");
     sleep(2);
   } else {
+    log_msg("Drawing Cancelled status screen");
     draw_status_screen(&scr, back, front, &midi, "Cancelled",
                        "No changes made. Rebooting...");
     sleep(1);
   }
 
+  log_msg("Closing screen and surface");
   free(back);
   free(front);
   screen_close(&scr);
   surface_close(&midi);
 
+  log_msg("Triggering do_reboot");
   do_reboot();
   return 0;
 }
