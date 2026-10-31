@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -15,6 +16,7 @@
     })();
   </script>
 </head>
+
 <body>
   <header>
     <div class="brand">MPC Boot</div>
@@ -35,12 +37,14 @@
     <section id="tab-boot" class="tab active">
       <div class="card">
         <h3>Boot programs</h3>
-        <p class="muted">Hold SHIFT during the prompt to open the menu on the MPC. Otherwise the default starts. Boot thingy opens that menu now.</p>
+        <p class="muted">Hold SHIFT during the prompt to open the menu on the MPC. Otherwise the default starts. Boot
+          thingy opens that menu now.</p>
         <div id="apps"></div>
       </div>
       <div class="card" id="boot-edit">
         <h3>Boot Edit</h3>
-        <p class="muted">Turn catalog patches on to make one boot entry. Stock keeps its own patch set. Each saved entry shows up in the list above.</p>
+        <p class="muted">Turn catalog patches on to make one boot entry. Stock keeps its own patch set. Each saved entry
+          shows up in the list above.</p>
         <button class="btn" id="boot-new" type="button">New entry</button>
         <div id="boot-form" hidden>
           <label class="field">Title
@@ -55,7 +59,9 @@
       </div>
       <div class="card">
         <h3>Install a program</h3>
-        <p class="muted">The new program is used on the next boot when it is the default and SHIFT is not held. It must be an aarch64 Linux executable, a script whose first line runs sh or bash, or a zip of an autorun package. The zip keeps that package in its own folder.</p>
+        <p class="muted">The new program is used on the next boot when it is the default and SHIFT is not held. It must
+          be an aarch64 Linux executable, a script whose first line runs sh or bash, or a zip of an autorun package. The
+          zip keeps that package in its own folder.</p>
         <div class="row">
           <label class="field">Title
             <input id="title" type="text" placeholder="Lab firmware" />
@@ -112,7 +118,9 @@
           <span id="term-status" class="badge">closed</span>
           <button class="btn secondary sm" id="reconnect" type="button">Reconnect</button>
         </div>
-        <div class="term-wrap"><div id="term"></div></div>
+        <div class="term-wrap">
+          <div id="term"></div>
+        </div>
       </div>
     </section>
   </main>
@@ -132,4 +140,5 @@
   <script src="/xterm-addon-fit.js"></script>
   <script type="module" src="/src/main.js"></script>
 </body>
+
 </html>
