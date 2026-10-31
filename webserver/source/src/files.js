@@ -48,56 +48,64 @@ export function bindFiles({ toast }) {
     return ids.filter(Boolean).join("/");
   }
 
-  function showUploadStatus(initialTotal, onCancel) {
-    let el = document.getElementById("fb-upload-status");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "fb-upload-status";
-      el.className = "fb-upload-status";
-      container.appendChild(el);
-    }
-    el.innerHTML = `
-      <span class="fb-upload-spinner"></span>
-      <span class="fb-upload-text">Uploading folder (0 / ${initialTotal})…</span>
-      <button type="button" class="btn sm danger fb-upload-cancel">Cancel</button>
-    `;
-    const btnCancel = el.querySelector(".fb-upload-cancel");
-    if (btnCancel) {
-      btnCancel.onclick = onCancel;
+  let activeOverlay = null;
+
+  function lockUI({ title = "Transferring files to MPC…", message = "Uploading…", onCancel = null } = {}) {
+    const overlay = document.getElementById("ui-lock-overlay");
+    const msgEl = document.getElementById("ui-lock-msg");
+    const titleEl = document.getElementById("ui-lock-title");
+    const cancelBtn = document.getElementById("ui-lock-cancel");
+    const spinner = overlay ? overlay.querySelector(".ui-lock-spinner") : null;
+
+    if (overlay) {
+      if (titleEl) titleEl.textContent = title;
+      if (msgEl) msgEl.textContent = message;
+      if (spinner) spinner.style.display = "block";
+      if (cancelBtn) {
+        cancelBtn.style.display = onCancel ? "block" : "none";
+        cancelBtn.onclick = onCancel;
+      }
+      overlay.removeAttribute("hidden");
     }
 
-    return {
-      update: (done, total) => {
-        const text = el.querySelector(".fb-upload-text");
-        if (text) text.textContent = `Uploading folder (${done} / ${total})…`;
-      },
-      done: (done, failed) => {
-        const spinner = el.querySelector(".fb-upload-spinner");
-        const btn = el.querySelector(".fb-upload-cancel");
-        const text = el.querySelector(".fb-upload-text");
-        if (spinner) spinner.style.display = "none";
-        if (btn) btn.style.display = "none";
-        if (text) {
-          text.textContent = failed > 0
-            ? `Uploaded ${done} files (${failed} failed)`
-            : `Uploaded ${done} files!`;
-        }
-        setTimeout(() => {
-          if (el.parentNode) el.parentNode.removeChild(el);
-        }, 1800);
-      },
-      cancelled: (done) => {
-        const spinner = el.querySelector(".fb-upload-spinner");
-        const btn = el.querySelector(".fb-upload-cancel");
-        const text = el.querySelector(".fb-upload-text");
-        if (spinner) spinner.style.display = "none";
-        if (btn) btn.style.display = "none";
-        if (text) text.textContent = `Upload cancelled (${done} uploaded)`;
-        setTimeout(() => {
-          if (el.parentNode) el.parentNode.removeChild(el);
-        }, 1800);
+    const preventLeave = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventLeave);
+
+    const blockKey = (e) => {
+      if (e.target !== cancelBtn) {
+        e.preventDefault();
+        e.stopPropagation();
       }
     };
+    document.addEventListener("keydown", blockKey, true);
+
+    const handle = {
+      setMessage: (msg) => {
+        if (msgEl) msgEl.textContent = msg;
+      },
+      unlock: (statusMsg = null) => {
+        window.removeEventListener("beforeunload", preventLeave);
+        document.removeEventListener("keydown", blockKey, true);
+        if (statusMsg && msgEl) {
+          msgEl.textContent = statusMsg;
+          if (spinner) spinner.style.display = "none";
+          if (cancelBtn) cancelBtn.style.display = "none";
+          setTimeout(() => {
+            if (overlay) overlay.setAttribute("hidden", "");
+            activeOverlay = null;
+          }, 1100);
+        } else {
+          if (overlay) overlay.setAttribute("hidden", "");
+          activeOverlay = null;
+        }
+      }
+    };
+
+    activeOverlay = handle;
+    return handle;
   }
 
   function initExplorer() {
@@ -379,15 +387,29 @@ export function bindFiles({ toast }) {
             fileName = cleanFull.slice(lastSlash + 1);
             targetDir = rel ? rel + "/" + sub : sub;
           }
-          uploadFile(targetDir, fileinfo.file, fileName)
+
+          const abortCtrl = new AbortController();
+          const ui = lockUI({
+            title: "Transferring file to MPC…",
+            message: `Uploading "${fileName}"…`,
+            onCancel: () => {
+              abortCtrl.abort();
+              ui.setMessage("Cancelling transfer…");
+            }
+          });
+
+          uploadFile(targetDir, fileinfo.file, fileName, abortCtrl.signal)
             .then(() => {
               startupload(true);
+              ui.unlock(`Uploaded "${fileName}"!`);
               toast(`Uploaded ${fileName}`);
               triggerRefresh(true);
             })
             .catch((e) => {
-              startupload(e.message || "Upload failed");
-              toast(e.message || "Upload failed");
+              const msg = abortCtrl.signal.aborted ? "Transfer cancelled" : (e.message || "Upload failed");
+              ui.unlock(msg);
+              startupload(msg);
+              toast(msg);
             });
         }
       },
@@ -424,9 +446,14 @@ export function bindFiles({ toast }) {
         const abortCtrl = new AbortController();
         let isCancelled = false;
 
-        const statusUI = showUploadStatus(files.length, () => {
-          isCancelled = true;
-          abortCtrl.abort();
+        const ui = lockUI({
+          title: "Transferring folder to MPC…",
+          message: `Uploading folder (0 / ${files.length} files)…`,
+          onCancel: () => {
+            isCancelled = true;
+            abortCtrl.abort();
+            ui.setMessage("Cancelling transfer…");
+          }
         });
 
         const CONCURRENCY = 6;
@@ -459,7 +486,7 @@ export function bindFiles({ toast }) {
             }
 
             if (!isCancelled) {
-              statusUI.update(done + failed, files.length);
+              ui.setMessage(`Uploading folder (${done + failed} / ${files.length} files)…`);
             }
           }
         }
@@ -472,11 +499,14 @@ export function bindFiles({ toast }) {
         await Promise.all(pool);
 
         if (isCancelled) {
-          statusUI.cancelled(done);
-          toast(`Upload cancelled (${done} uploaded)`);
+          ui.unlock(`Transfer cancelled (${done} files transferred)`);
+          toast(`Upload cancelled (${done} transferred)`);
         } else {
-          statusUI.done(done, failed);
-          toast(failed === 0 ? `Uploaded folder (${done} files)` : `Uploaded ${done} files, ${failed} failed`);
+          const finalMsg = failed === 0
+            ? `Transfer complete (${done} files)!`
+            : `Transfer complete (${done} uploaded, ${failed} failed)`;
+          ui.unlock(finalMsg);
+          toast(finalMsg);
         }
 
         triggerRefresh(true);

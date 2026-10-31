@@ -136,6 +136,17 @@
     </div>
   </div>
   <div id="toast"></div>
+  <div id="ui-lock-overlay" class="ui-lock-overlay" hidden>
+    <div class="ui-lock-card">
+      <div class="ui-lock-spinner"></div>
+      <div class="ui-lock-title" id="ui-lock-title">Transferring files to MPC…</div>
+      <div class="ui-lock-message" id="ui-lock-msg">Uploading…</div>
+      <div class="ui-lock-warning">⚠️ Do not navigate away, change tabs, or disconnect the device to prevent data corruption.</div>
+      <div class="ui-lock-actions">
+        <button type="button" class="btn danger" id="ui-lock-cancel">Cancel Transfer</button>
+      </div>
+    </div>
+  </div>
   <script src="/xterm.js"></script>
   <script src="/xterm-addon-fit.js"></script>
   <script type="module" src="/src/main.js"></script>
