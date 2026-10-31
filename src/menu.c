@@ -163,6 +163,96 @@ int menu_nested_run(const char *app_dir, char *run, size_t n) {
     return 0;
 }
 
+/* Last "/apps/<name>/autorun/<script>" in script. 0 and pkg/rel are set. */
+static int nested_autorun_parts(const char *script, char *pkg, size_t pkg_n, char *rel, size_t rel_n) {
+    const char *scan;
+    int found = 0;
+    if (!script || script[0] != '/') return -1;
+    scan = script;
+    while ((scan = strstr(scan, "/apps/")) != NULL) {
+        const char *name = scan + 6;
+        const char *slash = strchr(name, '/');
+        const char *inside;
+        size_t name_len, pkg_len, rel_len;
+        scan = name;
+        if (!slash) continue;
+        name_len = (size_t)(slash - name);
+        if (name_len == 0 || (name_len == 1 && name[0] == '.') ||
+            (name_len == 2 && name[0] == '.' && name[1] == '.'))
+            continue;
+        if (strncmp(slash, "/autorun/", 9) != 0) continue;
+        inside = slash + 9;
+        if (!script_rel_ok(inside)) continue;
+        pkg_len = (size_t)((slash + 8) - script);
+        rel_len = strlen(inside);
+        if (pkg_len + 1 > pkg_n || rel_len + 1 > rel_n) continue;
+        memcpy(pkg, script, pkg_len);
+        pkg[pkg_len] = 0;
+        memcpy(rel, inside, rel_len + 1);
+        found = 1;
+    }
+    return found ? 0 : -1;
+}
+
+/* 1 for autorun.sh or the script named by autorun.json. */
+static int is_package_entry(const char *pkg, const char *rel) {
+    char json[512], named[MENU_RUN];
+    int jr;
+    if (strcmp(rel, "autorun.sh") == 0) return 1;
+    if (join2(json, sizeof json, pkg, "autorun.json") != 0) return 0;
+    jr = json_first_path(json, named, sizeof named);
+    if (jr != 0) return 0;
+    if (named[0] == '.' && named[1] == '/') memmove(named, named + 2, strlen(named + 2) + 1);
+    if (!script_rel_ok(named)) return 0;
+    return strcmp(named, rel) == 0;
+}
+
+/* 1 when the first 64KB of path contains a stock-replacement marker. */
+static int script_has_marker(const char *path) {
+    FILE *f = fopen(path, "rb");
+    char buf[65536 + 1];
+    size_t n;
+    if (!f) return 0;
+    n = fread(buf, 1, 65536, f);
+    fclose(f);
+    buf[n] = 0;
+    return strstr(buf, "ac50") != NULL || strstr(buf, "LD_PRELOAD") != NULL;
+}
+
+/* 1 when any regular .sh under dir, skipping symlinks, replaces stock. */
+static int sh_replaces_stock(const char *dir, int depth) {
+    DIR *d;
+    struct dirent *de;
+    int found = 0;
+    if (depth > 16) return 0;
+    d = opendir(dir);
+    if (!d) return 0;
+    while (!found && (de = readdir(d)) != NULL) {
+        char path[512];
+        struct stat st;
+        if (de->d_name[0] == '.') continue;
+        if (join2(path, sizeof path, dir, de->d_name) != 0) continue;
+        if (lstat(path, &st) != 0 || S_ISLNK(st.st_mode)) continue;
+        if (S_ISDIR(st.st_mode))
+            found = sh_replaces_stock(path, depth + 1);
+        else if (S_ISREG(st.st_mode) && ends_with(de->d_name, ".sh") && script_has_marker(path))
+            found = 1;
+    }
+    closedir(d);
+    return found;
+}
+
+int menu_autorun_kind(const char *script_path) {
+    char pkg[512], rel[MENU_RUN], full[512];
+    struct stat st;
+    if (nested_autorun_parts(script_path, pkg, sizeof pkg, rel, sizeof rel) != 0) return -1;
+    if (lstat(pkg, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) return -1;
+    if (!is_package_entry(pkg, rel)) return -1;
+    if (join2(full, sizeof full, pkg, rel) != 0) return -1;
+    if (lstat(full, &st) == 0 && (S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode))) return -1;
+    return sh_replaces_stock(pkg, 0) ? 1 : 0;
+}
+
 /* *.entry files in dir. run is relative to base. key is the filename. */
 static int collect_entries(struct found *f, int n, int max, const char *dir, const char *base) {
     DIR *d = opendir(dir);

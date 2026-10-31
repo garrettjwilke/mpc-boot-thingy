@@ -924,6 +924,71 @@ int main(void) {
     assert(strcmp(updated.items[hand].title, "Hand Mod") == 0);
   }
 
+  /* Nested autorun: SampQOL replaces stock. A sidecar does not.
+     Markers past 64KB, inside a .so, or behind a symlink do not count.
+     The card-root autorun and a helper script are not entry scripts. */
+  {
+    FILE *big;
+    int i;
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/autorun.sh", dir);
+    write_file(path, "#!/bin/sh\nsetsid sh /run/qol-run.sh \"$DIR\"\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/qol-run.sh", dir);
+    write_file(path, "#!/bin/sh\nsystemctl stop ac50.service\nexport LD_PRELOAD=/tmp/mpcqol.so\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/mpcqol.so", dir);
+    write_file(path, "LD_PRELOAD ac50 not a script\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/autorun.sh", dir);
+    assert(menu_autorun_kind(path) == 1);
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/qol-run.sh", dir);
+    assert(menu_autorun_kind(path) == -1);
+
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.json", dir);
+    write_file(path, "{\"value0\":{\"scripts\":[{\"path\":\"./autorun.sh\"}]}}\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.sh", dir);
+    write_file(path, "#!/bin/sh\nsystemd-run --unit=mpc-sample-usb-ssh /bin/sh worker.sh\n");
+    assert(menu_autorun_kind(path) == 0);
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/linked.sh", dir);
+    assert(symlink("/tmp/mpc-boot-marker.sh", path) == 0);
+    write_file("/tmp/mpc-boot-marker.sh", "#!/bin/sh\nLD_PRELOAD=/tmp/x.so\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.sh", dir);
+    assert(menu_autorun_kind(path) == 0);
+    unlink("/tmp/mpc-boot-marker.sh");
+
+    snprintf(path, sizeof path, "%s/autorun/apps/named/autorun", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/apps/named/autorun/autorun.json", dir);
+    write_file(path, "{\"value0\":{\"scripts\":[{\"path\":\"start.sh\"}]}}\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/named/autorun/start.sh", dir);
+    write_file(path, "#!/bin/sh\nexport LD_PRELOAD=/tmp/mod.so\n");
+    assert(menu_autorun_kind(path) == 1);
+
+    snprintf(path, sizeof path, "%s/autorun/apps/late/autorun", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/apps/late/autorun/autorun.sh", dir);
+    big = fopen(path, "wb");
+    assert(big);
+    for (i = 0; i < 65536; i++) assert(fputc('a', big) == 'a');
+    fputs("LD_PRELOAD\n", big);
+    fclose(big);
+    assert(menu_autorun_kind(path) == 0);
+
+    snprintf(path, sizeof path, "%s/autorun/autorun.sh", dir);
+    write_file(path, "#!/bin/sh\nexport LD_PRELOAD=/tmp/nope.so\n");
+    assert(menu_autorun_kind(path) == -1);
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/boot-edits/boot-1/launch.sh", dir);
+    write_file(path, "#!/bin/sh\nsystemctl stop ac50.service\n");
+    assert(menu_autorun_kind(path) == -1);
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab/mpcfw", dir);
+    assert(menu_autorun_kind(path) == -1);
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/missing.sh", dir);
+    assert(menu_autorun_kind(path) == -1);
+  }
+
   /* Device unzip: a deflated archive, a root package, and a path that escapes. */
   {
     char script[2048], cmd[640], run[256], zipout[512];

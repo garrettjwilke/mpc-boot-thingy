@@ -50,6 +50,18 @@ int menu_parse_entry(const char *path, struct menu_entry *e);
    Returns 0 when a script is found. */
 int menu_nested_run(const char *app_dir, char *run, size_t n);
 
+/* script_path is the program a menu row would run.
+   1 when it is the entry script of a nested package
+   (autorun/apps/<name>/autorun/<script>) and a .sh file in that package
+   contains "ac50" or "LD_PRELOAD" in its first 64KB. That package replaces
+   the stock app itself.
+   0 when it is that entry script and no .sh file contains either marker.
+   The firmware still has to start stock after the script.
+   -1 when the path is not that entry script.
+   The entry script is autorun.sh, or the first "path" in autorun.json.
+   Symlinks are ignored. A missing entry script still returns 0 or 1. */
+int menu_autorun_kind(const char *script_path);
+
 /* Index of the id saved in card/autorun/system/boot-default.
    A missing file, a blank line, "stock", or an unknown id returns 0. */
 int menu_default_index(const struct menu *m, const char *card);
