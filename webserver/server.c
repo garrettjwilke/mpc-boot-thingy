@@ -2275,11 +2275,6 @@ static void handle_files_upload(int fd, struct io *io, int has_len, size_t conte
         left -= chunk;
     }
 
-#if defined(__APPLE__) && defined(F_FULLFSYNC)
-    fcntl(out_fd, F_FULLFSYNC);
-#else
-    fsync(out_fd);
-#endif
     close(out_fd);
 
     if (rename(tmp_path, target_real) != 0) {
