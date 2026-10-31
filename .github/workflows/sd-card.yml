@@ -149,8 +149,6 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$TAG" \
             --notes "$(cat <<'EOF'
-          Download mpc-boot-thingy.zip. Plug in the MPC, open http://mpc-sample.local/testapp, and add the zip there. If that name does not resolve, use http://192.168.155.1/testapp.
-
-          Do not unzip it or zip it again. On the MPC, confirm the install.
+          see the readme for install instructions.
           EOF
           )"
