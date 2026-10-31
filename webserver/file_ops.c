@@ -20,7 +20,7 @@
 
 static char g_data_root[PATH_MAX] = {0};
 
-static int ensure_dir_exists(const char *path) {
+int file_ops_ensure_dir(const char *path) {
     struct stat st;
     if (stat(path, &st) == 0) {
         return S_ISDIR(st.st_mode) ? 0 : -1;
@@ -57,7 +57,7 @@ int file_ops_init(const char *data_root) {
         }
     }
 
-    if (ensure_dir_exists(candidate) != 0) {
+    if (file_ops_ensure_dir(candidate) != 0) {
         return -1;
     }
 

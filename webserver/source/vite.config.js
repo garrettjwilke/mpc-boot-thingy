@@ -332,6 +332,13 @@ async function handleMock(req, res, url, state) {
     const dir = (url.searchParams.get("dir") || "").replace(/^\/+|\/+$/g, "");
     const name = url.searchParams.get("name") || "uploaded.bin";
     const target = dir ? dir + "/" + name : name;
+    const parts = target.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const pdir = parts.slice(0, i).join("/");
+      if (!state.files.some((f) => f.path === pdir)) {
+        state.files.push({ path: pdir, is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) });
+      }
+    }
     state.files = state.files.filter((f) => f.path !== target);
     state.files.push({
       path: target,

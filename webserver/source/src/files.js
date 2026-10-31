@@ -166,16 +166,29 @@ export function bindFiles({ toast }) {
 
       oninitupload: function (startupload, fileinfo) {
         const rel = getFolderRelPath(fileinfo.folder);
+        const cleanFull = (fileinfo.fullPath || "").replace(/^\/+/, "");
         if (fileinfo.type === "dir") {
-          const dirPath = rel ? rel + "/" + fileinfo.fullPath : fileinfo.fullPath;
+          const dirPath = rel ? (cleanFull ? rel + "/" + cleanFull : rel) : cleanFull;
+          if (!dirPath) {
+            startupload(true);
+            return;
+          }
           createFolder(dirPath)
             .then(() => startupload(true))
             .catch((e) => startupload(e.message || "Failed to create directory"));
         } else {
-          uploadFile(rel, fileinfo.file)
+          const lastSlash = cleanFull.lastIndexOf("/");
+          let targetDir = rel;
+          let fileName = fileinfo.file.name;
+          if (lastSlash >= 0) {
+            const sub = cleanFull.slice(0, lastSlash);
+            fileName = cleanFull.slice(lastSlash + 1);
+            targetDir = rel ? rel + "/" + sub : sub;
+          }
+          uploadFile(targetDir, fileinfo.file, fileName)
             .then(() => {
               startupload(true);
-              toast(`Uploaded ${fileinfo.file.name}`);
+              toast(`Uploaded ${fileName}`);
               fileinfo.folder.Refresh();
               updateDiskStats();
             })
@@ -224,6 +237,57 @@ export function bindFiles({ toast }) {
       } catch (err) {
         toast(err.message || "Backup failed");
       }
+    });
+  }
+
+  const btnUploadFolder = document.getElementById("fb-btn-upload-folder");
+  const inputFolder = document.getElementById("fb-folder-input");
+  if (btnUploadFolder && inputFolder) {
+    btnUploadFolder.addEventListener("click", () => {
+      inputFolder.value = "";
+      inputFolder.click();
+    });
+
+    inputFolder.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files || []);
+      if (files.length === 0) return;
+
+      const currentFolder = feInstance ? feInstance.GetCurrentFolder() : null;
+      const baseRel = getFolderRelPath(currentFolder);
+
+      toast(`Uploading folder (${files.length} files)...`);
+      let done = 0;
+      let failed = 0;
+
+      for (const file of files) {
+        const relPath = file.webkitRelativePath || file.name;
+        const clean = relPath.replace(/^\/+/, "");
+        const lastSlash = clean.lastIndexOf("/");
+        let destDir = baseRel;
+        let fileName = file.name;
+
+        if (lastSlash >= 0) {
+          const sub = clean.slice(0, lastSlash);
+          fileName = clean.slice(lastSlash + 1);
+          destDir = baseRel ? baseRel + "/" + sub : sub;
+        }
+
+        try {
+          await uploadFile(destDir, file, fileName);
+          done++;
+        } catch (err) {
+          failed++;
+        }
+      }
+
+      if (failed === 0) {
+        toast(`Uploaded folder (${done} files)`);
+      } else {
+        toast(`Uploaded ${done} files, ${failed} failed`);
+      }
+
+      if (currentFolder) currentFolder.Refresh();
+      updateDiskStats();
     });
   }
 
