@@ -83,6 +83,8 @@ printf '%s\n' "$out" | grep -q -- '--reload' || fail "help missing --reload"
 printf '%s\n' "$out" | grep -q 'os_tools/bin' || fail "help missing os_tools"
 printf '%s\n' "$out" | grep -q 'os_tools/.bashrc' || fail "help missing bashrc"
 printf '%s\n' "$out" | grep -q -- '--tools' || fail "help missing --tools"
+printf '%s\n' "$out" | grep -q -- '--usb' || fail "help missing --usb"
+printf '%s\n' "$out" | grep -q 'USB Installer' || fail "help missing USB Installer description"
 if python3 ./fetch-toolkit.py >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
   fail "fetch-toolkit without a directory should fail"
 fi
@@ -95,6 +97,12 @@ if ./setup.sh --SD /tmp --add /tmp/x --tools >/tmp/mpc-boot-out 2>/tmp/mpc-boot-
 grep -q 'not used with --add' /tmp/mpc-boot-err || fail "--tools --add should explain itself"
 if ./setup.sh --ssh --add /tmp/x --tools >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--ssh --tools --add should fail"; fi
 grep -q 'not used with --add' /tmp/mpc-boot-err || fail "--ssh --tools --add should explain itself"
+if ./setup.sh --usb --SD /tmp >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--usb --SD should fail"; fi
+grep -q 'does not take --SD' /tmp/mpc-boot-err || fail "--usb --SD should explain itself"
+if ./setup.sh --usb --ssh >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--usb --ssh should fail"; fi
+grep -q 'cannot be used with --ssh' /tmp/mpc-boot-err || fail "--usb --ssh should explain itself"
+if ./setup.sh --usb --add /tmp/x >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--usb --add should fail"; fi
+grep -q 'not --add' /tmp/mpc-boot-err || fail "--usb --add should explain itself"
 ./setup.sh -h >/dev/null
 ./setup.sh >/dev/null
 
