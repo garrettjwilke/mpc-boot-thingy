@@ -276,3 +276,36 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
   background-size: 24px 24px;
   background-position: center;
 }
+
+/* Refresh tool button in folder action toolbar */
+.fe_fileexplorer_wrap .fe_fileexplorer_folder_tool_refresh::before {
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 20px 20px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3L21.5 8M22 12.5a10 10 0 0 1-18.8 4.2L2.5 16'/%3E%3C/svg%3E");
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_folder_tool_refresh::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%2360a5fa' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3L21.5 8M22 12.5a10 10 0 0 1-18.8 4.2L2.5 16'/%3E%3C/svg%3E");
+}
+
+/* Refresh navigation button next to Up/address bar */
+.fe_fileexplorer_wrap .fe_fileexplorer_navtool_refresh {
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 16px 16px;
+  border-radius: 3px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%234a5568' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3L21.5 8M22 12.5a10 10 0 0 1-18.8 4.2L2.5 16'/%3E%3C/svg%3E");
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_navtool_refresh {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23e6edf3' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3L21.5 8M22 12.5a10 10 0 0 1-18.8 4.2L2.5 16'/%3E%3C/svg%3E");
+}
+.fe_fileexplorer_wrap .fe_fileexplorer_navtool_refresh:not(.fe_fileexplorer_disabled):hover,
+.fe_fileexplorer_wrap .fe_fileexplorer_navtool_refresh:not(.fe_fileexplorer_disabled):focus {
+  background-color: var(--panel-hover, #e5f3ff);
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_navtool_refresh:not(.fe_fileexplorer_disabled):hover {
+  background-color: var(--panel-hover, #232733);
+}

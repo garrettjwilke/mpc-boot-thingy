@@ -21,6 +21,16 @@ export function bindFiles({ toast }) {
 
   let feInstance = null;
 
+  function triggerRefresh(silent = false) {
+    if (feInstance) {
+      feInstance.RefreshFolders(true);
+    }
+    updateDiskStats();
+    if (!silent) {
+      toast("Refreshed");
+    }
+  }
+
   async function updateDiskStats() {
     try {
       const data = await fetchFiles("");
@@ -120,6 +130,50 @@ export function bindFiles({ toast }) {
 
         const DestroyToolHandler = function () {
           RemoveInputField();
+          node.removeEventListener("click", ClickHandler);
+        };
+
+        fe.addEventListener("destroy", DestroyToolHandler);
+      });
+    }
+
+    if (!window.FileExplorer._hasRegisteredRefresh) {
+      window.FileExplorer._hasRegisteredRefresh = true;
+      window.FileExplorer.RegisterTool(0, function (fe) {
+        let enabled = true;
+        const node = fe.AddToolbarButton(
+          "fe_fileexplorer_folder_tool_refresh",
+          fe.Translate("Refresh (F5)")
+        );
+        node.title = "Refresh (F5)";
+        node.setAttribute("aria-label", "Refresh");
+
+        // Insert after upload folder button
+        const uploadFolderBtn = fe.GetElements().bodytoolbar.querySelector(".fe_fileexplorer_folder_tool_upload_folder");
+        if (uploadFolderBtn && uploadFolderBtn.nextSibling) {
+          fe.GetElements().bodytoolbar.insertBefore(node, uploadFolderBtn.nextSibling);
+        }
+
+        const ClickHandler = function (e) {
+          if (!e.isTrusted) return;
+          triggerRefresh();
+        };
+
+        node.addEventListener("click", ClickHandler);
+
+        const UpdateToolHandler = function (currfolder) {
+          const prevenabled = enabled;
+          enabled = !currfolder.waiting;
+          if (prevenabled !== enabled) {
+            if (enabled) node.classList.remove("fe_fileexplorer_disabled");
+            else node.classList.add("fe_fileexplorer_disabled");
+            fe.ToolStateUpdated();
+          }
+        };
+
+        fe.addEventListener("update_tool", UpdateToolHandler);
+
+        const DestroyToolHandler = function () {
           node.removeEventListener("click", ClickHandler);
         };
 
@@ -230,7 +284,7 @@ export function bindFiles({ toast }) {
           await moveFiles(items, destRel);
           moved(true);
           toast(`Moved ${srcids.length} item(s)`);
-          destfolder.Refresh();
+          triggerRefresh(true);
         } catch (err) {
           moved(err.message || "Move failed");
           toast(err.message || "Move failed");
@@ -245,8 +299,7 @@ export function bindFiles({ toast }) {
           await copyFiles(items, destRel);
           copied(true);
           toast(`Copied ${srcids.length} item(s)`);
-          destfolder.Refresh();
-          updateDiskStats();
+          triggerRefresh(true);
         } catch (err) {
           copied(err.message || "Copy failed");
           toast(err.message || "Copy failed");
@@ -278,8 +331,7 @@ export function bindFiles({ toast }) {
             .then(() => {
               startupload(true);
               toast(`Uploaded ${fileName}`);
-              fileinfo.folder.Refresh();
-              updateDiskStats();
+              triggerRefresh(true);
             })
             .catch((e) => {
               startupload(e.message || "Upload failed");
@@ -346,8 +398,7 @@ export function bindFiles({ toast }) {
           toast(`Uploaded ${done} files, ${failed} failed`);
         }
 
-        if (currentFolder) currentFolder.Refresh();
-        updateDiskStats();
+        triggerRefresh(true);
       }
     };
 
@@ -358,6 +409,27 @@ export function bindFiles({ toast }) {
       uploadBtn.title = "Upload files";
       uploadBtn.setAttribute("aria-label", "Upload files");
     }
+
+    const elems = feInstance.GetElements ? feInstance.GetElements() : null;
+    if (elems && elems.navtools && !elems.navtools.querySelector(".fe_fileexplorer_navtool_refresh")) {
+      const btnNavRefresh = document.createElement("button");
+      btnNavRefresh.type = "button";
+      btnNavRefresh.className = "fe_fileexplorer_navtool_refresh";
+      btnNavRefresh.title = "Refresh (F5)";
+      btnNavRefresh.setAttribute("aria-label", "Refresh");
+      btnNavRefresh.addEventListener("click", () => {
+        triggerRefresh();
+      });
+      elems.navtools.appendChild(btnNavRefresh);
+    }
+
+    container.addEventListener("keydown", (e) => {
+      if (e.key === "F5" || (e.key.toLowerCase() === "r" && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerRefresh();
+      }
+    });
   }
 
   if (btnZipAll) {
@@ -378,10 +450,7 @@ export function bindFiles({ toast }) {
 
   return {
     refresh: () => {
-      if (feInstance && feInstance.GetCurrentFolder()) {
-        feInstance.GetCurrentFolder().Refresh();
-      }
-      updateDiskStats();
+      triggerRefresh(true);
     }
   };
 }
