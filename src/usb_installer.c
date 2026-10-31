@@ -2,8 +2,8 @@
    On-device USB Installer for mpc-boot-thingy.
    Triggered over USB via POST /testapp on port 80.
    Runs completely in RAM, draws a confirmation screen, installs/updates
-   boot-thingy on the SD card, and reboots. An existing autoboot can be
-   kept as a named boot entry or deleted. */
+   boot-thingy on the SD card, then waits for the user to reboot. An existing
+   autoboot can be kept as a named boot entry or deleted. */
 
 #define _GNU_SOURCE
 #include "input.h"
@@ -370,6 +370,7 @@ static int perform_install(const char *card, const char *staged,
                            const char *migrate_title) {
   log_msg("perform_install started: card=%s staged=%s mode=%d", card, staged,
           mode);
+  int failed = 0;
   remount_card_exec(card);
 
   char dest_autorun[512];
@@ -394,7 +395,10 @@ static int perform_install(const char *card, const char *staged,
     /* Install clean boot-thingy */
     char *mkdir_argv[] = {"mkdir", "-p", dest_autorun, NULL};
     run_cmd(mkdir_argv);
-    copy_tree(staged, (char *)card);
+    if (copy_tree(staged, (char *)card) != 0) {
+      log_msg("Failed to copy staged tree");
+      failed = 1;
+    }
 
     /* Move old autorun into apps/<folder> and name its boot entry. */
     char title[APP_NAME_MAX];
@@ -419,7 +423,10 @@ static int perform_install(const char *card, const char *staged,
     char *mv_old[] = {"mv", ram_stage, app_autorun, NULL};
     if (run_cmd(mv_old) != 0) {
       char *cp_old[] = {"cp", "-a", ram_stage, app_autorun, NULL};
-      run_cmd(cp_old);
+      if (run_cmd(cp_old) != 0) {
+        log_msg("Failed to save existing autoboot");
+        failed = 1;
+      }
     }
 
     char entry_file[512];
@@ -471,8 +478,12 @@ static int perform_install(const char *card, const char *staged,
 
     /* Copy staged payload over autorun */
     log_msg("Copying staged tree from %s to %s", staged, card);
-    copy_tree(staged, (char *)card);
-    log_msg("Copy staged tree finished");
+    if (copy_tree(staged, (char *)card) != 0) {
+      log_msg("Failed to copy staged tree");
+      failed = 1;
+    } else {
+      log_msg("Copy staged tree finished");
+    }
 
     /* Restore SSH key if was preserved */
     snprintf(hold_target, sizeof hold_target, "%s/ssh_key", hold_dir);
@@ -506,11 +517,18 @@ static int perform_install(const char *card, const char *staged,
     log_msg("Fresh install to %s", dest_autorun);
     char *mkdir_argv[] = {"mkdir", "-p", dest_autorun, NULL};
     run_cmd(mkdir_argv);
-    copy_tree(staged, (char *)card);
+    if (copy_tree(staged, (char *)card) != 0) {
+      log_msg("Failed to copy staged tree");
+      failed = 1;
+    }
   }
 
   sync();
   remount_card_exec(card);
+  if (failed) {
+    log_msg("perform_install failed");
+    return -1;
+  }
   log_msg("perform_install complete");
   return 0;
 }
@@ -559,6 +577,80 @@ static void draw_status_screen(struct screen *scr, uint32_t *back,
   ui_text(&u, 32, 130, status, 0x8892a0, 1);
 
   draw_frame(scr, back, front, midi, &u);
+}
+
+/* Outcome screen. The only control is Reboot, chosen with the encoder button.
+   Presses in the first 350ms are drained and ignored so a confirm press still
+   in the MIDI buffer cannot reboot immediately. */
+static void wait_for_reboot(struct screen *scr, uint32_t *back, uint32_t *front,
+                            struct surface *midi, const char *title,
+                            const char *status) {
+  struct input_dev dev = {0};
+  struct parser parser = {0};
+  struct timespec start_ts;
+  clock_gettime(CLOCK_MONOTONIC, &start_ts);
+  log_msg("Reboot screen: %s / %s", title ? title : "", status ? status : "");
+
+  for (;;) {
+    struct input in = {0};
+    input_begin(&in, &dev);
+
+    if (midi && midi->fd >= 0) {
+      unsigned char buf[256];
+      for (;;) {
+        ssize_t rd = read(midi->fd, buf, sizeof buf);
+        if (rd <= 0)
+          break;
+        for (ssize_t i = 0; i < rd; i++) {
+          if (parser_feed(&parser, buf[i]))
+            input_push(&dev, &in, parser.msg);
+        }
+      }
+    }
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long elapsed_ms = (now.tv_sec - start_ts.tv_sec) * 1000 +
+                      (now.tv_nsec - start_ts.tv_nsec) / 1000000;
+    int armed = elapsed_ms >= 350;
+
+    struct ui u = {.px = back};
+    ui_clear(&u, 0x121418);
+
+    struct ui_paint top_bar = {.fill_set = 1, .fill = 0x22262c};
+    ui_box(&u, 0, 0, UI_W, 28, top_bar);
+    ui_text(&u, 14, 8, "USB INSTALLER", 0xffb000, 1);
+
+    struct ui_paint box = {.fill_set = 1,
+                           .fill = 0x1b1f24,
+                           .border_set = 1,
+                           .border = 0x333a44,
+                           .border_px = 1};
+    ui_box(&u, 16, 40, UI_W - 32, 168, box);
+    ui_text(&u, 32, 56, title ? title : "", 0xffffff, 2);
+    ui_text(&u, 32, 100, status ? status : "", 0x8892a0, 1);
+
+    struct ui_button reboot_btn = {
+        .fill = 0x224422,
+        .text = 0xffffff,
+        .highlighted = 1,
+        .highlight = 0x44ff44,
+        .highlight_px = 2,
+    };
+    int hit = ui_button(&u, 80, 140, 160, 42, "Reboot", reboot_btn,
+                        armed ? &in : NULL);
+    ui_text(&u, 16, 216, "Press the wheel to reboot", 0x707c8c, 1);
+
+    for (int p = 0; p < 16; p++)
+      ui_led(&u, p, 0, 0, 0);
+
+    draw_frame(scr, back, front, midi, &u);
+    if (hit) {
+      log_msg("Reboot pressed");
+      return;
+    }
+    usleep(25 * 1000);
+  }
 }
 
 /* Left is choice 0, right is choice 1. Returns -1 while nothing is chosen. */
@@ -682,10 +774,9 @@ int main(int argc, char **argv) {
   if (!card[0] || !staged[0]) {
     log_msg("Showing error screen: card[0]=%d staged[0]=%d", card[0],
             staged[0]);
-    draw_status_screen(&scr, back, front, &midi, "Installer Error",
-                       !card[0] ? "No SD card detected. Insert card and retry."
-                                : "Staged autorun payload missing.");
-    sleep(4);
+    wait_for_reboot(&scr, back, front, &midi, "Installer Error",
+                    !card[0] ? "No SD card detected. Insert card and retry."
+                             : "Staged autorun payload missing.");
     free(back);
     free(front);
     screen_close(&scr);
@@ -863,16 +954,18 @@ int main(int argc, char **argv) {
     draw_status_screen(&scr, back, front, &midi, "Installing...",
                        "Copying boot thingy to SD card...");
     log_msg("Calling perform_install");
-    perform_install(card, staged, mode, keep_old, app_title);
-    log_msg("Drawing Complete! status screen");
-    draw_status_screen(&scr, back, front, &midi, "Complete!",
-                       "Boot thingy is installed. Rebooting...");
-    sleep(2);
+    if (perform_install(card, staged, mode, keep_old, app_title) == 0) {
+      log_msg("Install succeeded");
+      wait_for_reboot(&scr, back, front, &midi, "Complete!",
+                      "Boot thingy is installed.");
+    } else {
+      log_msg("Install failed");
+      wait_for_reboot(&scr, back, front, &midi, "Install failed",
+                      "Could not copy boot thingy to the SD card.");
+    }
   } else {
-    log_msg("Drawing Cancelled status screen");
-    draw_status_screen(&scr, back, front, &midi, "Cancelled",
-                       "No changes made. Rebooting...");
-    sleep(1);
+    log_msg("Install cancelled");
+    wait_for_reboot(&scr, back, front, &midi, "Cancelled", "No changes made.");
   }
 
   log_msg("Closing screen and surface");
