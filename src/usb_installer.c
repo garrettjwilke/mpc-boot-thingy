@@ -2,10 +2,11 @@
    On-device USB Installer for mpc-boot-thingy.
    Triggered over USB via POST /testapp on port 80.
    Runs completely in RAM, draws a confirmation screen, installs/updates
-   boot-thingy on the SD card, migrates any existing autoboot to autorun/apps/,
-   and reboots. */
+   boot-thingy on the SD card, and reboots. An existing autoboot can be
+   renamed before it is saved as an app under autorun/apps/. */
 
 #define _GNU_SOURCE
+#include "font.h"
 #include "input.h"
 #include "screen.h"
 #include "sd_check.h"
@@ -238,8 +239,135 @@ static int copy_tree(const char *src, const char *dst) {
   return run_cmd(argv);
 }
 
+/* Menu titles are MENU_TITLE bytes, including the NUL. */
+#define APP_NAME_MAX 64
+#define DEFAULT_APP_NAME "Previous Autoboot"
+#define DEFAULT_APP_FOLDER "previous-autoboot"
+
+static void clean_title(char *dst, size_t n, const char *src) {
+  size_t j = 0;
+  if (!dst || n == 0)
+    return;
+  dst[0] = 0;
+  if (!src)
+    return;
+  while (*src == ' ' || *src == '\t')
+    src++;
+  for (const unsigned char *p = (const unsigned char *)src; *p && j + 1 < n;
+       p++) {
+    if (*p < 32 || *p >= 127)
+      break;
+    dst[j++] = (char)*p;
+  }
+  while (j && (dst[j - 1] == ' ' || dst[j - 1] == '\t'))
+    j--;
+  dst[j] = 0;
+}
+
+/* Lowercase slug, matching setup.sh. Stops at 48 characters so a numeric
+   suffix still fits in the folder name. */
+static int slug_of(const char *title, char *out, size_t n) {
+  size_t j = 0;
+  size_t cap;
+  int dash = 1;
+  if (!out || n < 2) {
+    if (out && n)
+      out[0] = 0;
+    return -1;
+  }
+  cap = n - 1;
+  if (cap > 48)
+    cap = 48;
+  for (const unsigned char *p = (const unsigned char *)(title ? title : "");
+       *p; p++) {
+    unsigned char c = *p;
+    int alnum;
+    if (c >= 'A' && c <= 'Z')
+      c = (unsigned char)(c - 'A' + 'a');
+    alnum = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    if (alnum) {
+      if (j >= cap)
+        break;
+      out[j++] = (char)c;
+      dash = 0;
+    } else if (!dash && j < cap) {
+      out[j++] = '-';
+      dash = 1;
+    }
+  }
+  if (j && out[j - 1] == '-')
+    j--;
+  out[j] = 0;
+  return j ? 0 : -1;
+}
+
+static int path_exists(const char *path) {
+  struct stat st;
+  return path && stat(path, &st) == 0;
+}
+
+/* Folder under autorun/apps/. A name already in the staged tree gets -2, -3, ... */
+static void app_folder_for(const char *staged, const char *title, char *out,
+                           size_t n) {
+  char base[64];
+  if (!out || n == 0)
+    return;
+  if (slug_of(title, base, sizeof base) != 0)
+    snprintf(base, sizeof base, "%s", DEFAULT_APP_FOLDER);
+  for (int i = 0; i < 50; i++) {
+    char cand[64];
+    char path[512];
+    int wr;
+    if (i == 0)
+      wr = snprintf(cand, sizeof cand, "%s", base);
+    else
+      wr = snprintf(cand, sizeof cand, "%s-%d", base, i + 1);
+    if (wr < 0 || (size_t)wr >= sizeof cand)
+      continue;
+    if (staged && staged[0]) {
+      wr = snprintf(path, sizeof path, "%s/apps/%s", staged, cand);
+      if (wr < 0 || (size_t)wr >= sizeof path)
+        continue;
+      if (path_exists(path))
+        continue;
+    }
+    snprintf(out, n, "%s", cand);
+    return;
+  }
+  snprintf(out, n, "%s", DEFAULT_APP_FOLDER);
+}
+
+static void ellipsize(char *dst, size_t n, const char *src, int max_chars) {
+  int len = 0;
+  if (!dst || n == 0)
+    return;
+  if (!src)
+    src = "";
+  if (max_chars < 0)
+    max_chars = 0;
+  if ((size_t)max_chars >= n)
+    max_chars = (int)n - 1;
+  while (src[len])
+    len++;
+  if (len <= max_chars) {
+    memcpy(dst, src, (size_t)len);
+    dst[len] = 0;
+    return;
+  }
+  if (max_chars <= 3) {
+    memset(dst, '.', (size_t)max_chars);
+    dst[max_chars] = 0;
+    return;
+  }
+  memcpy(dst, src, (size_t)(max_chars - 3));
+  dst[max_chars - 3] = '.';
+  dst[max_chars - 2] = '.';
+  dst[max_chars - 1] = '.';
+  dst[max_chars] = 0;
+}
+
 static int perform_install(const char *card, const char *staged,
-                           enum install_mode mode) {
+                           enum install_mode mode, const char *migrate_title) {
   log_msg("perform_install started: card=%s staged=%s mode=%d", card, staged,
           mode);
   remount_card_exec(card);
@@ -268,10 +396,21 @@ static int perform_install(const char *card, const char *staged,
     run_cmd(mkdir_argv);
     copy_tree(staged, (char *)card);
 
-    /* Move old autorun into apps/previous-autoboot */
+    /* Move old autorun into apps/<folder> and name its boot entry. */
+    char title[APP_NAME_MAX];
+    char folder[64];
     char app_dir[512], app_autorun[512];
-    snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/previous-autoboot",
-             card);
+    clean_title(title, sizeof title, migrate_title);
+    if (!title[0])
+      snprintf(title, sizeof title, "%s", DEFAULT_APP_NAME);
+    app_folder_for(staged, title, folder, sizeof folder);
+    log_msg("Saving existing autoboot as '%s' in apps/%s", title, folder);
+    if (snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/%s", card, folder) >=
+        (int)sizeof app_dir) {
+      log_msg("App path too long, using %s", DEFAULT_APP_FOLDER);
+      snprintf(folder, sizeof folder, "%s", DEFAULT_APP_FOLDER);
+      snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/%s", card, folder);
+    }
     snprintf(app_autorun, sizeof app_autorun, "%s/autorun", app_dir);
 
     char *mk_app[] = {"mkdir", "-p", app_dir, NULL};
@@ -283,13 +422,15 @@ static int perform_install(const char *card, const char *staged,
       run_cmd(cp_old);
     }
 
-    /* Write boot.entry for previous autoboot */
     char entry_file[512];
     snprintf(entry_file, sizeof entry_file, "%s/boot.entry", app_dir);
     FILE *ef = fopen(entry_file, "w");
     if (ef) {
-      fprintf(ef, "title=Previous Autoboot\nrun=autorun/autorun.sh\n");
+      fprintf(ef, "title=%s\nrun=autorun/autorun.sh\n", title);
       fclose(ef);
+      log_msg("Wrote %s", entry_file);
+    } else {
+      log_msg("Failed to write %s", entry_file);
     }
   } else if (mode == MODE_UPDATE) {
     log_msg("Updating existing boot-thingy installation");
@@ -415,6 +556,105 @@ static void draw_status_screen(struct screen *scr, uint32_t *back,
   draw_frame(scr, back, front, midi, &u);
 }
 
+static void draw_name_box(struct ui *u, int x, int y, int w, int h,
+                          const char *name) {
+  struct ui_paint name_box = {.fill_set = 1,
+                              .fill = 0x10141a,
+                              .border_set = 1,
+                              .border = 0xffb000,
+                              .border_px = 1};
+  ui_box(u, x, y, w, h, name_box);
+  if (!name || !name[0])
+    name = DEFAULT_APP_NAME;
+
+  int len = (int)strlen(name);
+  int scale = 2;
+  int gw = FONT_L_W * 2;
+  int gh = FONT_L_H * 2;
+  int inner = w > 16 ? w - 16 : 0;
+  if (inner < gw || len * gw > inner) {
+    scale = 1;
+    gw = FONT_S_W;
+    gh = FONT_S_H;
+  }
+  int maxc = gw > 0 && inner > 0 ? inner / gw : 0;
+  char shown[APP_NAME_MAX];
+  ellipsize(shown, sizeof shown, name, maxc);
+  int tw = (int)strlen(shown) * gw;
+  int tx = x + (w - tw) / 2;
+  int ty = y + (h - gh) / 2;
+  if (ty < y)
+    ty = y;
+  ui_text(u, tx, ty, shown, 0xffffff, scale);
+}
+
+/* Draws the No / Yes chrome. Returns 0, 1, or -1 when nothing was chosen. */
+static int installer_yes_no(struct ui *u, const struct input *in,
+                            struct ui_soft_state *soft, int *selected,
+                            long elapsed_ms, int button_y) {
+  int choice = -1;
+  if (in) {
+    if (in->encoder > 0)
+      *selected = 1;
+    else if (in->encoder < 0)
+      *selected = 0;
+  }
+
+  int active_key = *selected == 0 ? 0 : 2;
+  const char *labels[3] = {"No", "", "Yes"};
+  struct ui_soft_style soft_st = {
+      .fill = 0x2a303a,
+      .text = 0xd0d8e0,
+      .active_text = 0xffffff,
+      .highlight = 0xffb000,
+      .gap = 4,
+      .feedback = UI_SOFT_FLASH,
+      .flash_ms = 120,
+  };
+  int key_pressed =
+      ui_soft_keys(u, 8, 4, 304, 26, labels, &active_key, soft_st, in, soft);
+
+  int armed = in && elapsed_ms >= 350;
+  if (armed) {
+    if (input_down(in, IN_B1) || input_down(in, IN_STOP))
+      choice = 0;
+    else if (input_down(in, IN_B3) || input_down(in, IN_PLAY))
+      choice = 1;
+    else if (in->encoder_press)
+      choice = *selected;
+    if (key_pressed == 0)
+      choice = 0;
+    else if (key_pressed == 2)
+      choice = 1;
+  }
+
+  struct ui_button b_no = {
+      .fill = (*selected == 0 ? 0x442222 : 0x22262c),
+      .text = (*selected == 0 ? 0xffffff : 0x8892a0),
+      .highlighted = (*selected == 0),
+      .highlight = 0xff4444,
+      .highlight_px = 2,
+  };
+  if (ui_button(u, 24, button_y, 126, 42, "No", b_no, armed ? in : NULL))
+    choice = 0;
+
+  struct ui_button b_yes = {
+      .fill = (*selected == 1 ? 0x224422 : 0x22262c),
+      .text = (*selected == 1 ? 0xffffff : 0x8892a0),
+      .highlighted = (*selected == 1),
+      .highlight = 0x44ff44,
+      .highlight_px = 2,
+  };
+  if (ui_button(u, 170, button_y, 126, 42, "Yes", b_yes, armed ? in : NULL))
+    choice = 1;
+
+  for (int p = 0; p < 16; p++)
+    ui_led(u, p, 0, 0, 0);
+  ui_led(u, 0, *selected == 0 ? 120 : 15, 0, 0);
+  ui_led(u, 3, 0, *selected == 1 ? 120 : 15, 0);
+  return choice;
+}
+
 int main(int argc, char **argv) {
   (void)argc;
   log_msg("=== USB Installer started ===");
@@ -485,35 +725,26 @@ int main(int argc, char **argv) {
   struct input in = {0};
   struct ui_soft_state soft_state = {0};
 
-  int selected = 1; /* 0 = No, 1 = Yes */
-  int choice = -1;  /* -1 pending, 0 = No, 1 = Yes */
+  char app_title[APP_NAME_MAX];
+  char edit_buf[APP_NAME_MAX];
+  struct ui_text_editor editor;
+  snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
+  memset(&editor, 0, sizeof editor);
 
-  struct ui_soft_style soft_st = {
-      .fill = 0x2a303a,
-      .text = 0xd0d8e0,
-      .active_text = 0xffffff,
-      .highlight = 0xffb000,
-      .gap = 4,
-      .feedback = UI_SOFT_FLASH,
-      .flash_ms = 120,
-  };
+  enum { STEP_RENAME, STEP_EDIT, STEP_CONFIRM };
+  int step = mode == MODE_MIGRATE ? STEP_RENAME : STEP_CONFIRM;
+  int selected = step == STEP_CONFIRM ? 1 : 0; /* 0 = No, 1 = Yes */
+  int choice = -1;                             /* install: -1 pending, 0 = No, 1 = Yes */
 
   const char *question =
       (mode == MODE_UPDATE) ? "Update boot thingy?" : "Install boot thingy?";
-  const char *subtitle = "";
-  if (mode == MODE_MIGRATE)
-    subtitle = "Existing autoboot will be saved to Apps";
-  else if (mode == MODE_UPDATE)
-    subtitle = "Update boot thingy files on SD card";
-  else
-    subtitle = "Install boot thingy to SD card";
-
-  const char *labels[3] = {"No", "", "Yes"};
 
   struct timespec start_ts;
   clock_gettime(CLOCK_MONOTONIC, &start_ts);
 
-  log_msg("Entering UI loop: question='%s'", question);
+  log_msg("Entering UI loop: mode=%d question='%s'", mode, question);
+  if (mode == MODE_MIGRATE)
+    log_msg("Existing autoboot found, default name '%s'", app_title);
 
   while (choice < 0) {
     input_begin(&in, &dev);
@@ -537,102 +768,99 @@ int main(int argc, char **argv) {
     long elapsed_ms = (now.tv_sec - start_ts.tv_sec) * 1000 +
                       (now.tv_nsec - start_ts.tv_nsec) / 1000000;
 
-    /* Check buttons and encoder */
-    if (in.encoder > 0) {
-      selected = 1;
-      in.encoder = 0;
-    } else if (in.encoder < 0) {
-      selected = 0;
-      in.encoder = 0;
-    }
-
-    if (elapsed_ms >= 350) {
-      if (input_down(&in, IN_B1) || input_down(&in, IN_STOP)) {
-        log_msg("Button B1/STOP pressed -> choice=No");
-        choice = 0;
-      } else if (input_down(&in, IN_B3) || input_down(&in, IN_PLAY)) {
-        log_msg("Button B3/PLAY pressed -> choice=Yes");
-        choice = 1;
-      } else if (in.encoder_press) {
-        log_msg("Encoder pressed -> choice=%s", selected ? "Yes" : "No");
-        choice = selected;
-      }
-    }
-
     /* 5 minute timeout: cancel & reboot */
     if (elapsed_ms > 300000) {
       log_msg("UI loop timeout -> cancelling");
       choice = 0;
+      break;
     }
 
-    struct ui u = {.px = back};
-    ui_clear(&u, 0x121418);
-
-    /* Soft buttons on the top spanning full width right below hardware buttons
-     */
-    int active_key = selected == 0 ? 0 : 2;
-    int key_pressed = ui_soft_keys(&u, 8, 4, 304, 26, labels, &active_key,
-                                   soft_st, &in, &soft_state);
-    if (elapsed_ms >= 350) {
-      if (key_pressed == 0) {
-        log_msg("Soft key 0 pressed -> choice=No");
-        choice = 0;
-      } else if (key_pressed == 2) {
-        log_msg("Soft key 2 pressed -> choice=Yes");
-        choice = 1;
+    if (step == STEP_EDIT) {
+      struct ui u = {.px = back};
+      ui_clear(&u, 0x121418);
+      struct ui_text_editor_style ed_st = ui_text_editor_style_default();
+      ed_st.fill = 0x121418;
+      ed_st.text_box = 0x1b1f24;
+      ed_st.title = 0xffb000;
+      ed_st.highlight = 0xffb000;
+      int res = ui_text_editor(&u, 0, 0, UI_W, UI_H, &editor, ed_st, &in);
+      if (res == UI_TEXT_OK) {
+        char cleaned[APP_NAME_MAX];
+        clean_title(cleaned, sizeof cleaned, edit_buf);
+        if (!cleaned[0]) {
+          log_msg("Empty app name ignored");
+          snprintf(edit_buf, sizeof edit_buf, "%s", app_title);
+          ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf,
+                              "NAME APP");
+        } else {
+          snprintf(app_title, sizeof app_title, "%s", cleaned);
+          log_msg("App name set to '%s'", app_title);
+          selected = 1;
+          step = STEP_CONFIRM;
+        }
+      } else if (res == UI_TEXT_CANCEL) {
+        log_msg("App rename cancelled, keeping '%s'", app_title);
+        selected = 0;
+        step = STEP_RENAME;
       }
+      draw_frame(&scr, back, front, &midi, &u);
+    } else {
+      struct ui u = {.px = back};
+      ui_clear(&u, 0x121418);
+
+      struct ui_paint box = {.fill_set = 1,
+                             .fill = 0x1b1f24,
+                             .border_set = 1,
+                             .border = 0x333a44,
+                             .border_px = 1};
+      ui_box(&u, 8, 36, 304, 196, box);
+      ui_text(&u, 20, 48, "USB INSTALLER", 0xffb000, 1);
+
+      int button_y = 134;
+      const char *footer = "Top buttons: No / Yes       Wheel: Select";
+      if (step == STEP_RENAME) {
+        ui_text(&u, 20, 68, "Rename this app?", 0xffffff, 1);
+        draw_name_box(&u, 16, 88, 288, 40, app_title);
+        button_y = 140;
+        footer = "No keeps this name       Yes renames it";
+      } else {
+        char shown[40];
+        char subtitle_buf[80];
+        const char *subtitle;
+        if (mode == MODE_MIGRATE) {
+          ellipsize(shown, sizeof shown, app_title, 36);
+          snprintf(subtitle_buf, sizeof subtitle_buf, "Saved as %s", shown);
+          subtitle = subtitle_buf;
+        } else if (mode == MODE_UPDATE) {
+          subtitle = "Update boot thingy files on SD card";
+        } else {
+          subtitle = "Install boot thingy to SD card";
+        }
+        ui_text(&u, 20, 72, question, 0xffffff, 1);
+        ui_text(&u, 20, 104, subtitle, 0x9aa4b0, 1);
+      }
+
+      int pick = installer_yes_no(&u, &in, &soft_state, &selected, elapsed_ms,
+                                  button_y);
+      ui_text(&u, 20, 198, footer, 0x707c8c, 1);
+
+      if (pick == 0 || pick == 1)
+        log_msg("%s -> %s",
+                step == STEP_RENAME ? "Rename prompt" : "Install prompt",
+                pick ? "Yes" : "No");
+      if (step == STEP_RENAME && pick == 1) {
+        snprintf(edit_buf, sizeof edit_buf, "%s", app_title);
+        ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf, "NAME APP");
+        step = STEP_EDIT;
+      } else if (step == STEP_RENAME && pick == 0) {
+        selected = 1;
+        step = STEP_CONFIRM;
+      } else if (pick >= 0) {
+        choice = pick;
+      }
+
+      draw_frame(&scr, back, front, &midi, &u);
     }
-
-    /* Center prompt dialog box */
-    struct ui_paint box = {.fill_set = 1,
-                           .fill = 0x1b1f24,
-                           .border_set = 1,
-                           .border = 0x333a44,
-                           .border_px = 1};
-    ui_box(&u, 8, 36, 304, 196, box);
-
-    /* Header tag */
-    ui_text(&u, 20, 48, "USB INSTALLER", 0xffb000, 1);
-
-    /* Question */
-    ui_text(&u, 20, 72, question, 0xffffff, 1);
-
-    /* Subtitle */
-    ui_text(&u, 20, 104, subtitle, 0x9aa4b0, 1);
-
-    /* Visual selection buttons */
-    struct ui_button b_no = {
-        .fill = (selected == 0 ? 0x442222 : 0x22262c),
-        .text = (selected == 0 ? 0xffffff : 0x8892a0),
-        .highlighted = (selected == 0),
-        .highlight = 0xff4444,
-        .highlight_px = 2,
-    };
-    if (ui_button(&u, 24, 134, 126, 42, "No", b_no, &in) && elapsed_ms >= 350) {
-      choice = 0;
-    }
-
-    struct ui_button b_yes = {
-        .fill = (selected == 1 ? 0x224422 : 0x22262c),
-        .text = (selected == 1 ? 0xffffff : 0x8892a0),
-        .highlighted = (selected == 1),
-        .highlight = 0x44ff44,
-        .highlight_px = 2,
-    };
-    if (ui_button(&u, 170, 134, 126, 42, "Yes", b_yes, &in) &&
-        elapsed_ms >= 350) {
-      choice = 1;
-    }
-
-    /* Footer hints */
-    ui_text(&u, 20, 198, "Top buttons: No / Yes       Wheel: Select", 0x707c8c,
-            1);
-
-    /* Hardware pad illumination: Pad 0 red for No, Pad 3 green for Yes */
-    ui_led(&u, 0, selected == 0 ? 120 : 15, 0, 0);
-    ui_led(&u, 3, 0, selected == 1 ? 120 : 15, 0);
-
-    draw_frame(&scr, back, front, &midi, &u);
 
     usleep(25 * 1000);
   }
@@ -643,7 +871,7 @@ int main(int argc, char **argv) {
     draw_status_screen(&scr, back, front, &midi, "Installing...",
                        "Copying boot thingy to SD card...");
     log_msg("Calling perform_install");
-    perform_install(card, staged, mode);
+    perform_install(card, staged, mode, app_title);
     log_msg("Drawing Complete! status screen");
     draw_status_screen(&scr, back, front, &midi, "Complete!",
                        "Boot thingy is installed. Rebooting...");
