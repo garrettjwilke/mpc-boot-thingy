@@ -28,6 +28,10 @@ char *file_ops_list_json(const char *req_path);
 /* Create directory at req_path. Returns 0 on success, -1 on error. */
 int file_ops_mkdir(const char *req_path);
 
+/* Ensure physical directory exists (recursively creates intermediate directories if needed).
+   path is a resolved real path on disk. Returns 0 on success, -1 on error. */
+int file_ops_ensure_dir(const char *path);
+
 /* Rename an entry from old_path to new_name (within same parent or dst_path).
    Returns 0 on success, -1 on error. */
 int file_ops_rename(const char *old_path, const char *new_name);

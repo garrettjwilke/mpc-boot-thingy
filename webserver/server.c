@@ -2242,6 +2242,17 @@ static void handle_files_upload(int fd, struct io *io, int has_len, size_t conte
         return;
     }
 
+    char parent_dir[PATH_MAX];
+    snprintf(parent_dir, sizeof parent_dir, "%s", target_real);
+    char *last_slash = strrchr(parent_dir, '/');
+    if (last_slash && last_slash != parent_dir) {
+        *last_slash = '\0';
+        if (file_ops_ensure_dir(parent_dir) != 0) {
+            send_err(fd, 500, "Internal Server Error", "cannot create directory");
+            return;
+        }
+    }
+
     char tmp_path[PATH_MAX];
     snprintf(tmp_path, sizeof tmp_path, "%s.upload.%ld", target_real, (long)getpid());
 
