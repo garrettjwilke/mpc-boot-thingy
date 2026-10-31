@@ -5,44 +5,23 @@ you can install applications and choose between them easily from the menu.
 
 there are other enhancements this provides, but ehh...they're there... :)
 
-## install boot thingy
+## install
 
-there are several ways to install boot thingy.
+### usb install (recommended)
 
-* USB
-   - recommended
-   - automatically installs boot thingy to your SD card
-* SD card
-   - manual install
-   - copy autoboot directory to SD card root
-* SSH
-   - ssh will only work on an existing boot thingy install
-   - easy to install for devs iterating on an app
+1. download the [zip here](https://github.com/garrettjwilke/mpc-boot-thingy/releases)
+2. plug your mpc sample into your computer.
+3. open [mpc-sample.local/testapp](http://mpc-sample.local/testapp) or [192.168.155.1/testapp](http://192.168.155.1/testapp)
+4. add the zip and click on `Upload and run`
+5. on the MPC, you can then install boot thingy.
 
-### usb installer
+> if you have an existing `autoboot`, it will ask if you want to keep it. it will be installed automatically as a boot entry.
 
-this installs boot thingy to the SD card...connect your MPC Sample to your computer via USB, then run:
+### manual SD card install
 
-```
-./setup.sh --usb
-```
+1. download the [zip here](https://github.com/garrettjwilke/mpc-boot-thingy/releases)
+2. extract the zip...inside will be an `autoboot` folder.
+3. copy the `autoboot` folder to your sd card.
+   > if there is an existing `autoboot` folder, you need to either back it up or delete it first...
+4. boot mpc sample with sd card instered
 
-on your MPC Sample, it will ask if you want to install boot thingy...after install, it will automatically reboot the device and boot thingy is ready to go
-
-### SD card install
-
-download the release zip and extract it...there will be a folder called `autoboot` that you need to copy to SD:
-
-1. mount your SD card to your computer.
-2. copy the `autoboot` directory in the release zip to the root of your sd card.
-3. plug the sd card into your MPC Sample.
-
-> if your MPC Sample is already running, it will automatically boot into boot thingy without a reboot
-
-### SSH
-
-if you have an existing boot thingy install, you can update the boot thingy with ssh:
-
-```
-./setup.sh --ssh
-```

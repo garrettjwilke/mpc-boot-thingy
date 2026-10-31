@@ -1,4 +1,4 @@
-name: SD card release
+name: Release
 
 on:
   workflow_dispatch:
@@ -58,86 +58,85 @@ jobs:
           fi
 
       - name: Build
+        env:
+          PACK_VERSION: ${{ inputs.tag }}
         run: make
 
-      - name: Assemble the card tree
-        run: |
-          rm -rf dist/mpc-boot-thingy-sd
-          mkdir -p dist/mpc-boot-thingy-sd
-          # Bash stays on the card. --tools would add vim, nano, and busybox-full.
-          ./setup.sh --SD dist/mpc-boot-thingy-sd
-
-      - name: Check the card tree
-        run: |
-          card=dist/mpc-boot-thingy-sd
-          test -x "$card/autorun/system/mpc-boot-thingy"
-          test -x "$card/autorun/system/mpc-boot-web"
-          file "$card/autorun/system/mpc-boot-thingy" | grep -q aarch64
-          file "$card/autorun/system/mpc-boot-web" | grep -q aarch64
-          test -s "$card/autorun/os_tools/bin/bash"
-          test ! -e "$card/autorun/os_tools/bin/vim"
-          test ! -e "$card/autorun/os_tools/bin/nano"
-          test ! -e "$card/autorun/os_tools/bin/busybox-full"
-          test ! -d "$card/os_tools"
-          test ! -d "$card/apps"
-          test -s "$card/autorun/system/ssh/ssh_host_ed25519_key"
-          test -s "$card/autorun/splash-screen.png"
-          test -s "$card/autorun/autorun.check"
-          test -f "$card/autorun/system/web/index.html"
-          test -f "$card/autorun/system/web/xterm.js"
-          test -f "$card/autorun/system/web/xterm.css"
-          test -f "$card/autorun/system/web/xterm-addon-fit.js"
-          test -n "$(find "$card/autorun/system/web/assets" -name '*.js' -print -quit)"
-          test -n "$(find "$card/autorun/system/web/assets" -name '*.css' -print -quit)"
-
-      - name: Zip the card tree
+      - name: Check the testapp package
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           python3 - <<'PY'
-          import shutil
+          import os
+          import subprocess
+          import tempfile
           import zipfile
-          shutil.make_archive(
-              "dist/mpc-boot-thingy-sd",
-              "zip",
-              "dist",
-              "mpc-boot-thingy-sd",
-          )
+
+          zpath = "dist/mpc-boot-thingy.zip"
           need = [
-              "mpc-boot-thingy-sd/autorun/system/mpc-boot-thingy",
-              "mpc-boot-thingy-sd/autorun/system/mpc-boot-web",
-              "mpc-boot-thingy-sd/autorun/system/web/index.html",
-              "mpc-boot-thingy-sd/autorun/system/web/xterm.js",
-              "mpc-boot-thingy-sd/autorun/system/web/xterm.css",
-              "mpc-boot-thingy-sd/autorun/system/web/xterm-addon-fit.js",
-              "mpc-boot-thingy-sd/autorun/system/ssh/ssh_host_ed25519_key",
-              "mpc-boot-thingy-sd/autorun/autorun.check",
-              "mpc-boot-thingy-sd/autorun/splash-screen.png",
-              "mpc-boot-thingy-sd/autorun/os_tools/bin/bash",
+              "manifest.yaml",
+              "usb_installer_testapp",
+              "autorun/system/mpc-boot-thingy",
+              "autorun/system/mpc-boot-web",
+              "autorun/system/web/index.html",
+              "autorun/system/web/xterm.js",
+              "autorun/system/web/xterm.css",
+              "autorun/system/web/xterm-addon-fit.js",
+              "autorun/system/ssh/ssh_host_ed25519_key",
+              "autorun/autorun.check",
+              "autorun/autorun.sh",
+              "autorun/splash-screen.png",
+              "autorun/os_tools/bin/bash",
           ]
           banned = [
-              "mpc-boot-thingy-sd/autorun/os_tools/bin/vim",
-              "mpc-boot-thingy-sd/autorun/os_tools/bin/nano",
-              "mpc-boot-thingy-sd/autorun/os_tools/bin/busybox-full",
-              "mpc-boot-thingy-sd/os_tools/bin/bash",
-              "mpc-boot-thingy-sd/apps/",
+              "autorun/os_tools/bin/vim",
+              "autorun/os_tools/bin/nano",
+              "autorun/os_tools/bin/busybox-full",
           ]
-          with zipfile.ZipFile("dist/mpc-boot-thingy-sd.zip") as zf:
+          with zipfile.ZipFile(zpath) as zf:
               names = set(zf.namelist())
-          missing = [name for name in need if name not in names]
-          if missing:
-              raise SystemExit("zip missing: " + ", ".join(missing))
-          assets = [name for name in names if name.startswith("mpc-boot-thingy-sd/autorun/system/web/assets/")]
-          if not any(name.endswith(".js") for name in assets) or not any(name.endswith(".css") for name in assets):
-              raise SystemExit("zip missing the built page assets")
-          extra = [name for name in banned if name in names]
-          if extra:
-              raise SystemExit("zip includes dev tools: " + ", ".join(extra))
-          outside = [
-              name for name in names
-              if name != "mpc-boot-thingy-sd/"
-              and not name.startswith("mpc-boot-thingy-sd/autorun/")
-          ]
-          if outside:
-              raise SystemExit("zip has files outside autorun: " + ", ".join(outside))
+              missing = [name for name in need if name not in names]
+              if missing:
+                  raise SystemExit("zip missing: " + ", ".join(missing))
+              extra = [name for name in banned if name in names]
+              if extra:
+                  raise SystemExit("zip includes dev tools: " + ", ".join(extra))
+              outside = [
+                  name for name in names
+                  if name not in ("manifest.yaml", "usb_installer_testapp")
+                  and not name.startswith("autorun/")
+              ]
+              if outside:
+                  raise SystemExit("zip has unexpected files: " + ", ".join(outside))
+              assets = [name for name in names if name.startswith("autorun/system/web/assets/")]
+              if not any(name.endswith(".js") for name in assets) or not any(name.endswith(".css") for name in assets):
+                  raise SystemExit("zip missing the built page assets")
+              manifest = zf.read("manifest.yaml").decode()
+              tag = os.environ["TAG"]
+              for line in (
+                  'name: "Boot Thingy"',
+                  f'version: "{tag}"',
+                  'osVersionID: "scarthgap"',
+                  '- "AC50"',
+                  'relativeExePath: "../usb_installer_testapp"',
+              ):
+                  if line not in manifest:
+                      raise SystemExit("manifest missing " + line)
+              def unix_mode(name):
+                  info = zf.getinfo(name)
+                  if info.create_system != 3:
+                      raise SystemExit(name + " is not stored as a Unix mode")
+                  return (info.external_attr >> 16) & 0o777
+              for name in ("usb_installer_testapp", "autorun/autorun.sh"):
+                  mode = unix_mode(name)
+                  if mode != 0o755:
+                      raise SystemExit(f"{name} mode is {mode:o}, expected 755")
+              dest = tempfile.mkdtemp()
+              for rel in ("autorun/system/mpc-boot-thingy", "autorun/system/mpc-boot-web"):
+                  zf.extract(rel, dest)
+                  out = subprocess.check_output(["file", os.path.join(dest, rel)], text=True)
+                  if "aarch64" not in out:
+                      raise SystemExit(rel + " is not aarch64: " + out.strip())
           PY
 
       - name: Publish the release
@@ -146,7 +145,12 @@ jobs:
           TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" dist/mpc-boot-thingy-sd.zip \
+          gh release create "$TAG" dist/mpc-boot-thingy.zip \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --notes "Copy the \`autorun\` folder to the root of your SD card."
+            --notes "$(cat <<'EOF'
+          Download mpc-boot-thingy.zip. Plug in the MPC, open http://mpc-sample.local/testapp, and add the zip there. If that name does not resolve, use http://192.168.155.1/testapp.
+
+          Do not unzip it or zip it again. On the MPC, confirm the install.
+          EOF
+          )"
