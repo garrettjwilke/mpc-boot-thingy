@@ -3,10 +3,9 @@
    Triggered over USB via POST /testapp on port 80.
    Runs completely in RAM, draws a confirmation screen, installs/updates
    boot-thingy on the SD card, and reboots. An existing autoboot can be
-   renamed before it is saved as an app under autorun/apps/. */
+   kept as a named boot entry or deleted. */
 
 #define _GNU_SOURCE
-#include "font.h"
 #include "input.h"
 #include "screen.h"
 #include "sd_check.h"
@@ -241,8 +240,8 @@ static int copy_tree(const char *src, const char *dst) {
 
 /* Menu titles are MENU_TITLE bytes, including the NUL. */
 #define APP_NAME_MAX 64
-#define DEFAULT_APP_NAME "Previous Autoboot"
-#define DEFAULT_APP_FOLDER "previous-autoboot"
+#define DEFAULT_APP_NAME "old autoboot"
+#define DEFAULT_APP_FOLDER "old-autoboot"
 
 static void clean_title(char *dst, size_t n, const char *src) {
   size_t j = 0;
@@ -367,7 +366,8 @@ static void ellipsize(char *dst, size_t n, const char *src, int max_chars) {
 }
 
 static int perform_install(const char *card, const char *staged,
-                           enum install_mode mode, const char *migrate_title) {
+                           enum install_mode mode, int keep_old,
+                           const char *migrate_title) {
   log_msg("perform_install started: card=%s staged=%s mode=%d", card, staged,
           mode);
   remount_card_exec(card);
@@ -375,7 +375,7 @@ static int perform_install(const char *card, const char *staged,
   char dest_autorun[512];
   snprintf(dest_autorun, sizeof dest_autorun, "%s/autorun", card);
 
-  if (mode == MODE_MIGRATE) {
+  if (mode == MODE_MIGRATE && keep_old) {
     log_msg("Migrating existing autoboot from %s", dest_autorun);
     /* Stage old autorun to RAM */
     char ram_stage[512];
@@ -498,6 +498,11 @@ static int perform_install(const char *card, const char *staged,
     char *rm_tmp[] = {"rm", "-rf", hold_dir, NULL};
     run_cmd(rm_tmp);
   } else {
+    if (mode == MODE_MIGRATE) {
+      log_msg("Deleting existing autoboot at %s", dest_autorun);
+      char *rm_old[] = {"rm", "-rf", dest_autorun, NULL};
+      run_cmd(rm_old);
+    }
     log_msg("Fresh install to %s", dest_autorun);
     char *mkdir_argv[] = {"mkdir", "-p", dest_autorun, NULL};
     run_cmd(mkdir_argv);
@@ -556,42 +561,11 @@ static void draw_status_screen(struct screen *scr, uint32_t *back,
   draw_frame(scr, back, front, midi, &u);
 }
 
-static void draw_name_box(struct ui *u, int x, int y, int w, int h,
-                          const char *name) {
-  struct ui_paint name_box = {.fill_set = 1,
-                              .fill = 0x10141a,
-                              .border_set = 1,
-                              .border = 0xffb000,
-                              .border_px = 1};
-  ui_box(u, x, y, w, h, name_box);
-  if (!name || !name[0])
-    name = DEFAULT_APP_NAME;
-
-  int len = (int)strlen(name);
-  int scale = 2;
-  int gw = FONT_L_W * 2;
-  int gh = FONT_L_H * 2;
-  int inner = w > 16 ? w - 16 : 0;
-  if (inner < gw || len * gw > inner) {
-    scale = 1;
-    gw = FONT_S_W;
-    gh = FONT_S_H;
-  }
-  int maxc = gw > 0 && inner > 0 ? inner / gw : 0;
-  char shown[APP_NAME_MAX];
-  ellipsize(shown, sizeof shown, name, maxc);
-  int tw = (int)strlen(shown) * gw;
-  int tx = x + (w - tw) / 2;
-  int ty = y + (h - gh) / 2;
-  if (ty < y)
-    ty = y;
-  ui_text(u, tx, ty, shown, 0xffffff, scale);
-}
-
-/* Draws the No / Yes chrome. Returns 0, 1, or -1 when nothing was chosen. */
+/* Left is choice 0, right is choice 1. Returns -1 while nothing is chosen. */
 static int installer_yes_no(struct ui *u, const struct input *in,
                             struct ui_soft_state *soft, int *selected,
-                            long elapsed_ms, int button_y) {
+                            long elapsed_ms, int button_y, const char *left,
+                            const char *right) {
   int choice = -1;
   if (in) {
     if (in->encoder > 0)
@@ -601,7 +575,7 @@ static int installer_yes_no(struct ui *u, const struct input *in,
   }
 
   int active_key = *selected == 0 ? 0 : 2;
-  const char *labels[3] = {"No", "", "Yes"};
+  const char *labels[3] = {left, "", right};
   struct ui_soft_style soft_st = {
       .fill = 0x2a303a,
       .text = 0xd0d8e0,
@@ -635,7 +609,7 @@ static int installer_yes_no(struct ui *u, const struct input *in,
       .highlight = 0xff4444,
       .highlight_px = 2,
   };
-  if (ui_button(u, 24, button_y, 126, 42, "No", b_no, armed ? in : NULL))
+  if (ui_button(u, 24, button_y, 126, 42, left, b_no, armed ? in : NULL))
     choice = 0;
 
   struct ui_button b_yes = {
@@ -645,7 +619,7 @@ static int installer_yes_no(struct ui *u, const struct input *in,
       .highlight = 0x44ff44,
       .highlight_px = 2,
   };
-  if (ui_button(u, 170, button_y, 126, 42, "Yes", b_yes, armed ? in : NULL))
+  if (ui_button(u, 170, button_y, 126, 42, right, b_yes, armed ? in : NULL))
     choice = 1;
 
   for (int p = 0; p < 16; p++)
@@ -731,10 +705,11 @@ int main(int argc, char **argv) {
   snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
   memset(&editor, 0, sizeof editor);
 
-  enum { STEP_RENAME, STEP_EDIT, STEP_CONFIRM };
-  int step = mode == MODE_MIGRATE ? STEP_RENAME : STEP_CONFIRM;
-  int selected = step == STEP_CONFIRM ? 1 : 0; /* 0 = No, 1 = Yes */
-  int choice = -1;                             /* install: -1 pending, 0 = No, 1 = Yes */
+  enum { STEP_KEEP, STEP_EDIT, STEP_CONFIRM };
+  int step = mode == MODE_MIGRATE ? STEP_KEEP : STEP_CONFIRM;
+  int selected = 1; /* 0 = left, 1 = right. Keep and Yes start selected. */
+  int keep_old = 0;
+  int choice = -1; /* install: -1 pending, 0 = No, 1 = Yes */
 
   const char *question =
       (mode == MODE_UPDATE) ? "Update boot thingy?" : "Install boot thingy?";
@@ -744,7 +719,7 @@ int main(int argc, char **argv) {
 
   log_msg("Entering UI loop: mode=%d question='%s'", mode, question);
   if (mode == MODE_MIGRATE)
-    log_msg("Existing autoboot found, default name '%s'", app_title);
+    log_msg("Existing autoboot found");
 
   while (choice < 0) {
     input_begin(&in, &dev);
@@ -791,17 +766,19 @@ int main(int argc, char **argv) {
           log_msg("Empty app name ignored");
           snprintf(edit_buf, sizeof edit_buf, "%s", app_title);
           ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf,
-                              "NAME APP");
+                              "NAME ENTRY");
         } else {
           snprintf(app_title, sizeof app_title, "%s", cleaned);
-          log_msg("App name set to '%s'", app_title);
+          log_msg("Boot entry name set to '%s'", app_title);
+          keep_old = 1;
           selected = 1;
           step = STEP_CONFIRM;
         }
       } else if (res == UI_TEXT_CANCEL) {
-        log_msg("App rename cancelled, keeping '%s'", app_title);
-        selected = 0;
-        step = STEP_RENAME;
+        log_msg("Entry naming cancelled");
+        keep_old = 0;
+        selected = 1;
+        step = STEP_KEEP;
       }
       draw_frame(&scr, back, front, &midi, &u);
     } else {
@@ -818,19 +795,30 @@ int main(int argc, char **argv) {
 
       int button_y = 134;
       const char *footer = "Top buttons: No / Yes       Wheel: Select";
-      if (step == STEP_RENAME) {
-        ui_text(&u, 20, 68, "Rename this app?", 0xffffff, 1);
-        draw_name_box(&u, 16, 88, 288, 40, app_title);
-        button_y = 140;
-        footer = "No keeps this name       Yes renames it";
+      const char *left = "No";
+      const char *right = "Yes";
+      if (step == STEP_KEEP) {
+        ui_text(&u, 16, 66, "An existing autoboot is already on this SD card.",
+                0xffffff, 1);
+        ui_text(&u, 16, 88, "boot thingy will add it as a boot entry", 0x9aa4b0,
+                1);
+        ui_text(&u, 16, 104, "if you want to keep it.", 0x9aa4b0, 1);
+        ui_text(&u, 16, 128, "Would you like to keep or delete", 0xffffff, 1);
+        ui_text(&u, 16, 144, "the existing autoboot?", 0xffffff, 1);
+        button_y = 164;
+        footer = "Top: Delete / Keep        Wheel: Select";
+        left = "Delete";
+        right = "Keep";
       } else {
         char shown[40];
         char subtitle_buf[80];
         const char *subtitle;
-        if (mode == MODE_MIGRATE) {
+        if (mode == MODE_MIGRATE && keep_old) {
           ellipsize(shown, sizeof shown, app_title, 36);
           snprintf(subtitle_buf, sizeof subtitle_buf, "Saved as %s", shown);
           subtitle = subtitle_buf;
+        } else if (mode == MODE_MIGRATE) {
+          subtitle = "Existing autoboot will be removed";
         } else if (mode == MODE_UPDATE) {
           subtitle = "Update boot thingy files on SD card";
         } else {
@@ -841,18 +829,22 @@ int main(int argc, char **argv) {
       }
 
       int pick = installer_yes_no(&u, &in, &soft_state, &selected, elapsed_ms,
-                                  button_y);
-      ui_text(&u, 20, 198, footer, 0x707c8c, 1);
+                                  button_y, left, right);
+      int footer_y = step == STEP_KEEP ? 214 : 198;
+      ui_text(&u, 16, footer_y, footer, 0x707c8c, 1);
 
       if (pick == 0 || pick == 1)
-        log_msg("%s -> %s",
-                step == STEP_RENAME ? "Rename prompt" : "Install prompt",
-                pick ? "Yes" : "No");
-      if (step == STEP_RENAME && pick == 1) {
+        log_msg("%s -> %s", step == STEP_KEEP ? "Keep prompt" : "Install prompt",
+                step == STEP_KEEP ? (pick ? "Keep" : "Delete")
+                                  : (pick ? "Yes" : "No"));
+      if (step == STEP_KEEP && pick == 1) {
+        snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
         snprintf(edit_buf, sizeof edit_buf, "%s", app_title);
-        ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf, "NAME APP");
+        ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf,
+                            "NAME ENTRY");
         step = STEP_EDIT;
-      } else if (step == STEP_RENAME && pick == 0) {
+      } else if (step == STEP_KEEP && pick == 0) {
+        keep_old = 0;
         selected = 1;
         step = STEP_CONFIRM;
       } else if (pick >= 0) {
@@ -871,7 +863,7 @@ int main(int argc, char **argv) {
     draw_status_screen(&scr, back, front, &midi, "Installing...",
                        "Copying boot thingy to SD card...");
     log_msg("Calling perform_install");
-    perform_install(card, staged, mode, app_title);
+    perform_install(card, staged, mode, keep_old, app_title);
     log_msg("Drawing Complete! status screen");
     draw_status_screen(&scr, back, front, &midi, "Complete!",
                        "Boot thingy is installed. Rebooting...");

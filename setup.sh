@@ -41,8 +41,9 @@ Usage:
   Install or update mpc-boot-thingy over USB without requiring an SD reader or SSH.
   Uploads the USB Installer to the MPC. The MPC shows a confirmation prompt
   on screen: press Yes on the top buttons to install or update.
-  If the card already has an autoboot, the installer shows that name and asks
-  whether to rename it before saving the autoboot into autorun/apps/.
+  If the card already has an autoboot, the installer asks whether to keep or
+  delete it. Keep opens a text editor whose default name is "old autoboot".
+  Delete removes that autoboot when boot thingy is installed.
 
 --SD PATH
   Mount point of the card on this computer, not a device node.
