@@ -108,12 +108,13 @@ export async function deleteFiles(items) {
   }));
 }
 
-export async function uploadFile(dir, file, nameOverride = null) {
+export async function uploadFile(dir, file, nameOverride = null, signal = null) {
   const name = nameOverride || file.name;
   const q = new URLSearchParams({ dir, name });
   return readBody(await fetch("/api/files/upload?" + q.toString(), {
     method: "POST",
-    body: file
+    body: file,
+    signal
   }));
 }
 

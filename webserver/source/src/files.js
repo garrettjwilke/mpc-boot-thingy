@@ -48,6 +48,58 @@ export function bindFiles({ toast }) {
     return ids.filter(Boolean).join("/");
   }
 
+  function showUploadStatus(initialTotal, onCancel) {
+    let el = document.getElementById("fb-upload-status");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "fb-upload-status";
+      el.className = "fb-upload-status";
+      container.appendChild(el);
+    }
+    el.innerHTML = `
+      <span class="fb-upload-spinner"></span>
+      <span class="fb-upload-text">Uploading folder (0 / ${initialTotal})…</span>
+      <button type="button" class="btn sm danger fb-upload-cancel">Cancel</button>
+    `;
+    const btnCancel = el.querySelector(".fb-upload-cancel");
+    if (btnCancel) {
+      btnCancel.onclick = onCancel;
+    }
+
+    return {
+      update: (done, total) => {
+        const text = el.querySelector(".fb-upload-text");
+        if (text) text.textContent = `Uploading folder (${done} / ${total})…`;
+      },
+      done: (done, failed) => {
+        const spinner = el.querySelector(".fb-upload-spinner");
+        const btn = el.querySelector(".fb-upload-cancel");
+        const text = el.querySelector(".fb-upload-text");
+        if (spinner) spinner.style.display = "none";
+        if (btn) btn.style.display = "none";
+        if (text) {
+          text.textContent = failed > 0
+            ? `Uploaded ${done} files (${failed} failed)`
+            : `Uploaded ${done} files!`;
+        }
+        setTimeout(() => {
+          if (el.parentNode) el.parentNode.removeChild(el);
+        }, 1800);
+      },
+      cancelled: (done) => {
+        const spinner = el.querySelector(".fb-upload-spinner");
+        const btn = el.querySelector(".fb-upload-cancel");
+        const text = el.querySelector(".fb-upload-text");
+        if (spinner) spinner.style.display = "none";
+        if (btn) btn.style.display = "none";
+        if (text) text.textContent = `Upload cancelled (${done} uploaded)`;
+        setTimeout(() => {
+          if (el.parentNode) el.parentNode.removeChild(el);
+        }, 1800);
+      }
+    };
+  }
+
   function initExplorer() {
     if (!window.FileExplorer || !container) return;
     if (feInstance) return;
@@ -366,36 +418,65 @@ export function bindFiles({ toast }) {
       },
 
       onuploadfolder: async function (files, currentFolder) {
+        if (!files || files.length === 0) return;
+
         const baseRel = getFolderRelPath(currentFolder);
-        toast(`Uploading folder (${files.length} files)...`);
+        const abortCtrl = new AbortController();
+        let isCancelled = false;
+
+        const statusUI = showUploadStatus(files.length, () => {
+          isCancelled = true;
+          abortCtrl.abort();
+        });
+
+        const CONCURRENCY = 6;
+        let nextIndex = 0;
         let done = 0;
         let failed = 0;
 
-        for (const file of files) {
-          const relPath = file.webkitRelativePath || file.name;
-          const clean = relPath.replace(/^\/+/, "");
-          const lastSlash = clean.lastIndexOf("/");
-          let destDir = baseRel;
-          let fileName = file.name;
+        async function worker() {
+          while (nextIndex < files.length && !isCancelled) {
+            const idx = nextIndex++;
+            const file = files[idx];
+            const relPath = file.webkitRelativePath || file.name;
+            const clean = relPath.replace(/^\/+/, "");
+            const lastSlash = clean.lastIndexOf("/");
+            let destDir = baseRel;
+            let fileName = file.name;
 
-          if (lastSlash >= 0) {
-            const sub = clean.slice(0, lastSlash);
-            fileName = clean.slice(lastSlash + 1);
-            destDir = baseRel ? baseRel + "/" + sub : sub;
-          }
+            if (lastSlash >= 0) {
+              const sub = clean.slice(0, lastSlash);
+              fileName = clean.slice(lastSlash + 1);
+              destDir = baseRel ? baseRel + "/" + sub : sub;
+            }
 
-          try {
-            await uploadFile(destDir, file, fileName);
-            done++;
-          } catch (err) {
-            failed++;
+            try {
+              await uploadFile(destDir, file, fileName, abortCtrl.signal);
+              done++;
+            } catch (err) {
+              if (abortCtrl.signal.aborted || isCancelled) return;
+              failed++;
+            }
+
+            if (!isCancelled) {
+              statusUI.update(done + failed, files.length);
+            }
           }
         }
 
-        if (failed === 0) {
-          toast(`Uploaded folder (${done} files)`);
+        const pool = Array.from(
+          { length: Math.min(CONCURRENCY, files.length) },
+          () => worker()
+        );
+
+        await Promise.all(pool);
+
+        if (isCancelled) {
+          statusUI.cancelled(done);
+          toast(`Upload cancelled (${done} uploaded)`);
         } else {
-          toast(`Uploaded ${done} files, ${failed} failed`);
+          statusUI.done(done, failed);
+          toast(failed === 0 ? `Uploaded folder (${done} files)` : `Uploaded ${done} files, ${failed} failed`);
         }
 
         triggerRefresh(true);

@@ -117,6 +117,19 @@ main { max-width: 1100px; margin: 22px auto; padding: 0 24px 48px; }
   color: var(--text);
 }
 .btn.secondary:hover { background: var(--panel-hover); }
+.btn.danger {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #ef4444;
+}
+.btn.danger:hover {
+  background: rgba(239, 68, 68, 0.22);
+}
+:root[data-theme="dark"] .btn.danger {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.45);
+}
 .btn.sm { padding: 5px 10px; font-size: 12px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .install-row { margin-top: 12px; }
@@ -308,4 +321,52 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
 }
 :root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_navtool_refresh:not(.fe_fileexplorer_disabled):hover {
   background-color: var(--panel-hover, #232733);
+}
+
+/* Upload floating status indicator */
+.fb-upload-status {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background-color: var(--panel, #ffffff);
+  border: 1px solid var(--border, #d9d9d9);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text, #1f2937);
+  animation: fbSlideIn 0.2s ease-out;
+}
+:root[data-theme="dark"] .fb-upload-status {
+  background-color: var(--panel, #1a1e2d);
+  border-color: var(--border, #2d3348);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+}
+.fb-upload-spinner {
+  width: 15px;
+  height: 15px;
+  border: 2.2px solid rgba(37, 99, 235, 0.2);
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: fbSpin 0.75s linear infinite;
+}
+:root[data-theme="dark"] .fb-upload-spinner {
+  border-color: rgba(96, 165, 250, 0.2);
+  border-top-color: #60a5fa;
+}
+.fb-upload-text {
+  font-size: 12.5px;
+  line-height: 1.2;
+}
+@keyframes fbSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes fbSlideIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
