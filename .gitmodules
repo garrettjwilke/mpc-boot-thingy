@@ -1,3 +1,6 @@
 [submodule "mpc-ui-toolkit"]
 	path = mpc-ui-toolkit
 	url = https://github.com/garrettjwilke/mpc-ui-toolkit.git
+[submodule "deps/js-fileexplorer"]
+	path = deps/js-fileexplorer
+	url = https://github.com/cubiclesoft/js-fileexplorer.git

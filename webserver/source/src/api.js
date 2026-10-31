@@ -62,3 +62,84 @@ export async function saveBootEdit({ title, patches, id }) {
 export async function rebootDevice() {
   return readBody(await fetch("/api/reboot", { method: "POST" }));
 }
+
+export async function fetchFiles(path = "") {
+  const q = path ? "?path=" + encodeURIComponent(path) : "";
+  return readBody(await fetch("/api/files/list" + q));
+}
+
+export async function createFolder(path) {
+  return readBody(await fetch("/api/files/mkdir", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path })
+  }));
+}
+
+export async function renameFile(path, name) {
+  return readBody(await fetch("/api/files/rename", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, name })
+  }));
+}
+
+export async function moveFiles(items, dest) {
+  return readBody(await fetch("/api/files/move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items, dest })
+  }));
+}
+
+export async function copyFiles(items, dest) {
+  return readBody(await fetch("/api/files/copy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items, dest })
+  }));
+}
+
+export async function deleteFiles(items) {
+  return readBody(await fetch("/api/files/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items })
+  }));
+}
+
+export async function uploadFile(dir, file) {
+  const q = new URLSearchParams({ dir, name: file.name });
+  return readBody(await fetch("/api/files/upload?" + q.toString(), {
+    method: "POST",
+    body: file
+  }));
+}
+
+export function downloadFileUrl(path) {
+  return "/api/files/download?path=" + encodeURIComponent(path);
+}
+
+export async function exportZip(items = null, filename = "mpc-data-backup.zip") {
+  const body = items && items.length > 0 ? JSON.stringify({ items }) : "{}";
+  const res = await fetch("/api/files/zip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || "ZIP export failed");
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 1000);
+}

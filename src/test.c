@@ -1,6 +1,7 @@
 /* Host self-test: Stock first, drop-in apps and older boot-menu files, bad
  * files skipped. */
 #include "boot_ui.h"
+#include "file_ops.h"
 #include "format_sd.h"
 #include "input.h"
 #include "menu.h"
@@ -10,8 +11,10 @@
 #include "ui.h"
 #include "unzip.h"
 #include "usb_sd.h"
+#include "zip_writer.h"
 
 #include <assert.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1066,6 +1069,102 @@ int main(void) {
   format_sd_set_mock(1, 1);
   assert(format_sd_card(dir, "MPC-Sample", dummy_progress, last_status) != 0);
   format_sd_set_mock(0, 0);
+
+  /* Web File Browser / Data Sandboxing & Operations Test */
+  {
+    char test_data[512];
+    snprintf(test_data, sizeof test_data, "%s/data_test", dir);
+    assert(file_ops_init(test_data) == 0);
+
+    /* 1. Sandboxing and Path Resolution */
+    char resolved[1024], rel[1024];
+    assert(file_ops_resolve("", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(rel[0] == '\0');
+    assert(file_ops_resolve("/", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(rel[0] == '\0');
+    assert(file_ops_resolve("/drums/kick.wav", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(strcmp(rel, "drums/kick.wav") == 0);
+
+    /* Security check: traversal attempts outside /data must fail */
+    assert(file_ops_resolve("../", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("../etc/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("drums/../../etc/shadow", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("drums/./../..", resolved, sizeof resolved, rel, sizeof rel) != 0);
+
+    /* 2. Mkdir */
+    assert(file_ops_mkdir("samples") == 0);
+    assert(file_ops_mkdir("samples/drums") == 0);
+
+    /* 3. Create sample files */
+    char fpath1[1024], fpath2[1024];
+    snprintf(fpath1, sizeof fpath1, "%s/samples/drums/snare.wav", test_data);
+    write_file(fpath1, "WAV_SNARE_DATA_12345");
+    snprintf(fpath2, sizeof fpath2, "%s/samples/note.txt", test_data);
+    write_file(fpath2, "Sample note");
+
+    /* 4. List Directory JSON */
+    char *json = file_ops_list_json("samples");
+    assert(json != NULL);
+    assert(strstr(json, "\"name\":\"drums\"") != NULL);
+    assert(strstr(json, "\"is_dir\":true") != NULL);
+    assert(strstr(json, "\"name\":\"note.txt\"") != NULL);
+    assert(strstr(json, "\"is_dir\":false") != NULL);
+    free(json);
+
+    /* 5. Rename */
+    assert(file_ops_rename("samples/note.txt", "readme.txt") == 0);
+    snprintf(fpath2, sizeof fpath2, "%s/samples/readme.txt", test_data);
+    assert(access(fpath2, F_OK) == 0);
+
+    /* 6. Recursive Copy */
+    const char *copy_items[] = {"samples/drums"};
+    assert(file_ops_copy(copy_items, 1, "") == 0);
+    char fcopy[1024];
+    snprintf(fcopy, sizeof fcopy, "%s/drums/snare.wav", test_data);
+    assert(access(fcopy, F_OK) == 0);
+
+    /* 7. Move */
+    const char *move_items[] = {"drums"};
+    assert(file_ops_mkdir("backup") == 0);
+    assert(file_ops_move(move_items, 1, "backup") == 0);
+    char fmove[1024];
+    snprintf(fmove, sizeof fmove, "%s/backup/drums/snare.wav", test_data);
+    assert(access(fmove, F_OK) == 0);
+    assert(access(fcopy, F_OK) != 0); // Original moved
+
+    /* 8. ZIP Export Test */
+    char zip_file[1024];
+    snprintf(zip_file, sizeof zip_file, "%s/export.zip", dir);
+    int zfd = open(zip_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    assert(zfd >= 0);
+    assert(zip_stream_export(zfd, NULL, 0) == 0); // Export entire /data
+    close(zfd);
+
+    /* Verify ZIP with Python zipfile */
+    char pycmd[2048];
+    snprintf(pycmd, sizeof pycmd,
+             "python3 -c '\n"
+             "import zipfile, sys\n"
+             "zf = zipfile.ZipFile(\"%s/export.zip\", \"r\")\n"
+             "names = zf.namelist()\n"
+             "assert any(\"samples/readme.txt\" in n for n in names), f\"missing readme: {names}\"\n"
+             "assert any(\"backup/drums/snare.wav\" in n for n in names), f\"missing snare: {names}\"\n"
+             "data = zf.read(\"samples/readme.txt\").decode(\"utf-8\")\n"
+             "assert data == \"Sample note\", f\"bad content: {data}\"\n"
+             "assert zf.testzip() is None, \"zip CRC test failed\"\n"
+             "zf.close()\n"
+             "'",
+             dir);
+    assert(system(pycmd) == 0);
+
+    /* 9. Delete & Protect Root */
+    const char *root_item[] = {""};
+    assert(file_ops_delete(root_item, 1) != 0); // Root cannot be deleted!
+
+    const char *del_items[] = {"backup", "samples"};
+    assert(file_ops_delete(del_items, 2) == 0);
+    assert(access(fmove, F_OK) != 0);
+  }
 
   puts("selftest ok");
   return 0;
