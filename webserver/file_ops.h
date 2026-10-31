@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-/* Initialize file operations. If data_root is NULL, looks for /data,
+/* Initialize file operations. If data_root is NULL, looks for /data/UserContent,
    MPC_DATA_DIR env, or fallback. Returns 0 on success. */
 int file_ops_init(const char *data_root);
 

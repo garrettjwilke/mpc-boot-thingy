@@ -45,7 +45,7 @@ export function bindFiles({ toast }) {
     const options = {
       group: "mpc_boot_data",
       capturebrowser: true,
-      initpath: [["", "/data"]],
+      initpath: [["", "/data/UserContent"]],
       tools: {
         item_checkboxes: true
       },
@@ -201,7 +201,7 @@ export function bindFiles({ toast }) {
             const items = ids.map((id) => (rel ? rel + "/" + id : id));
             const zipName = ids.length === 1
               ? `${entries[0].name}.zip`
-              : `mpc-data-export-${new Date().toISOString().slice(0, 10)}.zip`;
+              : `mpc-usercontent-export-${new Date().toISOString().slice(0, 10)}.zip`;
             toast("Preparing ZIP export...");
             await exportZip(items, zipName);
             toast("ZIP export complete");
@@ -218,8 +218,8 @@ export function bindFiles({ toast }) {
   if (btnZipAll) {
     btnZipAll.addEventListener("click", async () => {
       try {
-        toast("Preparing full /data backup as ZIP...");
-        await exportZip([], `mpc-data-full-backup-${new Date().toISOString().slice(0, 10)}.zip`);
+        toast("Preparing full /data/UserContent backup as ZIP...");
+        await exportZip([], `mpc-usercontent-backup-${new Date().toISOString().slice(0, 10)}.zip`);
         toast("Full backup download started!");
       } catch (err) {
         toast(err.message || "Backup failed");

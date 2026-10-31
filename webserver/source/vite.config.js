@@ -351,7 +351,7 @@ async function handleMock(req, res, url, state) {
   }
   if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/files/zip") {
     res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename="mpc-data-backup.zip"`);
+    res.setHeader("Content-Disposition", `attachment; filename="mpc-usercontent-backup.zip"`);
     // Minimal valid empty zip: 22-byte EOCD
     const emptyZip = Buffer.from([
       0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00,

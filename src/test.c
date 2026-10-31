@@ -1073,7 +1073,7 @@ int main(void) {
   /* Web File Browser / Data Sandboxing & Operations Test */
   {
     char test_data[512];
-    snprintf(test_data, sizeof test_data, "%s/data_test", dir);
+    snprintf(test_data, sizeof test_data, "%s/data_test/UserContent", dir);
     assert(file_ops_init(test_data) == 0);
 
     /* 1. Sandboxing and Path Resolution */
