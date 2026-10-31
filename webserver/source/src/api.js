@@ -120,7 +120,7 @@ export function downloadFileUrl(path) {
   return "/api/files/download?path=" + encodeURIComponent(path);
 }
 
-export async function exportZip(items = null, filename = "mpc-data-backup.zip") {
+export async function exportZip(items = null, filename = "mpc-usercontent-backup.zip") {
   const body = items && items.length > 0 ? JSON.stringify({ items }) : "{}";
   const res = await fetch("/api/files/zip", {
     method: "POST",

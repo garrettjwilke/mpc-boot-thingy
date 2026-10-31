@@ -44,14 +44,16 @@ int file_ops_init(const char *data_root) {
 
     if (data_root && data_root[0]) {
         snprintf(candidate, sizeof candidate, "%s", data_root);
+    } else if (stat("/data/UserContent", &st) == 0 && S_ISDIR(st.st_mode)) {
+        snprintf(candidate, sizeof candidate, "/data/UserContent");
     } else if (stat("/data", &st) == 0 && S_ISDIR(st.st_mode)) {
-        snprintf(candidate, sizeof candidate, "/data");
+        snprintf(candidate, sizeof candidate, "/data/UserContent");
     } else {
         const char *env = getenv("MPC_DATA_DIR");
         if (env && env[0]) {
             snprintf(candidate, sizeof candidate, "%s", env);
         } else {
-            snprintf(candidate, sizeof candidate, "build/test_data");
+            snprintf(candidate, sizeof candidate, "build/test_data/UserContent");
         }
     }
 
@@ -68,7 +70,7 @@ int file_ops_init(const char *data_root) {
 
 const char *file_ops_get_root(void) {
     if (!g_data_root[0]) {
-        if (file_ops_init(NULL) != 0) return "/data";
+        if (file_ops_init(NULL) != 0) return "/data/UserContent";
     }
     return g_data_root;
 }

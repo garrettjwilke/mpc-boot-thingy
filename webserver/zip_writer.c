@@ -288,7 +288,7 @@ int zip_stream_export(int client_fd, const char **items, size_t count) {
     int hlen = snprintf(hdr, sizeof hdr,
                         "HTTP/1.1 200 OK\r\n"
                         "Content-Type: application/zip\r\n"
-                        "Content-Disposition: attachment; filename=\"mpc-data-backup.zip\"\r\n"
+                        "Content-Disposition: attachment; filename=\"mpc-usercontent-backup.zip\"\r\n"
                         "Connection: close\r\n"
                         "Cache-Control: no-store\r\n"
                         "\r\n");
