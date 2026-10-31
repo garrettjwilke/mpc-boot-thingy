@@ -660,8 +660,63 @@ static int run_boot_script(const char *card, const struct menu_entry *e) {
   return run_cmd(argv);
 }
 
-/* Run one entry. Stock and Boot Edit entries start ac50 and the caller should
-   exit. Other apps return here. 2 means the panel and screen are still ours. */
+#define AUTORUN_RC "/run/mpc-boot-autorun.rc"
+
+/* Sidecar scripts return. A replacement package backgrounds its launcher and
+   returns too. 120s is a backstop so a stuck script still reaches stock. */
+static int wait_autorun_rc(void) {
+  int i;
+  for (i = 0; i < 1200; i++) {
+    if (access(AUTORUN_RC, F_OK) == 0)
+      return 0;
+    usleep(100 * 1000);
+  }
+  return -1;
+}
+
+/* Firmware-style handoff for a nested autorun package.
+   The script runs in its own unit, so exiting this menu does not kill the
+   process it backgrounds. $0 stays the package script. replaces leaves ac50
+   stopped. A sidecar mounts the Shift+Pad 16 loader and starts ac50.
+   1 leaves the menu. 0 asks the caller to reopen the panel. */
+static int launch_autorun(struct surface *midi, struct screen *scr,
+                          const char *card, const char *script, int replaces) {
+  char *argv[] = {
+      "systemd-run",
+      "--unit=mpc-boot-autorun",
+      "--no-block",
+      "--property=KillMode=process",
+      "--property=RemainAfterExit=yes",
+      "/bin/sh",
+      "-c",
+      "sh \"$1\"; echo $? > /run/mpc-boot-autorun.rc; exit 0",
+      "sh",
+      (char *)script,
+      NULL};
+  show_loading(scr, midi, theme_load(card));
+  flush_and_drop_caches(card);
+  remount_exec(card);
+  surface_all_off(midi);
+  surface_close(midi);
+  screen_close(scr);
+  unlink(AUTORUN_RC);
+  if (run_cmd(argv) != 0) {
+    fprintf(stderr, "autorun handoff failed\n");
+    return 0;
+  }
+  if (!replaces) {
+    if (wait_autorun_rc() != 0)
+      fprintf(stderr, "autorun script did not finish\n");
+    mount_patched_stock(card);
+    systemctl_ac50("start");
+    stopped_ac50 = 0;
+  }
+  return 1;
+}
+
+/* Run one entry. Stock, Boot Edit, and a nested autorun package hand off and
+   the caller should exit. Other apps return here. 2 means the panel and
+   screen are still ours. */
 static int launch(struct surface *midi, struct screen *scr, const char *card,
                   const struct menu_entry *e) {
   if (e->stock || e->boot_ac50) {
@@ -689,11 +744,23 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
     stopped_ac50 = 0;
     return 1;
   }
-  if (!stopped_ac50 && systemctl_ac50("stop") == 0)
-    stopped_ac50 = 1;
 
   char path[512];
+  struct stat script_st;
+  int kind;
   resolve_run(e->base[0] ? e->base : card, e->run, path, sizeof path);
+  kind = menu_autorun_kind(path);
+  if (kind >= 0) {
+    if (lstat(path, &script_st) != 0 || S_ISLNK(script_st.st_mode) ||
+        !S_ISREG(script_st.st_mode)) {
+      fprintf(stderr, "autorun script is missing\n");
+      return 2;
+    }
+    return launch_autorun(midi, scr, card, path, kind == 1);
+  }
+
+  if (!stopped_ac50 && systemctl_ac50("stop") == 0)
+    stopped_ac50 = 1;
   char execpath[512];
   snprintf(execpath, sizeof execpath, "%s", path);
   if (remount_exec(card) != 0) {
