@@ -74,57 +74,16 @@
       <div class="card">
         <div class="row file-header-row">
           <div class="file-path-area">
-            <h3>File Browser</h3>
-            <div id="fb-breadcrumbs" class="breadcrumbs"></div>
+            <h3>Internal Storage (/data)</h3>
+            <span class="muted">Manage and backup files on the internal /data partition</span>
           </div>
-          <div class="file-disk-area">
+          <div class="row">
             <span id="fb-disk" class="badge">Loading storage…</span>
+            <button class="btn sm" id="fb-btn-zip-all" type="button">📦 Backup /data as ZIP</button>
           </div>
         </div>
 
-        <div class="row fb-toolbar">
-          <button class="btn secondary sm" id="fb-btn-mkdir" type="button">+ New Folder</button>
-          <button class="btn secondary sm" id="fb-btn-upload" type="button">↑ Upload Files</button>
-          <input type="file" id="fb-file-input" multiple hidden />
-          <button class="btn secondary sm" id="fb-btn-zip-all" type="button">📦 Export /data as ZIP</button>
-          <button class="btn secondary sm" id="fb-btn-refresh" type="button">↻ Refresh</button>
-        </div>
-
-        <div id="fb-selection-bar" class="fb-bar fb-selection-bar" hidden>
-          <span id="fb-selected-count" class="badge ok">0 items selected</span>
-          <div class="row">
-            <button class="btn sm" id="fb-btn-zip-selected" type="button">📦 Export ZIP</button>
-            <button class="btn secondary sm" id="fb-btn-copy" type="button">Copy</button>
-            <button class="btn secondary sm" id="fb-btn-cut" type="button">Cut / Move</button>
-            <button class="btn secondary sm danger" id="fb-btn-del-selected" type="button">Delete</button>
-            <button class="btn secondary sm" id="fb-btn-deselect" type="button">Deselect All</button>
-          </div>
-        </div>
-
-        <div id="fb-paste-bar" class="fb-bar fb-paste-bar" hidden>
-          <span id="fb-paste-info" class="badge">0 items on clipboard</span>
-          <div class="row">
-            <button class="btn sm" id="fb-btn-paste" type="button">Paste Here</button>
-            <button class="btn secondary sm" id="fb-btn-paste-cancel" type="button">Cancel</button>
-          </div>
-        </div>
-
-        <div class="table-wrap">
-          <table class="fb-table">
-            <thead>
-              <tr>
-                <th class="col-check"><input type="checkbox" id="fb-select-all" /></th>
-                <th class="col-name">Name</th>
-                <th class="col-size">Size</th>
-                <th class="col-date">Modified</th>
-                <th class="col-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="fb-list">
-              <tr><td colspan="5" class="empty-hint">Loading files…</td></tr>
-            </tbody>
-          </table>
-        </div>
+        <div id="filemanager" class="fe-container"></div>
       </div>
     </section>
     <section id="tab-device" class="tab">
@@ -168,44 +127,6 @@
       </div>
     </div>
   </div>
-  <div id="modal-mkdir" class="modal" hidden>
-    <div class="card">
-      <h3>New Folder</h3>
-      <label class="field">Folder Name
-        <input id="mkdir-name" type="text" placeholder="e.g. Drums" />
-      </label>
-      <div class="row install-row">
-        <button class="btn" id="mkdir-confirm" type="button">Create</button>
-        <button class="btn secondary" id="mkdir-cancel" type="button">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="modal-rename" class="modal" hidden>
-    <div class="card">
-      <h3>Rename</h3>
-      <label class="field">New Name
-        <input id="rename-name" type="text" />
-      </label>
-      <div class="row install-row">
-        <button class="btn" id="rename-confirm" type="button">Rename</button>
-        <button class="btn secondary" id="rename-cancel" type="button">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="modal-delete" class="modal" hidden>
-    <div class="card">
-      <h3>Confirm Delete</h3>
-      <p class="muted">Are you sure you want to permanently delete these item(s)? This cannot be undone.</p>
-      <ul id="delete-list" class="delete-list"></ul>
-      <div class="row install-row">
-        <button class="btn danger" id="delete-confirm" type="button">Delete</button>
-        <button class="btn secondary" id="delete-cancel" type="button">Cancel</button>
-      </div>
-    </div>
-  </div>
-
   <div id="toast"></div>
   <script src="/xterm.js"></script>
   <script src="/xterm-addon-fit.js"></script>

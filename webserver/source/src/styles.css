@@ -200,7 +200,7 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
   z-index: 5;
 }
 
-/* File Browser */
+/* File Browser Container */
 .file-header-row {
   display: flex;
   justify-content: space-between;
@@ -211,142 +211,62 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
 }
 .file-path-area { display: flex; flex-direction: column; gap: 4px; }
 .file-path-area h3 { margin: 0; }
-.breadcrumbs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--mono);
-  font-size: 13px;
-  flex-wrap: wrap;
-}
-.crumb-btn {
-  background: transparent;
-  border: none;
-  color: var(--accent);
-  padding: 2px 4px;
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 13px;
-  border-radius: 4px;
-}
-.crumb-btn:hover { background: var(--panel-hover); text-decoration: underline; }
-.crumb-btn.current { color: var(--text); font-weight: 700; pointer-events: none; }
-.crumb-sep { color: var(--muted); }
 
-.fb-toolbar {
-  margin-bottom: 14px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.fb-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 10px 14px;
+.fe-container {
+  height: min(72vh, 680px);
+  min-height: 440px;
+  position: relative;
   border-radius: 8px;
-  margin-bottom: 12px;
-  animation: fadeIn 0.15s ease;
-}
-.fb-selection-bar {
-  background: var(--panel-alt);
-  border: 1px solid var(--ok-border);
-}
-.fb-paste-bar {
-  background: var(--panel-alt);
-  border: 1px solid var(--warn-border);
-}
-
-.table-wrap {
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--input);
-}
-.fb-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  text-align: left;
-}
-.fb-table th, .fb-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.fb-table th {
-  background: var(--panel-alt);
-  color: var(--muted);
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.3px;
-}
-.fb-table tr:last-child td {
-  border-bottom: none;
-}
-.fb-table tbody tr:hover {
-  background: var(--panel-hover);
-}
-.fb-table tbody tr.selected {
-  background: rgba(255, 59, 48, 0.08);
-}
-:root[data-theme="light"] .fb-table tbody tr.selected {
-  background: rgba(217, 43, 34, 0.08);
 }
 
-.col-check { width: 36px; text-align: center; }
-.col-name { min-width: 220px; }
-.col-size { width: 100px; font-family: var(--mono); text-align: right; }
-.col-date { width: 160px; font-family: var(--mono); font-size: 12px; }
-.col-actions { width: 120px; text-align: right; white-space: nowrap; }
-
-.file-title { font-weight: 500; }
-.file-title.is-dir { color: #50b0ff; font-weight: 600; }
-.file-title.is-dir:hover { text-decoration: underline; }
-
-.action-btn, .action-link {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+/* js-fileexplorer Theme Integration */
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_inner_wrap {
+  background-color: var(--panel);
   color: var(--text);
-  font-size: 12px;
-  padding: 3px 7px;
-  margin-left: 4px;
-  cursor: pointer;
-  text-decoration: none;
-  display: inline-block;
-  line-height: 1.2;
+  border: none;
 }
-.action-btn:hover, .action-link:hover {
-  background: var(--panel-hover);
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_path_wrap {
+  border-color: var(--border);
+  background-color: var(--input);
 }
-.action-btn.danger:hover, .btn.danger {
-  background: #e74c3c;
-  color: #fff;
-  border-color: #c0392b;
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_path_segments_wrap button {
+  color: var(--text);
 }
-
-.empty-hint {
-  text-align: center;
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_path_segment_wrap:hover {
+  background-color: var(--panel-hover);
+  border-color: var(--border);
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_folder_tools_scroll_wrap {
+  border-right-color: var(--border);
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_folder_tools button:not(.fe_fileexplorer_disabled):hover {
+  background-color: var(--panel-hover);
+  border-color: var(--border);
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_items_scroll_wrap {
+  background-color: var(--panel);
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_item {
+  color: var(--text);
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_item:hover {
+  background-color: var(--panel-hover);
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_item.fe_fileexplorer_item_selected {
+  background-color: var(--panel-alt);
+}
+:root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_statusbar {
+  border-top-color: var(--border);
+  background-color: var(--input);
   color: var(--muted);
-  padding: 36px 16px !important;
-  font-style: italic;
 }
-
-.delete-list {
-  max-height: 160px;
-  overflow-y: auto;
-  background: var(--input);
+:root[data-theme="dark"] .fe_fileexplorer_popup_wrap .fe_fileexplorer_popup {
+  background-color: var(--panel);
+  color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 12px 8px 24px;
-  margin: 0 0 14px;
-  font-family: var(--mono);
-  font-size: 12px;
 }
-
-.drag-over {
-  outline: 2px dashed var(--accent);
-  outline-offset: -2px;
+:root[data-theme="dark"] .fe_fileexplorer_popup_wrap .fe_fileexplorer_popup_item_wrap:hover {
+  background-color: var(--panel-hover);
 }
