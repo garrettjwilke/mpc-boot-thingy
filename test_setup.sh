@@ -85,6 +85,8 @@ printf '%s\n' "$out" | grep -q 'os_tools/.bashrc' || fail "help missing bashrc"
 printf '%s\n' "$out" | grep -q -- '--tools' || fail "help missing --tools"
 printf '%s\n' "$out" | grep -q -- '--usb' || fail "help missing --usb"
 printf '%s\n' "$out" | grep -q 'USB Installer' || fail "help missing USB Installer description"
+printf '%s\n' "$out" | grep -q -- '--pack' || fail "help missing --pack"
+printf '%s\n' "$out" | grep -q 'mpc-sample.local/testapp' || fail "help missing testapp page"
 if python3 ./fetch-toolkit.py >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
   fail "fetch-toolkit without a directory should fail"
 fi
@@ -103,6 +105,22 @@ if ./setup.sh --usb --ssh >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--u
 grep -q 'cannot be used with --ssh' /tmp/mpc-boot-err || fail "--usb --ssh should explain itself"
 if ./setup.sh --usb --add /tmp/x >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--usb --add should fail"; fi
 grep -q 'not --add' /tmp/mpc-boot-err || fail "--usb --add should explain itself"
+if ./setup.sh --pack >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--pack needs a path"; fi
+grep -q 'needs a path' /tmp/mpc-boot-err || fail "--pack should explain itself"
+if ./setup.sh --pack /tmp/mpc-boot-pack.zip --usb >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--pack --usb should fail"; fi
+grep -q 'cannot be used with --usb' /tmp/mpc-boot-err || fail "--pack --usb should explain itself"
+if ./setup.sh --pack /tmp/mpc-boot-pack.zip --ssh >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--pack --ssh should fail"; fi
+grep -q 'cannot be used with --ssh' /tmp/mpc-boot-err || fail "--pack --ssh should explain itself"
+if ./setup.sh --pack /tmp/mpc-boot-pack.zip --SD /tmp >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--pack --SD should fail"; fi
+grep -q 'does not take --SD' /tmp/mpc-boot-err || fail "--pack --SD should explain itself"
+if ./setup.sh --pack /tmp/mpc-boot-pack.zip --add /tmp/x >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--pack --add should fail"; fi
+grep -q 'not used with --add' /tmp/mpc-boot-err || fail "--pack --add should explain itself"
+if ./setup.sh --pack /tmp/mpc-boot-pack.zip --tools >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then fail "--pack --tools should fail"; fi
+grep -q 'does not take --tools' /tmp/mpc-boot-err || fail "--pack --tools should explain itself"
+if PACK_VERSION='bad version' ./setup.sh --pack /tmp/mpc-boot-pack.zip >/tmp/mpc-boot-out 2>/tmp/mpc-boot-err; then
+  fail "bad PACK_VERSION should fail"
+fi
+grep -q 'plain version' /tmp/mpc-boot-err || fail "bad PACK_VERSION should explain itself"
 ./setup.sh -h >/dev/null
 ./setup.sh >/dev/null
 
@@ -668,5 +686,52 @@ if ./setup.sh --SD "$empty" --add "$linked" --title "Linked" >/tmp/mpc-boot-out 
 fi
 grep -q 'symlink' /tmp/mpc-boot-err || fail "symlink package should say it is refusing a symlink"
 test ! -e "$empty/autorun/apps/linked" || fail "symlink package left an app folder"
+
+# The release zip is the same package --usb uploads. The toolkit fixture
+# keeps this offline. The executable bit has to survive the zip.
+PACK_VERSION=v9.9.9 ./setup.sh --pack "$work/mpc-boot-thingy.zip" >/tmp/mpc-boot-out
+grep -q 'Wrote '"$work/mpc-boot-thingy.zip" /tmp/mpc-boot-out || fail "pack did not name the zip"
+python3 - "$work/mpc-boot-thingy.zip" <<'PY'
+import sys, zipfile
+zpath = sys.argv[1]
+need = [
+    "manifest.yaml",
+    "usb_installer_testapp",
+    "autorun/system/mpc-boot-thingy",
+    "autorun/autorun.sh",
+    "autorun/os_tools/bin/bash",
+]
+banned = [
+    "autorun/os_tools/bin/vim",
+    "autorun/os_tools/bin/nano",
+    "autorun/os_tools/bin/busybox-full",
+]
+with zipfile.ZipFile(zpath) as zf:
+    names = set(zf.namelist())
+    missing = [name for name in need if name not in names]
+    if missing:
+        sys.exit("zip missing: " + ", ".join(missing))
+    extra = [name for name in banned if name in names]
+    if extra:
+        sys.exit("zip includes dev tools: " + ", ".join(extra))
+    manifest = zf.read("manifest.yaml").decode()
+    for line in (
+        'name: "Boot Thingy"',
+        'version: "v9.9.9"',
+        'relativeExePath: "../usb_installer_testapp"',
+        '- "AC50"',
+    ):
+        if line not in manifest:
+            sys.exit("manifest missing " + line)
+    def unix_mode(name):
+        info = zf.getinfo(name)
+        if info.create_system != 3:
+            sys.exit(name + " is not stored as a Unix mode")
+        return (info.external_attr >> 16) & 0o777
+    for name in ("usb_installer_testapp", "autorun/autorun.sh"):
+        mode = unix_mode(name)
+        if mode != 0o755:
+            sys.exit("%s mode is %o, expected 755" % (name, mode))
+PY
 
 echo "setup fixtures ok"

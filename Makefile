@@ -1,4 +1,5 @@
-# mpc-boot-thingy. `make` cross-builds the device binaries into build/.
+# mpc-boot-thingy. `make` cross-builds the device binaries into build/
+# and writes the testapp zip to dist/mpc-boot-thingy.zip.
 WARN = -Wall -Wextra
 UI = mpc-ui-toolkit/src
 INC = -Iinc -Iwebserver -I$(UI)
@@ -10,9 +11,13 @@ HOST_SRC = src/test.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/p
 	webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c \
 	$(UI)/ui.c $(UI)/widgets.c $(UI)/usb_sd.c $(UI)/input.c
 
-.PHONY: all test clean web-host
+.PHONY: all test clean web-host package
 
-all: build/mpc-boot-thingy build/mpc-boot-web build/loader.so build/usb_installer
+all: build/mpc-boot-thingy build/mpc-boot-web build/loader.so build/usb_installer package
+
+package: build/mpc-boot-thingy build/mpc-boot-web build/loader.so build/usb_installer
+	mkdir -p dist
+	./setup.sh --pack dist/mpc-boot-thingy.zip
 
 build/mpc-boot-thingy: $(DEV_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h inc/sd_check.h inc/format_sd.h $(UI)/usb_sd.h
 	mkdir -p build

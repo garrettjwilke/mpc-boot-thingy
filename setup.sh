@@ -23,6 +23,7 @@ Usage:
   ./setup.sh --help
   ./setup.sh --usb
   ./setup.sh --usb --tools
+  ./setup.sh --pack dist/mpc-boot-thingy.zip
   ./setup.sh --SD "/path/to/mounted/SD"
   ./setup.sh --SD "/path/to/mounted/SD" --tools
   ./setup.sh --ssh
@@ -44,6 +45,12 @@ Usage:
   If the card already has an autoboot, the installer asks whether to keep or
   delete it. Keep opens a text editor whose default name is "old autoboot".
   Delete removes that autoboot when boot thingy is installed.
+
+--pack PATH
+  Write the testapp zip to PATH and do not contact the MPC.
+  make uses this to build the GitHub release. It is not a replacement
+  for --SD or --ssh. The zip is what you add at
+  http://mpc-sample.local/testapp
 
 --SD PATH
   Mount point of the card on this computer, not a device node.
@@ -1157,32 +1164,50 @@ add_over_ssh() {
   echo "Updated the app on $media over SSH."
 }
 
-install_over_usb() {
+ensure_device_binaries() {
   if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || \
      [ ! -s "$ROOT/build/loader.so" ] || [ ! -x "$ROOT/build/usb_installer" ]; then
-    make -C "$ROOT"
+    make -C "$ROOT" build/mpc-boot-thingy build/mpc-boot-web build/loader.so build/usb_installer
   fi
   if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || \
      [ ! -s "$ROOT/build/loader.so" ] || [ ! -x "$ROOT/build/usb_installer" ]; then
     echo "ERROR: build did not produce the boot, web, loader, and usb_installer binaries" >&2
     exit 1
   fi
+}
 
+# Same zip --usb uploads. make calls this through --pack. It does not
+# contact the MPC. PACK_VERSION sets the manifest version.
+build_testapp_zip() {
+  out_zip=$1
+  version=${PACK_VERSION:-1.0.0}
+  case "$version" in
+    ''|*[!A-Za-z0-9._+-]*)
+      echo "ERROR: PACK_VERSION must be a plain version" >&2
+      exit 1
+      ;;
+  esac
+  if [ -z "$out_zip" ] || [ -d "$out_zip" ]; then
+    echo "ERROR: --pack needs a file path" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname -- "$out_zip")"
+  ensure_device_binaries
   stage=$(mktemp -d)
   pkg_dir=$(mktemp -d)
-  trap 'rm -rf "$stage" "$pkg_dir"' EXIT
-
-  echo "Staging mpc-boot-thingy payload..."
-  write_autorun "$stage" quiet
-
-  cp -R "$stage/autorun" "$pkg_dir/autorun"
-  cp "$ROOT/build/usb_installer" "$pkg_dir/usb_installer_testapp"
-  chmod 755 "$pkg_dir/usb_installer_testapp"
-
-  cat <<'EOF' > "$pkg_dir/manifest.yaml"
+  status=0
+  (
+    set -e
+    trap - EXIT
+    echo "Staging mpc-boot-thingy payload..."
+    write_autorun "$stage" quiet
+    cp -R "$stage/autorun" "$pkg_dir/autorun"
+    cp "$ROOT/build/usb_installer" "$pkg_dir/usb_installer_testapp"
+    chmod 755 "$pkg_dir/usb_installer_testapp"
+    cat > "$pkg_dir/manifest.yaml" <<EOF
 testApps:
-  - name: "USB Installer"
-    version: "1.0.0"
+  - name: "Boot Thingy"
+    version: "$version"
     osVersionID: "scarthgap"
     products:
       - "AC50"
@@ -1190,10 +1215,8 @@ testApps:
     basePath: ""
     relativeExePath: "../usb_installer_testapp"
 EOF
-
-  bundle_zip="$pkg_dir/bundle.zip"
-  echo "Creating USB installer package..."
-  python3 - "$pkg_dir" "$bundle_zip" <<'PY'
+    echo "Creating testapp package..."
+    python3 - "$pkg_dir" "$out_zip" <<'PY'
 import os, sys, zipfile
 
 pkg_dir, out_zip = sys.argv[1], sys.argv[2]
@@ -1202,9 +1225,8 @@ with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED) as z:
         for f in files:
             full = os.path.join(root, f)
             rel = os.path.relpath(full, pkg_dir)
-            if rel == 'bundle.zip':
-                continue
             zinfo = zipfile.ZipInfo.from_file(full, rel)
+            zinfo.create_system = 3
             if f == 'usb_installer_testapp' or rel.endswith('.sh') or '/bin/' in rel:
                 zinfo.external_attr = 0o755 << 16
             else:
@@ -1212,6 +1234,19 @@ with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED) as z:
             with open(full, 'rb') as fp:
                 z.writestr(zinfo, fp.read())
 PY
+  ) || status=$?
+  rm -rf "$stage" "$pkg_dir"
+  if [ "$status" -ne 0 ]; then
+    rm -f "$out_zip"
+    exit "$status"
+  fi
+}
+
+install_over_usb() {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  build_testapp_zip "$tmp/bundle.zip"
+  bundle_zip=$tmp/bundle.zip
 
   target="${MPC_HOST:-}"
   target="${target#*@}"
@@ -1253,7 +1288,7 @@ PY
 
 install_over_ssh() {
   if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
-    make -C "$ROOT"
+    make -C "$ROOT" build/mpc-boot-thingy build/mpc-boot-web build/loader.so
   fi
   if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
     echo "ERROR: build did not produce the boot, web, and loader binaries" >&2
@@ -1347,6 +1382,7 @@ ADD=
 TITLE=
 SSH_MODE=
 USB_MODE=
+PACK=
 REBOOT=
 RELOAD=
 TOOLS=
@@ -1358,6 +1394,14 @@ while [ $# -gt 0 ]; do
       ;;
     --usb)
       USB_MODE=1
+      ;;
+    --pack)
+      shift
+      if [ $# -lt 1 ] || [ -z "$1" ]; then
+        echo "ERROR: --pack needs a path" >&2
+        exit 1
+      fi
+      PACK=$1
       ;;
     --host)
       shift
@@ -1410,6 +1454,36 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ -n "$PACK" ]; then
+  if [ -n "$USB_MODE" ]; then
+    echo "ERROR: --pack cannot be used with --usb" >&2
+    exit 1
+  fi
+  if [ -n "$SSH_MODE" ]; then
+    echo "ERROR: --pack cannot be used with --ssh" >&2
+    exit 1
+  fi
+  if [ -n "$SD" ]; then
+    echo "ERROR: --pack does not take --SD" >&2
+    exit 1
+  fi
+  if [ -n "$ADD" ] || [ -n "$TITLE" ]; then
+    echo "ERROR: --pack is not used with --add" >&2
+    exit 1
+  fi
+  if [ -n "$TOOLS" ]; then
+    echo "ERROR: --pack does not take --tools" >&2
+    exit 1
+  fi
+  if [ -n "$REBOOT" ] || [ -n "$RELOAD" ]; then
+    echo "ERROR: --pack does not reboot or reload" >&2
+    exit 1
+  fi
+  build_testapp_zip "$PACK"
+  echo "Wrote $PACK"
+  exit 0
+fi
 
 if [ -n "$TOOLS" ] && [ -n "$ADD" ]; then
   echo "ERROR: --tools is not used with --add" >&2
@@ -1519,7 +1593,7 @@ if [ -n "$ADD" ]; then
 fi
 
 if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
-  make -C "$ROOT"
+  make -C "$ROOT" build/mpc-boot-thingy build/mpc-boot-web build/loader.so
 fi
 if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
   echo "ERROR: build did not produce the boot, web, and loader binaries" >&2
