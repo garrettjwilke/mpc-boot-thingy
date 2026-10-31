@@ -133,6 +133,50 @@ main { max-width: 1100px; margin: 22px auto; padding: 0 24px 48px; }
 .btn.sm { padding: 5px 10px; font-size: 12px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .install-row { margin-top: 12px; }
+.install-dialog { max-width: 460px; }
+.install-dialog .field,
+.boot-dialog .field { margin-bottom: 10px; }
+.install-dialog .field input,
+.boot-dialog .field input { width: 100%; }
+.install-actions { margin-top: 16px; justify-content: flex-end; }
+.dropzone {
+  border: 1.5px dashed var(--border);
+  border-radius: 10px;
+  background: var(--input);
+  padding: 28px 16px;
+  text-align: center;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.dropzone:hover,
+.dropzone.dragover {
+  border-color: var(--accent);
+  background: var(--panel-alt);
+}
+.dropzone-title { margin: 0; font-weight: 600; font-size: 14px; }
+.dropzone-or { font-size: 12px; }
+.file-line {
+  margin: 0 0 12px;
+  font-size: 13px;
+  word-break: break-all;
+}
+.file-line span:last-child {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.field-error {
+  color: var(--accent);
+  font-size: 13px;
+  margin: 12px 0 0;
+}
+.btn:disabled,
+.btn:disabled:hover {
+  opacity: 0.5;
+  cursor: default;
+}
 .term-tools { margin-bottom: 12px; }
 pre, input[type="text"] {
   background: var(--input);
@@ -177,8 +221,10 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
   padding: 8px 0;
   border-top: 1px solid var(--border);
 }
-#boot-form { margin-top: 14px; }
+.boot-new { margin-bottom: 4px; }
+.boot-dialog { max-width: 460px; }
 #boot-form .field { margin-bottom: 8px; }
+#unsaved { z-index: 7; }
 .modal {
   position: fixed;
   inset: 0;

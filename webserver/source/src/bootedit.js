@@ -1,7 +1,8 @@
 import { saveBootEdit } from "./api.js";
 
 export function bindBootEdit({ toast, refresh }) {
-  const form = document.getElementById("boot-form");
+  const dialog = document.getElementById("boot-edit");
+  const heading = document.getElementById("boot-edit-heading");
   const titleInput = document.getElementById("boot-title");
   const checks = document.getElementById("boot-patches");
   const modal = document.getElementById("unsaved");
@@ -53,7 +54,8 @@ export function bindBootEdit({ toast, refresh }) {
       base: ""
     };
     titleInput.value = entry && entry.title ? entry.title : "";
-    form.hidden = false;
+    heading.textContent = open.id ? "Edit entry" : "New entry";
+    dialog.hidden = false;
     renderChecks();
     open.base = snapshot();
     titleInput.focus();
@@ -62,7 +64,7 @@ export function bindBootEdit({ toast, refresh }) {
   function hide() {
     open = null;
     pending = null;
-    form.hidden = true;
+    dialog.hidden = true;
     modal.hidden = true;
     titleInput.value = "";
     checks.textContent = "";
@@ -110,6 +112,12 @@ export function bindBootEdit({ toast, refresh }) {
 
   document.getElementById("boot-new").addEventListener("click", () => ask({ type: "new" }));
   document.getElementById("boot-back").addEventListener("click", () => ask({ type: "close" }));
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) ask({ type: "close" });
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !dialog.hidden && modal.hidden) ask({ type: "close" });
+  });
   document.getElementById("boot-save").addEventListener("click", () => { save(); });
   document.getElementById("unsaved-save").addEventListener("click", async () => {
     const next = pending;
