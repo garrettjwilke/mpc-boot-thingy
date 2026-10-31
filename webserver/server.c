@@ -7,8 +7,10 @@
 #endif
 
 #include "boot_edit.h"
+#include "file_ops.h"
 #include "menu.h"
 #include "unzip.h"
+#include "zip_writer.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -2048,6 +2050,301 @@ static void handle_boot_edit(int fd, struct io *io, int has_len, size_t content_
     send_json(fd, 200, "OK", resp);
 }
 
+#define FILE_OPS_MAX_ITEMS 512
+
+static int json_string_array(const char *json, const char *key, char items[][PATH_MAX], const char *ptrs[], size_t max_items) {
+    const char *at = json_key(json, key);
+    if (!at) return 0;
+    const char *p = skip_ws(at);
+    if (*p != '[') return -1;
+    p = skip_ws(p + 1);
+    size_t count = 0;
+    if (*p != ']') {
+        while (*p) {
+            if (count >= max_items) return -1;
+            if (json_string(&p, items[count], PATH_MAX) != 0) return -1;
+            ptrs[count] = items[count];
+            count++;
+            p = skip_ws(p);
+            if (*p == ',') {
+                p = skip_ws(p + 1);
+                continue;
+            }
+            if (*p == ']') break;
+            return -1;
+        }
+    }
+    return (int)count;
+}
+
+static void handle_files_list(int fd, const char *query) {
+    char path_param[PATH_MAX];
+    query_param(query, "path", path_param, sizeof path_param);
+    char *json = file_ops_list_json(path_param);
+    if (!json) {
+        send_err(fd, 404, "Not Found", "directory not found or outside /data");
+        return;
+    }
+    send_json(fd, 200, "OK", json);
+    free(json);
+}
+
+static void handle_files_mkdir(int fd, struct io *io, int has_len, size_t content_len) {
+    char raw[1024], path_buf[PATH_MAX];
+    const char *path_at;
+    if (!has_len || content_len == 0 || content_len >= sizeof raw) {
+        send_err(fd, 400, "Bad Request", "missing path");
+        return;
+    }
+    if (io_read(io, raw, content_len) != 0) {
+        send_err(fd, 400, "Bad Request", "error reading request");
+        return;
+    }
+    raw[content_len] = 0;
+    path_at = json_key(raw, "path");
+    if (!path_at || json_string(&path_at, path_buf, sizeof path_buf) != 0) {
+        send_err(fd, 400, "Bad Request", "missing path string");
+        return;
+    }
+    if (file_ops_mkdir(path_buf) != 0) {
+        send_err(fd, 400, "Bad Request", "could not create folder");
+        return;
+    }
+    send_json(fd, 200, "OK", "{\"ok\":true}\n");
+}
+
+static void handle_files_rename(int fd, struct io *io, int has_len, size_t content_len) {
+    char raw[2048], path_buf[PATH_MAX], name_buf[PATH_MAX];
+    const char *path_at, *name_at;
+    if (!has_len || content_len == 0 || content_len >= sizeof raw) {
+        send_err(fd, 400, "Bad Request", "missing parameters");
+        return;
+    }
+    if (io_read(io, raw, content_len) != 0) {
+        send_err(fd, 400, "Bad Request", "error reading request");
+        return;
+    }
+    raw[content_len] = 0;
+    path_at = json_key(raw, "path");
+    name_at = json_key(raw, "name");
+    if (!path_at || json_string(&path_at, path_buf, sizeof path_buf) != 0 ||
+        !name_at || json_string(&name_at, name_buf, sizeof name_buf) != 0) {
+        send_err(fd, 400, "Bad Request", "missing path or name");
+        return;
+    }
+    if (file_ops_rename(path_buf, name_buf) != 0) {
+        send_err(fd, 400, "Bad Request", "rename failed");
+        return;
+    }
+    send_json(fd, 200, "OK", "{\"ok\":true}\n");
+}
+
+static void handle_files_batch_op(int fd, struct io *io, int has_len, size_t content_len, int is_copy) {
+    char *raw = NULL;
+    if (!has_len || content_len == 0 || content_len > 1024 * 1024) {
+        send_err(fd, 400, "Bad Request", "invalid request body");
+        return;
+    }
+    raw = malloc(content_len + 1);
+    if (!raw) {
+        send_err(fd, 500, "Internal Server Error", "out of memory");
+        return;
+    }
+    if (io_read(io, raw, content_len) != 0) {
+        free(raw);
+        send_err(fd, 400, "Bad Request", "error reading request");
+        return;
+    }
+    raw[content_len] = 0;
+
+    char dest_buf[PATH_MAX];
+    const char *dest_at = json_key(raw, "dest");
+    if (!dest_at || json_string(&dest_at, dest_buf, sizeof dest_buf) != 0) {
+        dest_buf[0] = 0;
+    }
+
+    static char items[FILE_OPS_MAX_ITEMS][PATH_MAX];
+    static const char *ptrs[FILE_OPS_MAX_ITEMS];
+    int count = json_string_array(raw, "items", items, ptrs, FILE_OPS_MAX_ITEMS);
+    free(raw);
+
+    if (count <= 0) {
+        send_err(fd, 400, "Bad Request", "items array is empty or invalid");
+        return;
+    }
+
+    int rc = is_copy ? file_ops_copy(ptrs, (size_t)count, dest_buf)
+                     : file_ops_move(ptrs, (size_t)count, dest_buf);
+    if (rc != 0) {
+        send_err(fd, 400, "Bad Request", is_copy ? "copy failed" : "move failed");
+        return;
+    }
+    send_json(fd, 200, "OK", "{\"ok\":true}\n");
+}
+
+static void handle_files_delete(int fd, struct io *io, int has_len, size_t content_len, const char *query) {
+    static char items[FILE_OPS_MAX_ITEMS][PATH_MAX];
+    static const char *ptrs[FILE_OPS_MAX_ITEMS];
+    int count = 0;
+
+    if (has_len && content_len > 0) {
+        char *raw = malloc(content_len + 1);
+        if (!raw) {
+            send_err(fd, 500, "Internal Server Error", "out of memory");
+            return;
+        }
+        if (io_read(io, raw, content_len) != 0) {
+            free(raw);
+            send_err(fd, 400, "Bad Request", "error reading request");
+            return;
+        }
+        raw[content_len] = 0;
+        count = json_string_array(raw, "items", items, ptrs, FILE_OPS_MAX_ITEMS);
+        free(raw);
+    } else if (query) {
+        query_param(query, "path", items[0], sizeof items[0]);
+        if (items[0][0]) {
+            ptrs[0] = items[0];
+            count = 1;
+        }
+    }
+
+    if (count <= 0) {
+        send_err(fd, 400, "Bad Request", "no items specified to delete");
+        return;
+    }
+
+    if (file_ops_delete(ptrs, (size_t)count) != 0) {
+        send_err(fd, 400, "Bad Request", "delete failed");
+        return;
+    }
+    send_json(fd, 200, "OK", "{\"ok\":true}\n");
+}
+
+static void handle_files_upload(int fd, struct io *io, int has_len, size_t content_len, const char *query) {
+    char dir_param[PATH_MAX], name_param[PATH_MAX];
+    query_param(query, "dir", dir_param, sizeof dir_param);
+    query_param(query, "name", name_param, sizeof name_param);
+    if (!name_param[0]) {
+        send_err(fd, 400, "Bad Request", "missing file name");
+        return;
+    }
+    char target_rel[PATH_MAX];
+    if (dir_param[0]) {
+        snprintf(target_rel, sizeof target_rel, "%s/%s", dir_param, name_param);
+    } else {
+        snprintf(target_rel, sizeof target_rel, "%s", name_param);
+    }
+
+    char target_real[PATH_MAX];
+    if (file_ops_resolve(target_rel, target_real, sizeof target_real, NULL, 0) != 0) {
+        send_err(fd, 400, "Bad Request", "invalid destination path");
+        return;
+    }
+
+    char tmp_path[PATH_MAX];
+    snprintf(tmp_path, sizeof tmp_path, "%s.upload.%ld", target_real, (long)getpid());
+
+    int out_fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out_fd < 0) {
+        send_err(fd, 500, "Internal Server Error", "cannot create file");
+        return;
+    }
+
+    size_t left = has_len ? content_len : 0;
+    char buf[16384];
+    while (left > 0) {
+        size_t chunk = left < sizeof buf ? left : sizeof buf;
+        if (io_read(io, buf, chunk) != 0 || write_full(out_fd, buf, chunk) != 0) {
+            close(out_fd);
+            unlink(tmp_path);
+            send_err(fd, 400, "Bad Request", "upload interrupted");
+            return;
+        }
+        left -= chunk;
+    }
+
+#if defined(__APPLE__) && defined(F_FULLFSYNC)
+    fcntl(out_fd, F_FULLFSYNC);
+#else
+    fsync(out_fd);
+#endif
+    close(out_fd);
+
+    if (rename(tmp_path, target_real) != 0) {
+        unlink(tmp_path);
+        send_err(fd, 500, "Internal Server Error", "failed to finalize upload");
+        return;
+    }
+    send_json(fd, 200, "OK", "{\"ok\":true}\n");
+}
+
+static void handle_files_download(int fd, const char *query) {
+    char path_param[PATH_MAX];
+    query_param(query, "path", path_param, sizeof path_param);
+    char real_path[PATH_MAX], rel_path[PATH_MAX];
+    if (file_ops_resolve(path_param, real_path, sizeof real_path, rel_path, sizeof rel_path) != 0) {
+        send_err(fd, 404, "Not Found", "file not found");
+        return;
+    }
+    struct stat st;
+    if (stat(real_path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        send_err(fd, 404, "Not Found", "not a regular file");
+        return;
+    }
+    const char *base = strrchr(rel_path, '/');
+    base = base ? base + 1 : rel_path;
+
+    char hdr[512];
+    int hlen = snprintf(hdr, sizeof hdr,
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: application/octet-stream\r\n"
+                        "Content-Disposition: attachment; filename=\"%s\"\r\n"
+                        "Content-Length: %llu\r\n"
+                        "Connection: close\r\n"
+                        "Cache-Control: no-store\r\n"
+                        "\r\n",
+                        base, (unsigned long long)st.st_size);
+    if (write_full(fd, hdr, (size_t)hlen) != 0) return;
+
+    int f = open(real_path, O_RDONLY);
+    if (f < 0) return;
+    char buf[16384];
+    ssize_t r;
+    while ((r = read(f, buf, sizeof buf)) > 0) {
+        if (write_full(fd, buf, (size_t)r) != 0) break;
+    }
+    close(f);
+}
+
+static void handle_files_zip(int fd, struct io *io, int has_len, size_t content_len, const char *query) {
+    static char items[FILE_OPS_MAX_ITEMS][PATH_MAX];
+    static const char *ptrs[FILE_OPS_MAX_ITEMS];
+    int count = 0;
+
+    if (has_len && content_len > 0) {
+        char *raw = malloc(content_len + 1);
+        if (raw) {
+            if (io_read(io, raw, content_len) == 0) {
+                raw[content_len] = 0;
+                count = json_string_array(raw, "items", items, ptrs, FILE_OPS_MAX_ITEMS);
+            }
+            free(raw);
+        }
+    } else if (query) {
+        char qpath[PATH_MAX];
+        query_param(query, "path", qpath, sizeof qpath);
+        if (!qpath[0]) query_param(query, "dir", qpath, sizeof qpath);
+        if (qpath[0]) {
+            snprintf(items[0], sizeof items[0], "%s", qpath);
+            ptrs[0] = items[0];
+            count = 1;
+        }
+    }
+
+    zip_stream_export(fd, count > 0 ? ptrs : NULL, (size_t)count);
+}
+
 static void handle_client(int client) {
     struct io io;
     char method[16], uri[1024], path[1024];
@@ -2123,6 +2420,43 @@ static void handle_client(int client) {
         else send_json(client, 200, "OK", "{\"ok\":true}\n");
         goto out;
     }
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/files/list") == 0) {
+        handle_files_list(client, query);
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/files/mkdir") == 0) {
+        handle_files_mkdir(client, &io, has_len, content_len);
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/files/rename") == 0) {
+        handle_files_rename(client, &io, has_len, content_len);
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/files/move") == 0) {
+        handle_files_batch_op(client, &io, has_len, content_len, 0);
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/files/copy") == 0) {
+        handle_files_batch_op(client, &io, has_len, content_len, 1);
+        goto out;
+    }
+    if ((strcmp(method, "POST") == 0 && strcmp(path, "/api/files/delete") == 0) ||
+        (strcmp(method, "DELETE") == 0 && strcmp(path, "/api/files") == 0)) {
+        handle_files_delete(client, &io, has_len, content_len, query);
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/files/upload") == 0) {
+        handle_files_upload(client, &io, has_len, content_len, query);
+        goto out;
+    }
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/files/download") == 0) {
+        handle_files_download(client, query);
+        goto out;
+    }
+    if ((strcmp(method, "GET") == 0 || strcmp(method, "POST") == 0) && strcmp(path, "/api/files/zip") == 0) {
+        handle_files_zip(client, &io, has_len, content_len, query);
+        goto out;
+    }
     if (strcmp(method, "GET") == 0 && strncmp(path, "/api/", 5) != 0) {
         if (serve_web(client, path) != 0) {
             send_body(client, 404, "Not Found", "text/plain; charset=utf-8", "Not found\n", 10);
@@ -2157,6 +2491,7 @@ int main(int argc, char **argv) {
             snprintf(g_autorun, sizeof g_autorun, "%s", norm_autorun);
         }
     }
+    file_ops_init(NULL);
     (void)chdir("/");
     g_port = 8080;
     snprintf(g_bind, sizeof g_bind, "%s", "127.0.0.1");

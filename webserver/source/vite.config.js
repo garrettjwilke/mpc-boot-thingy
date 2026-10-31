@@ -83,6 +83,15 @@ function mockState() {
     sd_total_bytes: 32 * 1024 * 1024 * 1024,
     sd_free_bytes: 8 * 1024 * 1024 * 1024,
     memory: "               total        used        free\nMem:             512         384         128\n",
+    files: [
+      { path: "Drums", is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) - 3600 },
+      { path: "Drums/Kick.wav", is_dir: false, size: 176400, mtime: Math.floor(Date.now() / 1000) - 1800 },
+      { path: "Drums/Snare.wav", is_dir: false, size: 128000, mtime: Math.floor(Date.now() / 1000) - 1200 },
+      { path: "Synths", is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) - 7200 },
+      { path: "Synths/Lead.wav", is_dir: false, size: 352800, mtime: Math.floor(Date.now() / 1000) - 2400 },
+      { path: "Project-01.mpc", is_dir: false, size: 84200, mtime: Math.floor(Date.now() / 1000) - 600 },
+      { path: "README.txt", is_dir: false, size: 256, mtime: Math.floor(Date.now() / 1000) - 300 },
+    ],
   };
 }
 
@@ -221,6 +230,135 @@ async function handleMock(req, res, url, state) {
   }
   if (req.method === "POST" && url.pathname === "/api/reboot") {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/files/list") {
+    const reqPath = (url.searchParams.get("path") || "").replace(/^\/+|\/+$/g, "");
+    const parent = reqPath.includes("/") ? reqPath.slice(0, reqPath.lastIndexOf("/")) : "";
+    const prefix = reqPath ? reqPath + "/" : "";
+    const entries = [];
+    const seen = new Set();
+    for (const f of state.files) {
+      if (prefix ? f.path.startsWith(prefix) : !f.path.includes("/")) {
+        const sub = prefix ? f.path.slice(prefix.length) : f.path;
+        const name = sub.split("/")[0];
+        if (seen.has(name)) continue;
+        seen.add(name);
+        const isDir = sub.includes("/") || f.is_dir;
+        entries.push({
+          name,
+          is_dir: isDir,
+          size: isDir ? 0 : f.size,
+          mtime: f.mtime
+        });
+      }
+    }
+    sendJson(res, 200, {
+      path: reqPath,
+      parent,
+      free_bytes: 3.2 * 1024 * 1024 * 1024,
+      total_bytes: 4 * 1024 * 1024 * 1024,
+      entries
+    });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/files/mkdir") {
+    const raw = await readRaw(req);
+    const body = JSON.parse(raw.toString("utf8") || "{}");
+    const p = (body.path || "").replace(/^\/+|\/+$/g, "");
+    if (!p) { sendJson(res, 400, { error: "bad path" }); return; }
+    state.files.push({ path: p, is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/files/rename") {
+    const raw = await readRaw(req);
+    const body = JSON.parse(raw.toString("utf8") || "{}");
+    const oldP = (body.path || "").replace(/^\/+|\/+$/g, "");
+    const newName = (body.name || "").trim();
+    const parentDir = oldP.includes("/") ? oldP.slice(0, oldP.lastIndexOf("/")) : "";
+    const newP = parentDir ? parentDir + "/" + newName : newName;
+    for (const f of state.files) {
+      if (f.path === oldP) f.path = newP;
+      else if (f.path.startsWith(oldP + "/")) f.path = newP + f.path.slice(oldP.length);
+    }
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/files/move") {
+    const raw = await readRaw(req);
+    const body = JSON.parse(raw.toString("utf8") || "{}");
+    const items = body.items || [];
+    const dest = (body.dest || "").replace(/^\/+|\/+$/g, "");
+    for (const item of items) {
+      const base = item.includes("/") ? item.slice(item.lastIndexOf("/") + 1) : item;
+      const target = dest ? dest + "/" + base : base;
+      for (const f of state.files) {
+        if (f.path === item) f.path = target;
+        else if (f.path.startsWith(item + "/")) f.path = target + f.path.slice(item.length);
+      }
+    }
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/files/copy") {
+    const raw = await readRaw(req);
+    const body = JSON.parse(raw.toString("utf8") || "{}");
+    const items = body.items || [];
+    const dest = (body.dest || "").replace(/^\/+|\/+$/g, "");
+    const toAdd = [];
+    for (const item of items) {
+      const base = item.includes("/") ? item.slice(item.lastIndexOf("/") + 1) : item;
+      const target = dest ? dest + "/" + base : base;
+      for (const f of state.files) {
+        if (f.path === item) toAdd.push({ ...f, path: target });
+        else if (f.path.startsWith(item + "/")) toAdd.push({ ...f, path: target + f.path.slice(item.length) });
+      }
+    }
+    state.files.push(...toAdd);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/files/delete") {
+    const raw = await readRaw(req);
+    const body = JSON.parse(raw.toString("utf8") || "{}");
+    const items = body.items || [];
+    state.files = state.files.filter((f) => !items.some((it) => f.path === it || f.path.startsWith(it + "/")));
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/files/upload") {
+    const raw = await readRaw(req);
+    const dir = (url.searchParams.get("dir") || "").replace(/^\/+|\/+$/g, "");
+    const name = url.searchParams.get("name") || "uploaded.bin";
+    const target = dir ? dir + "/" + name : name;
+    state.files = state.files.filter((f) => f.path !== target);
+    state.files.push({
+      path: target,
+      is_dir: false,
+      size: raw.length,
+      mtime: Math.floor(Date.now() / 1000)
+    });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/files/download") {
+    const p = url.searchParams.get("path") || "";
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${p.split("/").pop()}"`);
+    res.end(Buffer.from("mock content for " + p));
+    return;
+  }
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/files/zip") {
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="mpc-data-backup.zip"`);
+    // Minimal valid empty zip: 22-byte EOCD
+    const emptyZip = Buffer.from([
+      0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    ]);
+    res.end(emptyZip);
     return;
   }
   sendJson(res, 404, { error: "not found" });
