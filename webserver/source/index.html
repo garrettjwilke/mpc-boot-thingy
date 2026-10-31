@@ -39,41 +39,15 @@
         <h3>Boot programs</h3>
         <p class="muted">Hold SHIFT during the prompt to open the menu on the MPC. Otherwise the default starts. Boot
           thingy opens that menu now.</p>
+        <button class="btn secondary sm boot-new" id="boot-new" type="button">New Entry</button>
         <div id="apps"></div>
       </div>
-      <div class="card" id="boot-edit">
-        <h3>Boot Edit</h3>
-        <p class="muted">Turn catalog patches on to make one boot entry. Stock keeps its own patch set. Each saved entry
-          shows up in the list above.</p>
-        <button class="btn" id="boot-new" type="button">New entry</button>
-        <div id="boot-form" hidden>
-          <label class="field">Title
-            <input id="boot-title" type="text" placeholder="Lab mix" />
-          </label>
-          <div id="boot-patches"></div>
-          <div class="row install-row">
-            <button class="btn secondary" id="boot-back" type="button">Back</button>
-            <button class="btn" id="boot-save" type="button">Save</button>
-          </div>
-        </div>
-      </div>
       <div class="card">
-        <h3>Install a program</h3>
-        <p class="muted">The new program is used on the next boot when it is the default and SHIFT is not held. It must
+        <h3>Install an app</h3>
+        <p class="muted">The new app is used on the next boot when it is the default and SHIFT is not held. It must
           be an aarch64 Linux executable, a script whose first line runs sh or bash, or a zip of an autorun package. The
           zip keeps that package in its own folder.</p>
-        <div class="row">
-          <label class="field">Title
-            <input id="title" type="text" placeholder="Lab firmware" />
-          </label>
-          <label class="field">Args
-            <input id="args" type="text" placeholder="optional" />
-          </label>
-        </div>
-        <div class="row install-row">
-          <input id="file" type="file" />
-          <button class="btn" id="install" type="button">Install</button>
-        </div>
+        <button class="btn" id="install-open" type="button">Install App</button>
       </div>
     </section>
     <section id="tab-files" class="tab">
@@ -124,6 +98,53 @@
       </div>
     </section>
   </main>
+  <div id="install-modal" class="modal" hidden>
+    <div class="card install-dialog" role="dialog" aria-modal="true" aria-labelledby="install-heading">
+      <h3 id="install-heading">Install App</h3>
+      <div id="install-step-file">
+        <p class="muted">Drop a zip or an app here, or browse for one.</p>
+        <div id="install-drop" class="dropzone">
+          <p class="dropzone-title">Drag a zip or app here</p>
+          <span class="muted dropzone-or">or</span>
+          <button class="btn secondary" id="install-browse" type="button">Browse</button>
+        </div>
+      </div>
+      <div id="install-step-name" hidden>
+        <p class="muted">What do you want to name it?</p>
+        <p class="file-line"><span class="muted">File:</span> <span id="install-filename"></span></p>
+        <label class="field">Name
+          <input id="title" type="text" autocomplete="off" />
+        </label>
+        <label class="field">Args
+          <input id="args" type="text" placeholder="optional" autocomplete="off" />
+        </label>
+        <button class="btn secondary sm" id="install-change" type="button">Choose a different file</button>
+      </div>
+      <p id="install-error" class="field-error" role="alert" hidden></p>
+      <div class="row install-actions">
+        <button class="btn secondary" id="install-cancel" type="button">Cancel</button>
+        <button class="btn" id="install" type="button" hidden>Install</button>
+      </div>
+      <input id="file" type="file" hidden />
+    </div>
+  </div>
+  <div id="boot-edit" class="modal" hidden>
+    <div class="card boot-dialog" role="dialog" aria-modal="true" aria-labelledby="boot-edit-heading">
+      <h3 id="boot-edit-heading">New entry</h3>
+      <p class="muted">Turn catalog patches on to make one boot entry. Stock keeps its own patch set. Each saved entry
+        shows up in the boot list.</p>
+      <div id="boot-form">
+        <label class="field">Title
+          <input id="boot-title" type="text" placeholder="Lab mix" />
+        </label>
+        <div id="boot-patches"></div>
+        <div class="row install-actions">
+          <button class="btn secondary" id="boot-back" type="button">Cancel</button>
+          <button class="btn" id="boot-save" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <div id="unsaved" class="modal" hidden>
     <div class="card">
       <h3>Not saved yet</h3>
