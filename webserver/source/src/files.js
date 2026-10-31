@@ -42,10 +42,99 @@ export function bindFiles({ toast }) {
     if (!window.FileExplorer || !container) return;
     if (feInstance) return;
 
+    if (!window.FileExplorer._hasRegisteredUploadFolder) {
+      window.FileExplorer._hasRegisteredUploadFolder = true;
+      window.FileExplorer.RegisterTool(0, function (fe) {
+        if (!fe.hasEventListener("init_upload") && !fe.settings.tools.upload) return;
+
+        let enabled = false;
+        let inputfield = null;
+
+        const node = fe.AddToolbarButton(
+          "fe_fileexplorer_folder_tool_upload_folder",
+          fe.Translate("Upload folders")
+        );
+        node.title = "Upload folders";
+        node.setAttribute("aria-label", "Upload folders");
+
+        const uploadFileBtn = fe.GetElements().bodytoolbar.querySelector(".fe_fileexplorer_folder_tool_upload");
+        if (uploadFileBtn && uploadFileBtn.nextSibling) {
+          fe.GetElements().bodytoolbar.insertBefore(node, uploadFileBtn.nextSibling);
+        }
+
+        const RemoveInputField = function () {
+          if (inputfield) {
+            inputfield.removeEventListener("change", UploadFolders);
+            if (inputfield.parentNode) inputfield.parentNode.removeChild(inputfield);
+            inputfield = null;
+          }
+        };
+
+        const UploadFolders = function () {
+          const files = Array.from(inputfield.files || []);
+          RemoveInputField();
+          if (files.length === 0) return;
+
+          if (fe.settings.onuploadfolder) {
+            fe.settings.onuploadfolder(files, fe.GetCurrentFolder());
+          }
+        };
+
+        const CreateInputField = function () {
+          RemoveInputField();
+          inputfield = document.createElement("input");
+          inputfield.type = "file";
+          inputfield.className = "fe_fileexplorer_hidden";
+          inputfield.webkitdirectory = true;
+          inputfield.setAttribute("webkitdirectory", "");
+          inputfield.setAttribute("directory", "");
+          inputfield.multiple = true;
+          inputfield.addEventListener("change", UploadFolders);
+          fe.GetElements().mainwrap.appendChild(inputfield);
+        };
+
+        const StartSelectFolder = function () {
+          if (!enabled) return;
+          if (!inputfield) CreateInputField();
+          inputfield.click();
+        };
+
+        const ClickHandler = function (e) {
+          if (!e.isTrusted) return;
+          StartSelectFolder();
+        };
+
+        node.addEventListener("click", ClickHandler);
+
+        const UpdateToolHandler = function (currfolder, attrs) {
+          const prevenabled = enabled;
+          enabled = !currfolder.waiting && (!("canmodify" in attrs) || attrs.canmodify);
+          if (prevenabled !== enabled) {
+            if (enabled) node.classList.remove("fe_fileexplorer_disabled");
+            else node.classList.add("fe_fileexplorer_disabled");
+            fe.ToolStateUpdated();
+          }
+        };
+
+        fe.addEventListener("update_tool", UpdateToolHandler);
+
+        const DestroyToolHandler = function () {
+          RemoveInputField();
+          node.removeEventListener("click", ClickHandler);
+        };
+
+        fe.addEventListener("destroy", DestroyToolHandler);
+      });
+    }
+
     const options = {
       group: "mpc_boot_data",
       capturebrowser: true,
       initpath: [["", "/data/UserContent"]],
+      langmap: {
+        "Upload (Ctrl + U)": "Upload files",
+        "Upload": "Upload files"
+      },
       tools: {
         item_checkboxes: true
       },
@@ -222,10 +311,53 @@ export function bindFiles({ toast }) {
         } catch (err) {
           toast(err.message || "Download failed");
         }
+      },
+
+      onuploadfolder: async function (files, currentFolder) {
+        const baseRel = getFolderRelPath(currentFolder);
+        toast(`Uploading folder (${files.length} files)...`);
+        let done = 0;
+        let failed = 0;
+
+        for (const file of files) {
+          const relPath = file.webkitRelativePath || file.name;
+          const clean = relPath.replace(/^\/+/, "");
+          const lastSlash = clean.lastIndexOf("/");
+          let destDir = baseRel;
+          let fileName = file.name;
+
+          if (lastSlash >= 0) {
+            const sub = clean.slice(0, lastSlash);
+            fileName = clean.slice(lastSlash + 1);
+            destDir = baseRel ? baseRel + "/" + sub : sub;
+          }
+
+          try {
+            await uploadFile(destDir, file, fileName);
+            done++;
+          } catch (err) {
+            failed++;
+          }
+        }
+
+        if (failed === 0) {
+          toast(`Uploaded folder (${done} files)`);
+        } else {
+          toast(`Uploaded ${done} files, ${failed} failed`);
+        }
+
+        if (currentFolder) currentFolder.Refresh();
+        updateDiskStats();
       }
     };
 
     feInstance = new window.FileExplorer(container, options);
+
+    const uploadBtn = container.querySelector(".fe_fileexplorer_folder_tool_upload");
+    if (uploadBtn) {
+      uploadBtn.title = "Upload files";
+      uploadBtn.setAttribute("aria-label", "Upload files");
+    }
   }
 
   if (btnZipAll) {
@@ -237,57 +369,6 @@ export function bindFiles({ toast }) {
       } catch (err) {
         toast(err.message || "Backup failed");
       }
-    });
-  }
-
-  const btnUploadFolder = document.getElementById("fb-btn-upload-folder");
-  const inputFolder = document.getElementById("fb-folder-input");
-  if (btnUploadFolder && inputFolder) {
-    btnUploadFolder.addEventListener("click", () => {
-      inputFolder.value = "";
-      inputFolder.click();
-    });
-
-    inputFolder.addEventListener("change", async (e) => {
-      const files = Array.from(e.target.files || []);
-      if (files.length === 0) return;
-
-      const currentFolder = feInstance ? feInstance.GetCurrentFolder() : null;
-      const baseRel = getFolderRelPath(currentFolder);
-
-      toast(`Uploading folder (${files.length} files)...`);
-      let done = 0;
-      let failed = 0;
-
-      for (const file of files) {
-        const relPath = file.webkitRelativePath || file.name;
-        const clean = relPath.replace(/^\/+/, "");
-        const lastSlash = clean.lastIndexOf("/");
-        let destDir = baseRel;
-        let fileName = file.name;
-
-        if (lastSlash >= 0) {
-          const sub = clean.slice(0, lastSlash);
-          fileName = clean.slice(lastSlash + 1);
-          destDir = baseRel ? baseRel + "/" + sub : sub;
-        }
-
-        try {
-          await uploadFile(destDir, file, fileName);
-          done++;
-        } catch (err) {
-          failed++;
-        }
-      }
-
-      if (failed === 0) {
-        toast(`Uploaded folder (${done} files)`);
-      } else {
-        toast(`Uploaded ${done} files, ${failed} failed`);
-      }
-
-      if (currentFolder) currentFolder.Refresh();
-      updateDiskStats();
     });
   }
 
