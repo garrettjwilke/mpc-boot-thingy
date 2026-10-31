@@ -21,10 +21,13 @@ usage() {
 Usage:
   ./setup.sh -h
   ./setup.sh --help
+  ./setup.sh --usb
+  ./setup.sh --usb --tools
   ./setup.sh --SD "/path/to/mounted/SD"
   ./setup.sh --SD "/path/to/mounted/SD" --tools
   ./setup.sh --ssh
   ./setup.sh --ssh --tools
+  ./setup.sh --add /path/to/program [--title "Name"]
   ./setup.sh --reboot
   ./setup.sh --ssh -r
   ./setup.sh --reload
@@ -33,6 +36,12 @@ Usage:
 
 -h, --help
   Show this help and exit.
+
+--usb
+  Install or update mpc-boot-thingy over USB without requiring an SD reader or SSH.
+  Uploads the USB Installer to the MPC. The MPC shows a confirmation prompt
+  on screen: press Yes on the top buttons to install/update and safely migrate
+  any existing autoboot apps into autorun/apps/.
 
 --SD PATH
   Mount point of the card on this computer, not a device node.
@@ -1146,6 +1155,100 @@ add_over_ssh() {
   echo "Updated the app on $media over SSH."
 }
 
+install_over_usb() {
+  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || \
+     [ ! -s "$ROOT/build/loader.so" ] || [ ! -x "$ROOT/build/usb_installer" ]; then
+    make -C "$ROOT"
+  fi
+  if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || \
+     [ ! -s "$ROOT/build/loader.so" ] || [ ! -x "$ROOT/build/usb_installer" ]; then
+    echo "ERROR: build did not produce the boot, web, loader, and usb_installer binaries" >&2
+    exit 1
+  fi
+
+  stage=$(mktemp -d)
+  pkg_dir=$(mktemp -d)
+  trap 'rm -rf "$stage" "$pkg_dir"' EXIT
+
+  echo "Staging mpc-boot-thingy payload..."
+  write_autorun "$stage" quiet
+
+  cp -R "$stage/autorun" "$pkg_dir/autorun"
+  cp "$ROOT/build/usb_installer" "$pkg_dir/usb_installer_testapp"
+  chmod 755 "$pkg_dir/usb_installer_testapp"
+
+  cat <<'EOF' > "$pkg_dir/manifest.yaml"
+testApps:
+  - name: "USB Installer"
+    version: "1.0.0"
+    osVersionID: "scarthgap"
+    products:
+      - "AC50"
+    signedImage: true
+    basePath: ""
+    relativeExePath: "../usb_installer_testapp"
+EOF
+
+  bundle_zip="$pkg_dir/bundle.zip"
+  echo "Creating USB installer package..."
+  python3 - "$pkg_dir" "$bundle_zip" <<'PY'
+import os, sys, zipfile
+
+pkg_dir, out_zip = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+    for root, dirs, files in os.walk(pkg_dir):
+        for f in files:
+            full = os.path.join(root, f)
+            rel = os.path.relpath(full, pkg_dir)
+            if rel == 'bundle.zip':
+                continue
+            zinfo = zipfile.ZipInfo.from_file(full, rel)
+            if f == 'usb_installer_testapp' or rel.endswith('.sh') or '/bin/' in rel:
+                zinfo.external_attr = 0o755 << 16
+            else:
+                zinfo.external_attr = 0o644 << 16
+            with open(full, 'rb') as fp:
+                z.writestr(zinfo, fp.read())
+PY
+
+  target="${MPC_HOST:-}"
+  target="${target#*@}"
+  if [ -z "$target" ] || [ "$target" = "192.168.155.1" ] || [ "$target" = "mpc-sample.local" ]; then
+    if curl -s --connect-timeout 2 "http://mpc-sample.local/testapp" >/dev/null 2>&1; then
+      target="mpc-sample.local"
+    elif curl -s --connect-timeout 2 "http://192.168.155.1/testapp" >/dev/null 2>&1; then
+      target="192.168.155.1"
+    else
+      target="mpc-sample.local"
+    fi
+  fi
+
+  echo "Uploading USB Installer to http://$target/testapp..."
+  http_code=$(curl -s -S -o /dev/null -w "%{http_code}" --connect-timeout 8 -F "file=@$bundle_zip" "http://$target/testapp" || true)
+
+  if [ "$http_code" != "200" ] && [ "$http_code" != "302" ]; then
+    if [ "$target" = "mpc-sample.local" ]; then
+      target="192.168.155.1"
+      echo "Retrying at http://$target/testapp..."
+      http_code=$(curl -s -S -o /dev/null -w "%{http_code}" --connect-timeout 8 -F "file=@$bundle_zip" "http://$target/testapp" || true)
+    fi
+  fi
+
+  if [ "$http_code" != "200" ] && [ "$http_code" != "302" ]; then
+    echo "ERROR: Failed to upload USB Installer to http://$target/testapp (HTTP $http_code)" >&2
+    echo "Make sure the MPC is plugged in via USB and powered on." >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "======================================================="
+  echo " USB Installer launched on the MPC!"
+  echo " Look at your MPC screen:"
+  echo " Press [Yes] on the top buttons to confirm install."
+  echo "======================================================="
+  echo ""
+}
+
 install_over_ssh() {
   if [ ! -x "$ROOT/build/mpc-boot-thingy" ] || [ ! -x "$ROOT/build/mpc-boot-web" ] || [ ! -s "$ROOT/build/loader.so" ]; then
     make -C "$ROOT"
@@ -1241,6 +1344,7 @@ SD=
 ADD=
 TITLE=
 SSH_MODE=
+USB_MODE=
 REBOOT=
 RELOAD=
 TOOLS=
@@ -1249,6 +1353,17 @@ while [ $# -gt 0 ]; do
     -h|--help)
       usage
       exit 0
+      ;;
+    --usb)
+      USB_MODE=1
+      ;;
+    --host)
+      shift
+      if [ $# -lt 1 ] || [ -z "$1" ]; then
+        usage >&2
+        exit 1
+      fi
+      MPC_HOST=$1
       ;;
     --SD)
       shift
@@ -1298,9 +1413,26 @@ if [ -n "$TOOLS" ] && [ -n "$ADD" ]; then
   echo "ERROR: --tools is not used with --add" >&2
   exit 1
 fi
-if [ -n "$TOOLS" ] && [ -z "$SD" ] && [ -z "$SSH_MODE" ]; then
+if [ -n "$TOOLS" ] && [ -z "$SD" ] && [ -z "$SSH_MODE" ] && [ -z "$USB_MODE" ]; then
   echo "ERROR: --tools needs --SD or --ssh" >&2
   exit 1
+fi
+
+if [ -n "$USB_MODE" ]; then
+  if [ -n "$SD" ]; then
+    echo "ERROR: --usb does not take --SD" >&2
+    exit 1
+  fi
+  if [ -n "$SSH_MODE" ]; then
+    echo "ERROR: --usb cannot be used with --ssh" >&2
+    exit 1
+  fi
+  if [ -n "$ADD" ]; then
+    echo "ERROR: --usb is for setting up boot thingy, not --add" >&2
+    exit 1
+  fi
+  install_over_usb
+  exit 0
 fi
 
 if [ -n "$REBOOT" ] && [ -n "$RELOAD" ]; then
