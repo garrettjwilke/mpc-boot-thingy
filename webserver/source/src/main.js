@@ -3,13 +3,12 @@ import { fetchPatches, fetchStatus } from "./api.js";
 import { renderApps } from "./apps.js";
 import { bindBootEdit } from "./bootedit.js";
 import { bindInstall } from "./install.js";
-import { renderDevice, bindReboot } from "./device.js";
+import { bindReboot } from "./device.js";
 import { bindTerminal } from "./terminal.js";
 import { bindTheme } from "./theme.js";
 import { bindFiles } from "./files.js";
 
 const hdrDefault = document.getElementById("hdr-default");
-const sysEl = document.getElementById("sys");
 document.getElementById("hdr-link").textContent = location.host;
 bindTheme();
 
@@ -38,7 +37,6 @@ async function refreshStatus() {
     refresh: refreshStatus,
     onEdit: (app) => editor.edit(app)
   });
-  renderDevice(body);
   return body;
 }
 
@@ -68,6 +66,5 @@ document.querySelectorAll("nav button").forEach((btn) => {
 refreshStatus().catch((e) => {
   hdrDefault.textContent = "Offline";
   hdrDefault.className = "badge warn";
-  sysEl.textContent = e.message;
   toast(e.message);
 });

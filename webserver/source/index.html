@@ -30,7 +30,6 @@
   <nav>
     <button class="active" type="button" data-tab="boot">Boot</button>
     <button type="button" data-tab="files">Files</button>
-    <button type="button" data-tab="device">Device</button>
     <button type="button" data-tab="terminal">Terminal</button>
   </nav>
   <main>
@@ -49,6 +48,11 @@
           zip keeps that package in its own folder.</p>
         <button class="btn" id="install-open" type="button">Install App</button>
       </div>
+      <div class="card">
+        <h3>Reboot MPC</h3>
+        <p class="muted">Clears the boot counter so the updater stays closed, then reboots.</p>
+        <button class="btn" id="reboot" type="button">Reboot MPC</button>
+      </div>
     </section>
     <section id="tab-files" class="tab">
       <div class="card">
@@ -64,23 +68,6 @@
         </div>
 
         <div id="filemanager" class="fe-container"></div>
-      </div>
-    </section>
-    <section id="tab-device" class="tab">
-      <div class="grid">
-        <div class="card">
-          <h3>System</h3>
-          <pre id="sys">Loading…</pre>
-        </div>
-        <div class="card">
-          <h3>Memory</h3>
-          <pre id="mem">Loading…</pre>
-        </div>
-      </div>
-      <div class="card">
-        <h3>Reboot</h3>
-        <p class="muted">Clears the boot counter so the updater stays closed, then reboots.</p>
-        <button class="btn" id="reboot" type="button">Reboot</button>
       </div>
     </section>
     <section id="tab-terminal" class="tab">
