@@ -65,7 +65,7 @@ export async function rebootDevice() {
 
 export async function fetchFiles(path = "") {
   const q = path ? "?path=" + encodeURIComponent(path) : "";
-  return readBody(await fetch("/api/files/list" + q));
+  return readBody(await fetch("/api/files/list" + q, { cache: "no-store" }));
 }
 
 export async function createFolder(path) {
