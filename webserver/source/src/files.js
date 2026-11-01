@@ -18,8 +18,14 @@ export function bindFiles({ toast }) {
   const container = document.getElementById("filemanager");
   const elDisk = document.getElementById("fb-disk");
   const btnZipAll = document.getElementById("fb-btn-zip-all");
+  const showDotfilesInput = document.getElementById("fb-show-dotfiles");
 
   let feInstance = null;
+  let showDotfiles = false;
+
+  function isDotEntry(name) {
+    return typeof name === "string" && name.startsWith(".");
+  }
 
   function triggerRefresh(silent = false) {
     if (feInstance) {
@@ -31,12 +37,19 @@ export function bindFiles({ toast }) {
     }
   }
 
+  function showDisk(data) {
+    if (!elDisk || !data) return;
+    if (data.total_bytes) {
+      elDisk.textContent = `${fmtBytes(data.free_bytes)} free of ${fmtBytes(data.total_bytes)}`;
+    } else {
+      elDisk.textContent = "Internal and SD Card";
+    }
+  }
+
   async function updateDiskStats() {
     try {
       const data = await fetchFiles("");
-      if (elDisk && data.total_bytes) {
-        elDisk.textContent = `${fmtBytes(data.free_bytes)} free of ${fmtBytes(data.total_bytes)}`;
-      }
+      showDisk(data);
     } catch (e) {
       // Ignore initial stats error
     }
@@ -244,7 +257,7 @@ export function bindFiles({ toast }) {
     const options = {
       group: "mpc_boot_data",
       capturebrowser: true,
-      initpath: [["", "/data/UserContent"]],
+      initpath: [["", "Storage"]],
       langmap: {
         "Upload (Ctrl + U)": "Upload files",
         "Upload": "Upload files"
@@ -254,23 +267,31 @@ export function bindFiles({ toast }) {
       },
 
       onrefresh: async function (folder, required) {
+        const rel = getFolderRelPath(folder);
         try {
-          const rel = getFolderRelPath(folder);
           const data = await fetchFiles(rel);
-          if (elDisk && data.total_bytes) {
-            elDisk.textContent = `${fmtBytes(data.free_bytes)} free of ${fmtBytes(data.total_bytes)}`;
-          }
-          const newEntries = (data.entries || []).map((e) => ({
-            name: e.name,
-            id: e.name,
-            type: e.is_dir ? "folder" : "file",
-            size: e.size,
-            hash: e.name + "_" + (e.mtime || 0)
-          }));
+          showDisk(data);
+          const newEntries = (data.entries || [])
+            .filter((e) => showDotfiles || !isDotEntry(e.name))
+            .map((e) => {
+              const id = e.id || e.name;
+              return {
+                name: e.name,
+                id,
+                type: e.is_dir ? "folder" : "file",
+                size: e.size,
+                hash: id + "_" + (e.mtime || 0)
+              };
+            });
           if (this.IsMappedFolder(folder)) {
             folder.SetEntries(newEntries);
+            folder.SetAttributes({ canmodify: rel.length > 0 });
           }
         } catch (err) {
+          if (this.IsMappedFolder(folder)) {
+            folder.SetEntries([]);
+            if (!rel) folder.SetAttributes({ canmodify: false });
+          }
           toast(err.message || "Failed to load directory");
         }
       },
@@ -543,6 +564,13 @@ export function bindFiles({ toast }) {
     });
   }
 
+  if (showDotfilesInput) {
+    showDotfilesInput.addEventListener("change", () => {
+      showDotfiles = showDotfilesInput.checked;
+      triggerRefresh(true);
+    });
+  }
+
   if (btnZipAll) {
     btnZipAll.addEventListener("click", async () => {
       try {
@@ -561,6 +589,9 @@ export function bindFiles({ toast }) {
 
   return {
     refresh: () => {
+      triggerRefresh(true);
+    },
+    show() {
       triggerRefresh(true);
     }
   };

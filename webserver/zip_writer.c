@@ -302,7 +302,8 @@ int zip_stream_export(int client_fd, const char **items, size_t count) {
 
     int rc = 0;
     if (count == 0 || items == NULL) {
-        /* Export the entire data directory */
+        /* Full backup is Internal (/data/UserContent) only, not the SD card.
+           Archive paths stay relative to that directory. */
         rc = zip_add_tree(&zs, root, "", 0);
     } else {
         /* Export selected items */
@@ -312,8 +313,8 @@ int zip_stream_export(int client_fd, const char **items, size_t count) {
             if (file_ops_resolve(items[i], real_path, sizeof real_path, rel_path, sizeof rel_path) != 0) {
                 continue;
             }
-            if (rel_path[0] == '\0') {
-                /* Whole directory requested */
+            if (rel_path[0] == '\0' || strcmp(rel_path, "internal") == 0) {
+                /* Whole Internal volume, paths relative to UserContent. */
                 rc = zip_add_tree(&zs, root, "", 0);
                 break;
             }

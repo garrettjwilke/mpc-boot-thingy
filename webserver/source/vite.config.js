@@ -84,15 +84,26 @@ function mockState() {
     sd_free_bytes: 8 * 1024 * 1024 * 1024,
     memory: "               total        used        free\nMem:             512         384         128\n",
     files: [
-      { path: "Drums", is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) - 3600 },
-      { path: "Drums/Kick.wav", is_dir: false, size: 176400, mtime: Math.floor(Date.now() / 1000) - 1800 },
-      { path: "Drums/Snare.wav", is_dir: false, size: 128000, mtime: Math.floor(Date.now() / 1000) - 1200 },
-      { path: "Synths", is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) - 7200 },
-      { path: "Synths/Lead.wav", is_dir: false, size: 352800, mtime: Math.floor(Date.now() / 1000) - 2400 },
-      { path: "Project-01.mpc", is_dir: false, size: 84200, mtime: Math.floor(Date.now() / 1000) - 600 },
-      { path: "README.txt", is_dir: false, size: 256, mtime: Math.floor(Date.now() / 1000) - 300 },
+      { path: "internal/Drums", is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) - 3600 },
+      { path: "internal/Drums/Kick.wav", is_dir: false, size: 176400, mtime: Math.floor(Date.now() / 1000) - 1800 },
+      { path: "internal/Drums/Snare.wav", is_dir: false, size: 128000, mtime: Math.floor(Date.now() / 1000) - 1200 },
+      { path: "internal/Synths", is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) - 7200 },
+      { path: "internal/Synths/Lead.wav", is_dir: false, size: 352800, mtime: Math.floor(Date.now() / 1000) - 2400 },
+      { path: "internal/Project-01.mpc", is_dir: false, size: 84200, mtime: Math.floor(Date.now() / 1000) - 600 },
+      { path: "internal/README.txt", is_dir: false, size: 256, mtime: Math.floor(Date.now() / 1000) - 300 },
+      { path: "sd/Export", is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) - 4000 },
+      { path: "sd/Export/Take.wav", is_dir: false, size: 441000, mtime: Math.floor(Date.now() / 1000) - 900 },
+      { path: "sd/notes.txt", is_dir: false, size: 64, mtime: Math.floor(Date.now() / 1000) - 100 },
     ],
   };
+}
+
+function inVolume(p) {
+  return p === "internal" || p === "sd" || p.startsWith("internal/") || p.startsWith("sd/");
+}
+
+function isVolumeRoot(p) {
+  return !p || p === "internal" || p === "sd";
 }
 
 async function handleMock(req, res, url, state) {
@@ -234,6 +245,23 @@ async function handleMock(req, res, url, state) {
   }
   if (req.method === "GET" && url.pathname === "/api/files/list") {
     const reqPath = (url.searchParams.get("path") || "").replace(/^\/+|\/+$/g, "");
+    if (!reqPath) {
+      sendJson(res, 200, {
+        path: "",
+        parent: "",
+        free_bytes: 0,
+        total_bytes: 0,
+        entries: [
+          { name: "Internal", id: "internal", is_dir: true, size: 0, mtime: 0 },
+          { name: "SD Card", id: "sd", is_dir: true, size: 0, mtime: 0 },
+        ],
+      });
+      return;
+    }
+    if (!inVolume(reqPath)) {
+      sendJson(res, 404, { error: "directory not found or not in Internal or the SD card" });
+      return;
+    }
     const parent = reqPath.includes("/") ? reqPath.slice(0, reqPath.lastIndexOf("/")) : "";
     const prefix = reqPath ? reqPath + "/" : "";
     const entries = [];
@@ -266,7 +294,7 @@ async function handleMock(req, res, url, state) {
     const raw = await readRaw(req);
     const body = JSON.parse(raw.toString("utf8") || "{}");
     const p = (body.path || "").replace(/^\/+|\/+$/g, "");
-    if (!p) { sendJson(res, 400, { error: "bad path" }); return; }
+    if (!inVolume(p) || isVolumeRoot(p)) { sendJson(res, 400, { error: "bad path" }); return; }
     state.files.push({ path: p, is_dir: true, size: 0, mtime: Math.floor(Date.now() / 1000) });
     sendJson(res, 200, { ok: true });
     return;
@@ -276,6 +304,10 @@ async function handleMock(req, res, url, state) {
     const body = JSON.parse(raw.toString("utf8") || "{}");
     const oldP = (body.path || "").replace(/^\/+|\/+$/g, "");
     const newName = (body.name || "").trim();
+    if (!inVolume(oldP) || isVolumeRoot(oldP) || !newName || newName.includes("/")) {
+      sendJson(res, 400, { error: "bad path" });
+      return;
+    }
     const parentDir = oldP.includes("/") ? oldP.slice(0, oldP.lastIndexOf("/")) : "";
     const newP = parentDir ? parentDir + "/" + newName : newName;
     for (const f of state.files) {
@@ -290,6 +322,10 @@ async function handleMock(req, res, url, state) {
     const body = JSON.parse(raw.toString("utf8") || "{}");
     const items = body.items || [];
     const dest = (body.dest || "").replace(/^\/+|\/+$/g, "");
+    if (!inVolume(dest) || items.some((item) => !inVolume(item) || isVolumeRoot(item))) {
+      sendJson(res, 400, { error: "bad path" });
+      return;
+    }
     for (const item of items) {
       const base = item.includes("/") ? item.slice(item.lastIndexOf("/") + 1) : item;
       const target = dest ? dest + "/" + base : base;
@@ -306,6 +342,10 @@ async function handleMock(req, res, url, state) {
     const body = JSON.parse(raw.toString("utf8") || "{}");
     const items = body.items || [];
     const dest = (body.dest || "").replace(/^\/+|\/+$/g, "");
+    if (!inVolume(dest) || items.some((item) => !inVolume(item) || isVolumeRoot(item))) {
+      sendJson(res, 400, { error: "bad path" });
+      return;
+    }
     const toAdd = [];
     for (const item of items) {
       const base = item.includes("/") ? item.slice(item.lastIndexOf("/") + 1) : item;
@@ -323,6 +363,10 @@ async function handleMock(req, res, url, state) {
     const raw = await readRaw(req);
     const body = JSON.parse(raw.toString("utf8") || "{}");
     const items = body.items || [];
+    if (items.length === 0 || items.some((item) => !inVolume(item) || isVolumeRoot(item))) {
+      sendJson(res, 400, { error: "bad path" });
+      return;
+    }
     state.files = state.files.filter((f) => !items.some((it) => f.path === it || f.path.startsWith(it + "/")));
     sendJson(res, 200, { ok: true });
     return;
@@ -331,7 +375,11 @@ async function handleMock(req, res, url, state) {
     const raw = await readRaw(req);
     const dir = (url.searchParams.get("dir") || "").replace(/^\/+|\/+$/g, "");
     const name = url.searchParams.get("name") || "uploaded.bin";
-    const target = dir ? dir + "/" + name : name;
+    if (!inVolume(dir)) {
+      sendJson(res, 400, { error: "cannot upload to the storage root" });
+      return;
+    }
+    const target = dir + "/" + name;
     const parts = target.split("/");
     for (let i = 1; i < parts.length; i++) {
       const pdir = parts.slice(0, i).join("/");

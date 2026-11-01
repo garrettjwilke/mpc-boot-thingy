@@ -12,14 +12,23 @@ extern "C" {
    MPC_DATA_DIR env, or fallback. Returns 0 on success. */
 int file_ops_init(const char *data_root);
 
-/* Get the current resolved root directory path. */
+/* Get the Internal volume path (/data/UserContent or the configured root). */
 const char *file_ops_get_root(void);
 
-/* Check and resolve a relative path inside the sandboxed data root.
-   Returns 0 on success, -1 on invalid path or sandbox escape.
-   out_resolved: resolved realpath on disk
-   out_rel: normalized clean path relative to data root (e.g. "samples/kick.wav") */
+/* Pin the SD card volume for tests. NULL or "" clears the pin and uses
+   auto-detection. Returns 0 on success. */
+int file_ops_set_sd_root(const char *sd_root);
+
+/* Check and resolve a path under Internal ("internal/...") or the SD card ("sd/...").
+   The empty path is the virtual storage root and does not resolve to a directory.
+   Returns 0 on success, -1 on invalid path, missing SD card, or sandbox escape.
+   out_resolved: path on disk
+   out_rel: normalized path including the volume id (e.g. "internal/samples/kick.wav") */
 int file_ops_resolve(const char *req_path, char *out_resolved, size_t res_sz, char *out_rel, size_t rel_sz);
+
+/* "SD card not mounted" when req_path is on the SD volume and no card is present.
+   NULL otherwise. */
+const char *file_ops_access_error(const char *req_path);
 
 /* Produce JSON string listing entries in rel_path.
    Caller must free() the returned pointer. Returns NULL on error. */

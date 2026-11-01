@@ -2082,7 +2082,9 @@ static void handle_files_list(int fd, const char *query) {
     query_param(query, "path", path_param, sizeof path_param);
     char *json = file_ops_list_json(path_param);
     if (!json) {
-        send_err(fd, 404, "Not Found", "directory not found or outside /data");
+        const char *msg = file_ops_access_error(path_param);
+        if (!msg) msg = "directory not found or not in Internal or the SD card";
+        send_err(fd, 404, "Not Found", msg);
         return;
     }
     send_json(fd, 200, "OK", json);
@@ -2229,15 +2231,16 @@ static void handle_files_upload(int fd, struct io *io, int has_len, size_t conte
         send_err(fd, 400, "Bad Request", "missing file name");
         return;
     }
-    char target_rel[PATH_MAX];
-    if (dir_param[0]) {
-        snprintf(target_rel, sizeof target_rel, "%s/%s", dir_param, name_param);
-    } else {
-        snprintf(target_rel, sizeof target_rel, "%s", name_param);
+    if (!dir_param[0]) {
+        send_err(fd, 400, "Bad Request", "cannot upload to the storage root");
+        return;
     }
+    char target_rel[PATH_MAX];
+    snprintf(target_rel, sizeof target_rel, "%s/%s", dir_param, name_param);
 
-    char target_real[PATH_MAX];
-    if (file_ops_resolve(target_rel, target_real, sizeof target_real, NULL, 0) != 0) {
+    char target_real[PATH_MAX], target_norm[PATH_MAX];
+    if (file_ops_resolve(target_rel, target_real, sizeof target_real, target_norm, sizeof target_norm) != 0 ||
+        !strchr(target_norm, '/')) {
         send_err(fd, 400, "Bad Request", "invalid destination path");
         return;
     }
