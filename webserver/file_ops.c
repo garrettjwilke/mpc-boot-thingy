@@ -19,6 +19,8 @@
 #include <unistd.h>
 
 static char g_data_root[PATH_MAX] = {0};
+static char g_sd_root[PATH_MAX] = {0};
+static int g_sd_forced = 0;
 
 int file_ops_ensure_dir(const char *path) {
     struct stat st;
@@ -73,6 +75,100 @@ const char *file_ops_get_root(void) {
         if (file_ops_init(NULL) != 0) return "/data/UserContent";
     }
     return g_data_root;
+}
+
+/* Same mount lookup as find_sd_card in usb_installer.c. */
+static int detect_sd_card(char *out, size_t n) {
+    FILE *f = fopen("/proc/mounts", "r");
+    if (f) {
+        char line[1024];
+        while (fgets(line, sizeof line, f)) {
+            char dev[256], mnt[512], type[64];
+            if (sscanf(line, "%255s %511s %63s", dev, mnt, type) == 3) {
+                if (strncmp(dev, "/dev/mmcblk1", 12) == 0) {
+                    snprintf(out, n, "%s", mnt);
+                    fclose(f);
+                    return 0;
+                }
+            }
+        }
+        fclose(f);
+    }
+
+    DIR *d = opendir("/media");
+    if (d) {
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            if (de->d_name[0] == '.') continue;
+            if (strncmp(de->d_name, "az01-internal", 13) == 0) continue;
+            if (strchr(de->d_name, '-') && strlen(de->d_name) > 30) continue;
+            char cand[512];
+            struct stat st;
+            if (snprintf(cand, sizeof cand, "/media/%s", de->d_name) >= (int)sizeof cand) continue;
+            if (stat(cand, &st) == 0 && S_ISDIR(st.st_mode)) {
+                snprintf(out, n, "%s", cand);
+                closedir(d);
+                return 0;
+            }
+        }
+        closedir(d);
+    }
+    return -1;
+}
+
+static int refresh_sd_root(void) {
+    if (g_sd_forced) return g_sd_root[0] ? 0 : -1;
+
+    char found[PATH_MAX];
+    if (detect_sd_card(found, sizeof found) != 0) {
+        g_sd_root[0] = '\0';
+        return -1;
+    }
+    if (!realpath(found, g_sd_root)) {
+        g_sd_root[0] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
+int file_ops_set_sd_root(const char *sd_root) {
+    if (!sd_root || !sd_root[0]) {
+        g_sd_forced = 0;
+        g_sd_root[0] = '\0';
+        return 0;
+    }
+    if (file_ops_ensure_dir(sd_root) != 0) return -1;
+    char real[PATH_MAX];
+    if (!realpath(sd_root, real)) return -1;
+    snprintf(g_sd_root, sizeof g_sd_root, "%s", real);
+    g_sd_forced = 1;
+    return 0;
+}
+
+static int path_within(const char *real, const char *root) {
+    size_t root_len = strlen(root);
+    if (strncmp(real, root, root_len) != 0) return 0;
+    return real[root_len] == '\0' || real[root_len] == '/';
+}
+
+static int is_volume_id(const char *rel) {
+    return rel && (strcmp(rel, "internal") == 0 || strcmp(rel, "sd") == 0);
+}
+
+/* Splits "internal/..." or "sd/..." into the volume id and the path under it. */
+static int split_volume(const char *clean_rel, const char **vol_id, const char **rest) {
+    if (!clean_rel || !clean_rel[0]) return -1;
+    if (strncmp(clean_rel, "internal", 8) == 0 && (clean_rel[8] == '\0' || clean_rel[8] == '/')) {
+        *vol_id = "internal";
+        *rest = clean_rel[8] == '/' ? clean_rel + 9 : "";
+        return 0;
+    }
+    if (strncmp(clean_rel, "sd", 2) == 0 && (clean_rel[2] == '\0' || clean_rel[2] == '/')) {
+        *vol_id = "sd";
+        *rest = clean_rel[2] == '/' ? clean_rel + 3 : "";
+        return 0;
+    }
+    return -1;
 }
 
 static int is_safe_component(const char *s) {
@@ -130,36 +226,37 @@ static int normalize_rel(const char *input, char *out, size_t out_sz) {
 }
 
 int file_ops_resolve(const char *req_path, char *out_resolved, size_t res_sz, char *out_rel, size_t rel_sz) {
-    const char *root = file_ops_get_root();
-    size_t root_len = strlen(root);
-
     char clean_rel[PATH_MAX];
     if (normalize_rel(req_path, clean_rel, sizeof clean_rel) != 0) {
         return -1;
     }
+    /* Empty path is the virtual storage root, not a directory on disk. */
+    if (clean_rel[0] == '\0') return -1;
+
+    const char *vol_id = NULL;
+    const char *rest = NULL;
+    if (split_volume(clean_rel, &vol_id, &rest) != 0) return -1;
+
+    const char *root;
+    if (strcmp(vol_id, "internal") == 0) {
+        root = file_ops_get_root();
+    } else {
+        if (refresh_sd_root() != 0) return -1;
+        root = g_sd_root;
+    }
 
     char candidate[PATH_MAX];
-    if (clean_rel[0] == '\0') {
+    if (rest[0] == '\0') {
         snprintf(candidate, sizeof candidate, "%s", root);
-    } else {
-        if (snprintf(candidate, sizeof candidate, "%s/%s", root, clean_rel) >= (int)sizeof candidate) {
-            return -1;
-        }
+    } else if (snprintf(candidate, sizeof candidate, "%s/%s", root, rest) >= (int)sizeof candidate) {
+        return -1;
     }
 
     struct stat st;
     if (lstat(candidate, &st) == 0) {
         char real[PATH_MAX];
-        if (!realpath(candidate, real)) {
-            return -1;
-        }
-        /* Verify realpath is inside root */
-        if (strncmp(real, root, root_len) != 0) {
-            return -1;
-        }
-        if (real[root_len] != '\0' && real[root_len] != '/') {
-            return -1;
-        }
+        if (!realpath(candidate, real)) return -1;
+        if (!path_within(real, root)) return -1;
         if (out_resolved) {
             if (snprintf(out_resolved, res_sz, "%s", real) >= (int)res_sz) return -1;
         }
@@ -179,15 +276,8 @@ int file_ops_resolve(const char *req_path, char *out_resolved, size_t res_sz, ch
         }
 
         char real_ancestor[PATH_MAX];
-        if (!realpath(ancestor, real_ancestor)) {
-            return -1;
-        }
-        if (strncmp(real_ancestor, root, root_len) != 0) {
-            return -1;
-        }
-        if (real_ancestor[root_len] != '\0' && real_ancestor[root_len] != '/') {
-            return -1;
-        }
+        if (!realpath(ancestor, real_ancestor)) return -1;
+        if (!path_within(real_ancestor, root)) return -1;
         if (out_resolved) {
             if (snprintf(out_resolved, res_sz, "%s", candidate) >= (int)res_sz) return -1;
         }
@@ -197,6 +287,15 @@ int file_ops_resolve(const char *req_path, char *out_resolved, size_t res_sz, ch
         if (snprintf(out_rel, rel_sz, "%s", clean_rel) >= (int)rel_sz) return -1;
     }
     return 0;
+}
+
+const char *file_ops_access_error(const char *req_path) {
+    char clean[PATH_MAX];
+    if (normalize_rel(req_path ? req_path : "", clean, sizeof clean) != 0) return NULL;
+    if (strcmp(clean, "sd") == 0 || strncmp(clean, "sd/", 3) == 0) {
+        if (refresh_sd_root() != 0) return "SD card not mounted";
+    }
+    return NULL;
 }
 
 static void json_escape(const char *in, char *out, size_t out_sz) {
@@ -225,7 +324,23 @@ static void json_escape(const char *in, char *out, size_t out_sz) {
     out[j] = '\0';
 }
 
+static char *list_virtual_root_json(void) {
+    const char *json =
+        "{\"path\":\"\",\"parent\":\"\",\"free_bytes\":0,\"total_bytes\":0,\"entries\":["
+        "{\"name\":\"Internal\",\"id\":\"internal\",\"is_dir\":true,\"size\":0,\"mtime\":0},"
+        "{\"name\":\"SD Card\",\"id\":\"sd\",\"is_dir\":true,\"size\":0,\"mtime\":0}"
+        "]}\n";
+    return strdup(json);
+}
+
 char *file_ops_list_json(const char *req_path) {
+    refresh_sd_root();
+    char clean_in[PATH_MAX];
+    if (normalize_rel(req_path ? req_path : "", clean_in, sizeof clean_in) != 0) {
+        return NULL;
+    }
+    if (clean_in[0] == '\0') return list_virtual_root_json();
+
     char real_path[PATH_MAX];
     char clean_rel[PATH_MAX];
     if (file_ops_resolve(req_path, real_path, sizeof real_path, clean_rel, sizeof clean_rel) != 0) {
@@ -243,7 +358,7 @@ char *file_ops_list_json(const char *req_path) {
     unsigned long long free_bytes = 0;
     unsigned long long total_bytes = 0;
     struct statvfs vfs;
-    if (statvfs(file_ops_get_root(), &vfs) == 0) {
+    if (statvfs(real_path, &vfs) == 0) {
         free_bytes = (unsigned long long)vfs.f_bavail * vfs.f_frsize;
         total_bytes = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
     }
@@ -330,10 +445,11 @@ char *file_ops_list_json(const char *req_path) {
 }
 
 int file_ops_mkdir(const char *req_path) {
-    char real_path[PATH_MAX];
-    if (file_ops_resolve(req_path, real_path, sizeof real_path, NULL, 0) != 0) {
+    char real_path[PATH_MAX], rel[PATH_MAX];
+    if (file_ops_resolve(req_path, real_path, sizeof real_path, rel, sizeof rel) != 0) {
         return -1;
     }
+    if (is_volume_id(rel)) return -1;
     return mkdir(real_path, 0755);
 }
 
@@ -344,7 +460,7 @@ int file_ops_rename(const char *old_path, const char *new_name) {
     if (file_ops_resolve(old_path, src_real, sizeof src_real, src_rel, sizeof src_rel) != 0) {
         return -1;
     }
-    if (src_rel[0] == '\0') return -1; // Cannot rename root
+    if (src_rel[0] == '\0' || is_volume_id(src_rel)) return -1;
 
     char dst_rel[PATH_MAX];
     char *last = strrchr(src_rel, '/');
@@ -470,7 +586,7 @@ int file_ops_copy(const char **items, size_t count, const char *dest_dir) {
         if (file_ops_resolve(items[i], src_real, sizeof src_real, src_rel, sizeof src_rel) != 0) {
             return -1;
         }
-        if (src_rel[0] == '\0') continue; // Skip root
+        if (src_rel[0] == '\0' || is_volume_id(src_rel)) return -1;
 
         const char *base = strrchr(src_rel, '/');
         base = base ? base + 1 : src_rel;
@@ -510,7 +626,7 @@ int file_ops_move(const char **items, size_t count, const char *dest_dir) {
         if (file_ops_resolve(items[i], src_real, sizeof src_real, src_rel, sizeof src_rel) != 0) {
             return -1;
         }
-        if (src_rel[0] == '\0') continue;
+        if (src_rel[0] == '\0' || is_volume_id(src_rel)) return -1;
 
         const char *base = strrchr(src_rel, '/');
         base = base ? base + 1 : src_rel;
@@ -577,8 +693,8 @@ int file_ops_delete(const char **items, size_t count) {
         if (file_ops_resolve(items[i], real_path, sizeof real_path, rel_path, sizeof rel_path) != 0) {
             return -1;
         }
-        if (rel_path[0] == '\0') {
-            /* Forbid deleting root directory */
+        if (rel_path[0] == '\0' || is_volume_id(rel_path)) {
+            /* Virtual root and the two volume folders are not deletable. */
             return -1;
         }
         if (rm_tree_recursive(real_path, 0) != 0) {

@@ -267,6 +267,15 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
 }
 .file-path-area { display: flex; flex-direction: column; gap: 4px; }
 .file-path-area h3 { margin: 0; }
+.show-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+.show-hidden input { margin: 0; }
 
 .fe-container {
   height: min(72vh, 680px);

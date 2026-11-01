@@ -1135,30 +1135,56 @@ int main(void) {
   assert(format_sd_card(dir, "MPC-Sample", dummy_progress, last_status) != 0);
   format_sd_set_mock(0, 0);
 
-  /* Web File Browser / Data Sandboxing & Operations Test */
+  /* Web File Browser: virtual Storage root over Internal and the SD card. */
   {
     char test_data[512];
+    char test_sd[512];
     snprintf(test_data, sizeof test_data, "%s/data_test/UserContent", dir);
+    snprintf(test_sd, sizeof test_sd, "%s/data_test/sdcard", dir);
     assert(file_ops_init(test_data) == 0);
+    assert(file_ops_set_sd_root(test_sd) == 0);
 
-    /* 1. Sandboxing and Path Resolution */
+    /* 1. Sandboxing and path resolution */
     char resolved[1024], rel[1024];
-    assert(file_ops_resolve("", resolved, sizeof resolved, rel, sizeof rel) == 0);
-    assert(rel[0] == '\0');
-    assert(file_ops_resolve("/", resolved, sizeof resolved, rel, sizeof rel) == 0);
-    assert(rel[0] == '\0');
-    assert(file_ops_resolve("/drums/kick.wav", resolved, sizeof resolved, rel, sizeof rel) == 0);
-    assert(strcmp(rel, "drums/kick.wav") == 0);
+    assert(file_ops_resolve("", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("/", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("internal", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(strcmp(rel, "internal") == 0);
+    assert(file_ops_resolve("internal/drums/kick.wav", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(strcmp(rel, "internal/drums/kick.wav") == 0);
+    assert(file_ops_resolve("sd", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(strcmp(rel, "sd") == 0);
 
-    /* Security check: traversal attempts outside /data must fail */
+    /* Traversal outside either volume must fail */
     assert(file_ops_resolve("../", resolved, sizeof resolved, rel, sizeof rel) != 0);
     assert(file_ops_resolve("../etc/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("drums/../../etc/shadow", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("internal/../../etc/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("internal/drums/../../etc/shadow", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("sd/../etc/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
     assert(file_ops_resolve("drums/./../..", resolved, sizeof resolved, rel, sizeof rel) != 0);
 
-    /* 2. Mkdir */
-    assert(file_ops_mkdir("samples") == 0);
-    assert(file_ops_mkdir("samples/drums") == 0);
+    char linkpath[1024];
+    snprintf(linkpath, sizeof linkpath, "%s/escape", test_data);
+    assert(symlink("/etc", linkpath) == 0);
+    assert(file_ops_resolve("internal/escape", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("internal/escape/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
+
+    char *root_json = file_ops_list_json("");
+    assert(root_json != NULL);
+    assert(strstr(root_json, "\"id\":\"internal\"") != NULL);
+    assert(strstr(root_json, "\"name\":\"Internal\"") != NULL);
+    assert(strstr(root_json, "\"id\":\"sd\"") != NULL);
+    assert(strstr(root_json, "\"name\":\"SD Card\"") != NULL);
+    assert(strstr(root_json, "\"total_bytes\":0") != NULL);
+    free(root_json);
+
+    /* 2. Volume roots cannot be created; files live under a volume */
+    assert(file_ops_mkdir("") != 0);
+    assert(file_ops_mkdir("internal") != 0);
+    assert(file_ops_mkdir("sd") != 0);
+    assert(file_ops_mkdir("samples") != 0);
+    assert(file_ops_mkdir("internal/samples") == 0);
+    assert(file_ops_mkdir("internal/samples/drums") == 0);
 
     /* 3. Create sample files */
     char fpath1[1024], fpath2[1024];
@@ -1167,45 +1193,53 @@ int main(void) {
     snprintf(fpath2, sizeof fpath2, "%s/samples/note.txt", test_data);
     write_file(fpath2, "Sample note");
 
-    /* 4. List Directory JSON */
-    char *json = file_ops_list_json("samples");
+    /* 4. List directory JSON */
+    char *json = file_ops_list_json("internal/samples");
     assert(json != NULL);
     assert(strstr(json, "\"name\":\"drums\"") != NULL);
     assert(strstr(json, "\"is_dir\":true") != NULL);
     assert(strstr(json, "\"name\":\"note.txt\"") != NULL);
     assert(strstr(json, "\"is_dir\":false") != NULL);
+    assert(strstr(json, "\"total_bytes\":0") == NULL);
     free(json);
 
     /* 5. Rename */
-    assert(file_ops_rename("samples/note.txt", "readme.txt") == 0);
+    assert(file_ops_rename("internal", "nope") != 0);
+    assert(file_ops_rename("sd", "nope") != 0);
+    assert(file_ops_rename("internal/samples/note.txt", "readme.txt") == 0);
     snprintf(fpath2, sizeof fpath2, "%s/samples/readme.txt", test_data);
     assert(access(fpath2, F_OK) == 0);
 
-    /* 6. Recursive Copy */
-    const char *copy_items[] = {"samples/drums"};
-    assert(file_ops_copy(copy_items, 1, "") == 0);
+    /* 6. Recursive copy, including onto the SD card root */
+    const char *copy_items[] = {"internal/samples/drums"};
+    assert(file_ops_copy(copy_items, 1, "") != 0);
+    assert(file_ops_copy(copy_items, 1, "internal") == 0);
     char fcopy[1024];
     snprintf(fcopy, sizeof fcopy, "%s/drums/snare.wav", test_data);
     assert(access(fcopy, F_OK) == 0);
+    assert(file_ops_copy(copy_items, 1, "sd") == 0);
+    char sdcopy[1024];
+    snprintf(sdcopy, sizeof sdcopy, "%s/drums/snare.wav", test_sd);
+    assert(access(sdcopy, F_OK) == 0);
 
     /* 7. Move */
-    const char *move_items[] = {"drums"};
-    assert(file_ops_mkdir("backup") == 0);
-    assert(file_ops_move(move_items, 1, "backup") == 0);
+    const char *move_items[] = {"internal/drums"};
+    assert(file_ops_mkdir("internal/backup") == 0);
+    assert(file_ops_move(move_items, 1, "") != 0);
+    assert(file_ops_move(move_items, 1, "internal/backup") == 0);
     char fmove[1024];
     snprintf(fmove, sizeof fmove, "%s/backup/drums/snare.wav", test_data);
     assert(access(fmove, F_OK) == 0);
-    assert(access(fcopy, F_OK) != 0); // Original moved
+    assert(access(fcopy, F_OK) != 0);
 
-    /* 8. ZIP Export Test */
+    /* 8. ZIP export of Internal only. Archive paths stay relative to UserContent. */
     char zip_file[1024];
     snprintf(zip_file, sizeof zip_file, "%s/export.zip", dir);
     int zfd = open(zip_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     assert(zfd >= 0);
-    assert(zip_stream_export(zfd, NULL, 0) == 0); // Export entire /data
+    assert(zip_stream_export(zfd, NULL, 0) == 0);
     close(zfd);
 
-    /* Verify ZIP with Python zipfile */
     char pycmd[2048];
     snprintf(pycmd, sizeof pycmd,
              "python3 -c '\n"
@@ -1214,6 +1248,7 @@ int main(void) {
              "names = zf.namelist()\n"
              "assert any(\"samples/readme.txt\" in n for n in names), f\"missing readme: {names}\"\n"
              "assert any(\"backup/drums/snare.wav\" in n for n in names), f\"missing snare: {names}\"\n"
+             "assert not any(n.startswith(\"sd/\") or \"/sd/\" in n for n in names), f\"sd leaked: {names}\"\n"
              "data = zf.read(\"samples/readme.txt\").decode(\"utf-8\")\n"
              "assert data == \"Sample note\", f\"bad content: {data}\"\n"
              "assert zf.testzip() is None, \"zip CRC test failed\"\n"
@@ -1222,13 +1257,28 @@ int main(void) {
              dir);
     assert(system(pycmd) == 0);
 
-    /* 9. Delete & Protect Root */
+    /* 9. Delete protects the virtual root and both volumes */
     const char *root_item[] = {""};
-    assert(file_ops_delete(root_item, 1) != 0); // Root cannot be deleted!
+    assert(file_ops_delete(root_item, 1) != 0);
+    const char *internal_item[] = {"internal"};
+    assert(file_ops_delete(internal_item, 1) != 0);
+    const char *sd_item[] = {"sd"};
+    assert(file_ops_delete(sd_item, 1) != 0);
 
-    const char *del_items[] = {"backup", "samples"};
+    const char *del_items[] = {"internal/backup", "internal/samples"};
     assert(file_ops_delete(del_items, 2) == 0);
     assert(access(fmove, F_OK) != 0);
+
+    /* Card removed: the SD folder is still listed, and opening it fails. */
+    assert(file_ops_set_sd_root(NULL) == 0);
+    assert(file_ops_list_json("sd") == NULL);
+    const char *missing = file_ops_access_error("sd");
+    assert(missing != NULL);
+    assert(strcmp(missing, "SD card not mounted") == 0);
+    char *still = file_ops_list_json("");
+    assert(still != NULL);
+    assert(strstr(still, "\"id\":\"sd\"") != NULL);
+    free(still);
   }
 
   puts("selftest ok");
