@@ -337,6 +337,28 @@ async function handleMock(req, res, url, state) {
     sendJson(res, 200, { ok: true });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/api/files/check") {
+    const raw = await readRaw(req);
+    const body = JSON.parse(raw.toString("utf8") || "{}");
+    const items = body.items || [];
+    const dest = (body.dest || "").replace(/^\/+|\/+$/g, "");
+    if (!inVolume(dest) || items.some((item) => !inVolume(item) || isVolumeRoot(item))) {
+      sendJson(res, 400, { error: "bad path" });
+      return;
+    }
+    let reqBytes = 0;
+    for (const item of items) {
+      for (const f of state.files) {
+        if (f.path === item || f.path.startsWith(item + "/")) {
+          reqBytes += f.size || 0;
+        }
+      }
+    }
+    const freeBytes = dest.startsWith("internal") ? 1024 * 1024 * 1024 : state.sd_free_bytes;
+    const fits = reqBytes <= freeBytes;
+    sendJson(res, 200, { ok: true, required_bytes: reqBytes, free_bytes: freeBytes, fits });
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/api/files/copy") {
     const raw = await readRaw(req);
     const body = JSON.parse(raw.toString("utf8") || "{}");

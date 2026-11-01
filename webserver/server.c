@@ -30,6 +30,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
@@ -2141,6 +2142,105 @@ static void handle_files_rename(int fd, struct io *io, int has_len, size_t conte
     send_json(fd, 200, "OK", "{\"ok\":true}\n");
 }
 
+struct stream_ctx {
+    int fd;
+    long long last_send_ms;
+};
+
+static long long current_time_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+static int client_cancelled(int fd) {
+    if (fd < 0) return 0;
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN | POLLHUP | POLLERR;
+    pfd.revents = 0;
+    int r = poll(&pfd, 1, 0);
+    if (r > 0) {
+        if (pfd.revents & (POLLHUP | POLLERR)) return 1;
+        char peek;
+        ssize_t n = recv(fd, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) return 1;
+    }
+    return 0;
+}
+
+static int copy_progress_reporter(void *user, const char *cur_name,
+                                  unsigned long long bytes_done, unsigned long long total_bytes,
+                                  size_t files_done, size_t total_files) {
+    struct stream_ctx *ctx = (struct stream_ctx *)user;
+    if (!ctx) return 0;
+    if (client_cancelled(ctx->fd)) return -1;
+
+    long long now = current_time_ms();
+    if (now - ctx->last_send_ms < 60 && bytes_done < total_bytes) return 0;
+    ctx->last_send_ms = now;
+
+    char esc_name[512];
+    json_escape(cur_name ? cur_name : "", esc_name, sizeof esc_name);
+
+    char line[1024];
+    int n = snprintf(line, sizeof line,
+                     "{\"status\":\"progress\",\"current\":\"%s\",\"copied_bytes\":%llu,\"total_bytes\":%llu,\"files_done\":%zu,\"total_files\":%zu}\n",
+                     esc_name, bytes_done, total_bytes, files_done, total_files);
+    if (n > 0) {
+        if (write_full(ctx->fd, line, (size_t)n) != 0) return -1;
+    }
+    return 0;
+}
+
+static void handle_files_check(int fd, struct io *io, int has_len, size_t content_len) {
+    char *raw = NULL;
+    if (!has_len || content_len == 0 || content_len > 1024 * 1024) {
+        send_err(fd, 400, "Bad Request", "invalid request body");
+        return;
+    }
+    raw = malloc(content_len + 1);
+    if (!raw) {
+        send_err(fd, 500, "Internal Server Error", "out of memory");
+        return;
+    }
+    if (io_read(io, raw, content_len) != 0) {
+        free(raw);
+        send_err(fd, 400, "Bad Request", "error reading request");
+        return;
+    }
+    raw[content_len] = 0;
+
+    char dest_buf[PATH_MAX];
+    const char *dest_at = json_key(raw, "dest");
+    if (!dest_at || json_string(&dest_at, dest_buf, sizeof dest_buf) != 0) {
+        dest_buf[0] = 0;
+    }
+
+    static char items[FILE_OPS_MAX_ITEMS][PATH_MAX];
+    static const char *ptrs[FILE_OPS_MAX_ITEMS];
+    int count = json_string_array(raw, "items", items, ptrs, FILE_OPS_MAX_ITEMS);
+    free(raw);
+
+    if (count <= 0) {
+        send_err(fd, 400, "Bad Request", "items array is empty or invalid");
+        return;
+    }
+
+    unsigned long long req_bytes = 0, free_bytes = 0;
+    int fits = 0;
+    if (file_ops_check_space(ptrs, (size_t)count, dest_buf, &req_bytes, &free_bytes, &fits) != 0) {
+        send_err(fd, 400, "Bad Request", "cannot check space on target");
+        return;
+    }
+
+    char resp[256];
+    snprintf(resp, sizeof resp,
+             "{\"ok\":true,\"required_bytes\":%llu,\"free_bytes\":%llu,\"fits\":%s}\n",
+             req_bytes, free_bytes, fits ? "true" : "false");
+    send_json(fd, 200, "OK", resp);
+}
+
 static void handle_files_batch_op(int fd, struct io *io, int has_len, size_t content_len, int is_copy) {
     char *raw = NULL;
     if (!has_len || content_len == 0 || content_len > 1024 * 1024) {
@@ -2175,10 +2275,42 @@ static void handle_files_batch_op(int fd, struct io *io, int has_len, size_t con
         return;
     }
 
-    int rc = is_copy ? file_ops_copy(ptrs, (size_t)count, dest_buf)
-                     : file_ops_move(ptrs, (size_t)count, dest_buf);
+    if (is_copy) {
+        unsigned long long req_bytes = 0, free_bytes = 0;
+        int fits = 0;
+        if (file_ops_check_space(ptrs, (size_t)count, dest_buf, &req_bytes, &free_bytes, &fits) != 0) {
+            send_err(fd, 400, "Bad Request", "invalid destination or items");
+            return;
+        }
+        if (!fits) {
+            send_err(fd, 400, "Bad Request", "file/folder wont fit on the internal because there is not enough space on the drive");
+            return;
+        }
+
+        const char *hdr = "HTTP/1.1 200 OK\r\n"
+                          "Content-Type: application/x-ndjson; charset=utf-8\r\n"
+                          "Connection: close\r\n"
+                          "Cache-Control: no-store\r\n\r\n";
+        if (write_full(fd, hdr, strlen(hdr)) != 0) return;
+
+        struct stream_ctx ctx = { .fd = fd, .last_send_ms = 0 };
+        int rc = file_ops_copy_progress(ptrs, (size_t)count, dest_buf, copy_progress_reporter, &ctx);
+        if (rc != 0) {
+            const char *err_line = (errno == ENOSPC)
+                ? "{\"error\":\"file/folder wont fit on the internal because there is not enough space on the drive\"}\n"
+                : "{\"error\":\"copy failed or cancelled\"}\n";
+            write_full(fd, err_line, strlen(err_line));
+            return;
+        }
+        char done_line[256];
+        snprintf(done_line, sizeof done_line, "{\"ok\":true,\"total_bytes\":%llu}\n", req_bytes);
+        write_full(fd, done_line, strlen(done_line));
+        return;
+    }
+
+    int rc = file_ops_move(ptrs, (size_t)count, dest_buf);
     if (rc != 0) {
-        send_err(fd, 400, "Bad Request", is_copy ? "copy failed" : "move failed");
+        send_err(fd, 400, "Bad Request", "move failed");
         return;
     }
     send_json(fd, 200, "OK", "{\"ok\":true}\n");
@@ -2439,6 +2571,10 @@ static void handle_client(int client) {
     }
     if (strcmp(method, "POST") == 0 && strcmp(path, "/api/files/rename") == 0) {
         handle_files_rename(client, &io, has_len, content_len);
+        goto out;
+    }
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/api/files/check") == 0) {
+        handle_files_check(client, &io, has_len, content_len);
         goto out;
     }
     if (strcmp(method, "POST") == 0 && strcmp(path, "/api/files/move") == 0) {
