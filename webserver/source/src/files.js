@@ -8,6 +8,8 @@ import {
   renameFile,
   moveFiles,
   copyFiles,
+  copyFilesStream,
+  checkFileSpace,
   deleteFiles,
   uploadFile,
   downloadFileUrl,
@@ -104,6 +106,51 @@ export function bindFiles({ toast }) {
   const clipboardGroup = "mpc_boot_data";
   let contextRow = null;
   let activeMenu = null;
+  let appClipboard = loadClipboard();
+
+  function loadClipboard() {
+    try {
+      const saved = sessionStorage.getItem("mpc_file_clipboard");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && Array.isArray(parsed.ids) && parsed.ids.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function saveClipboard(data) {
+    appClipboard = data;
+    try {
+      if (data) {
+        sessionStorage.setItem("mpc_file_clipboard", JSON.stringify(data));
+      } else {
+        sessionStorage.removeItem("mpc_file_clipboard");
+      }
+    } catch (e) {}
+    updatePasteButtons();
+  }
+
+  function hasClipboardData() {
+    return !!(appClipboard && Array.isArray(appClipboard.ids) && appClipboard.ids.length > 0);
+  }
+
+  function updatePasteButtons() {
+    if (!container) return;
+    const pasteBtns = container.querySelectorAll(".fe_fileexplorer_folder_tool_paste");
+    const hasData = hasClipboardData();
+    const folder = feInstance ? feInstance.GetCurrentFolder() : null;
+    const allowed = canModify(folder);
+    for (const btn of pasteBtns) {
+      if (hasData && allowed) {
+        btn.classList.remove("fe_fileexplorer_disabled");
+      } else {
+        btn.classList.add("fe_fileexplorer_disabled");
+      }
+    }
+  }
 
   function canModify(folder) {
     if (!folder || folder.waiting) return false;
@@ -212,14 +259,64 @@ export function bindFiles({ toast }) {
   async function transferItems(op, srcpath, srcids, destRel, destName) {
     const entries = selectedEntries(feInstance, srcpath, srcids);
     const verb = op === "move" ? "Move" : "Copy";
-    if (!confirm(`${verb} ${describeSelection(entries)} into "${destName}"?`)) {
-      return "Cancelled";
-    }
     const srcRel = pathIds(srcpath);
     const items = srcids.map((id) => (srcRel ? srcRel + "/" + id : id));
-    if (op === "move") await moveFiles(items, destRel);
-    else await copyFiles(items, destRel);
-    return items.length;
+
+    // Preflight size safeguard
+    let check = null;
+    try {
+      check = await checkFileSpace(items, destRel);
+    } catch (err) {
+      toast(err.message || "Failed to check storage space");
+      return "Cancelled";
+    }
+
+    if (check && !check.fits) {
+      const reqStr = fmtBytes(check.required_bytes);
+      const freeStr = fmtBytes(check.free_bytes);
+      alert(`File/folder won't fit on the internal because there is not enough space on the drive.\n\nRequired: ${reqStr}\nAvailable on internal: ${freeStr}`);
+      return "Cancelled";
+    }
+
+    const sizeNote = check && check.required_bytes ? ` (${fmtBytes(check.required_bytes)})` : "";
+    if (!confirm(`${verb} ${describeSelection(entries)}${sizeNote} into "${destName}"?`)) {
+      return "Cancelled";
+    }
+
+    const abortCtrl = new AbortController();
+    let isCancelled = false;
+    const ui = lockUI({
+      title: `${verb}ing files to ${destName}…`,
+      message: `Preparing ${verb.toLowerCase()}…`,
+      onCancel: () => {
+        isCancelled = true;
+        abortCtrl.abort();
+        ui.setMessage("Cancelling transfer…");
+      }
+    });
+
+    try {
+      if (op === "move") {
+        await moveFiles(items, destRel);
+      } else {
+        await copyFilesStream(items, destRel, abortCtrl.signal, (prog) => {
+          if (isCancelled) return;
+          if (prog.current) {
+            const byteInfo = prog.total_bytes ? ` (${fmtBytes(prog.copied_bytes)} / ${fmtBytes(prog.total_bytes)})` : "";
+            ui.setMessage(`Copying "${prog.current}"${byteInfo}…`);
+          }
+        });
+      }
+      ui.unlock(`Transfer complete (${items.length} items)!`);
+      return items.length;
+    } catch (err) {
+      if (abortCtrl.signal.aborted || isCancelled) {
+        ui.unlock("Transfer cancelled");
+        return "Cancelled";
+      }
+      ui.unlock(err.message || `${verb} failed`);
+      throw err;
+    }
   }
 
   function pasteTarget(entry) {
@@ -243,58 +340,51 @@ export function bindFiles({ toast }) {
     const folder = feInstance.GetCurrentFolder();
     const ids = feInstance.GetSelectedItemIDs();
     if (!folder || !ids.length) return;
-    const text = JSON.stringify({
-      "application/file-explorer-clipboard": {
-        type,
-        source: "menu",
-        group: clipboardGroup,
-        path: folder.GetPath(),
-        ids
-      }
-    });
-    const elems = feInstance.GetElements();
-    const wrap = elems.itemsclipboardoverlaypastewrap;
-    const overlay = elems.itemsclipboardoverlay;
-    wrap.classList.remove("fe_fileexplorer_hidden");
-    overlay.value = text;
-    overlay.focus();
-    overlay.select();
-    try {
-      document.execCommand(type === "move" ? "cut" : "copy");
-    } catch (err) {
-      // The text write below still publishes the payload.
-    }
-    hideClipboardOverlay();
+    const payload = {
+      type,
+      source: "menu",
+      group: clipboardGroup,
+      path: folder.GetPath(),
+      ids: ids.slice()
+    };
+    saveClipboard(payload);
+
+    const text = JSON.stringify({ "application/file-explorer-clipboard": payload });
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).catch(() => {});
     }
-    toast(type === "move" ? "Cut to clipboard" : "Copied to clipboard");
+    toast(type === "move" ? `Cut ${ids.length} item(s)` : `Copied ${ids.length} item(s)`);
   }
 
   async function pasteClipboard(target) {
-    if (!target.allowed) return;
-    let text = "";
-    try {
-      text = await navigator.clipboard.readText();
-    } catch (err) {
+    const resolvedTarget = target || pasteTarget();
+    if (!resolvedTarget.allowed) return;
+
+    let payload = appClipboard;
+    if (!payload || !Array.isArray(payload.ids) || !payload.ids.length) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          const text = await navigator.clipboard.readText();
+          const data = JSON.parse(text);
+          payload = data["application/file-explorer-clipboard"] || null;
+        }
+      } catch (err) {
+        payload = null;
+      }
+    }
+
+    if (!payload || !Array.isArray(payload.ids) || !payload.ids.length) {
       toast("Nothing to paste");
       return;
     }
-    let payload = null;
-    try {
-      const data = JSON.parse(text);
-      payload = data["application/file-explorer-clipboard"] || null;
-    } catch (err) {
-      payload = null;
-    }
-    if (!payload || payload.group !== clipboardGroup || !Array.isArray(payload.path) || !Array.isArray(payload.ids) || !payload.ids.length) {
-      toast("Nothing to paste");
-      return;
-    }
+
     const op = payload.type === "move" ? "move" : "copy";
     try {
-      const count = await transferItems(op, payload.path, payload.ids, target.destRel, target.destName);
+      const count = await transferItems(op, payload.path, payload.ids, resolvedTarget.destRel, resolvedTarget.destName);
       if (count === "Cancelled") return;
+      if (op === "move") {
+        saveClipboard(null);
+      }
       toast(op === "move" ? `Moved ${count} item(s)` : `Copied ${count} item(s)`);
       triggerRefresh(true);
     } catch (err) {
@@ -326,12 +416,13 @@ export function bindFiles({ toast }) {
     const modifiable = canModify(folder);
     const target = pasteTarget(onItem ? entry : null);
     const label = (text) => feInstance.EscapeHTML(text);
+    const canPaste = target.allowed && hasClipboardData();
     const items = onItem
       ? [
           { id: "rename", name: label("Rename"), enabled: modifiable && ids.length === 1 },
           { id: "copy", name: label("Copy"), enabled: ids.length > 0 },
           { id: "cut", name: label("Cut"), enabled: ids.length > 0 && modifiable },
-          { id: "paste", name: label("Paste"), enabled: target.allowed },
+          { id: "paste", name: label("Paste"), enabled: canPaste },
           "split",
           { id: "delete", name: label("Delete"), enabled: ids.length > 0 && modifiable },
           "split",
@@ -339,7 +430,7 @@ export function bindFiles({ toast }) {
         ]
       : [
           { id: "new-folder", name: label("New folder"), enabled: modifiable },
-          { id: "paste", name: label("Paste"), enabled: target.allowed },
+          { id: "paste", name: label("Paste"), enabled: canPaste },
           "split",
           { id: "download-dir", name: label("Download this directory"), enabled: true }
         ];
@@ -671,11 +762,13 @@ export function bindFiles({ toast }) {
           if (this.IsMappedFolder(folder)) {
             folder.SetEntries(newEntries);
             folder.SetAttributes({ canmodify: rel.length > 0 });
+            updatePasteButtons();
           }
         } catch (err) {
           if (this.IsMappedFolder(folder)) {
             folder.SetEntries([]);
             if (!rel) folder.SetAttributes({ canmodify: false });
+            updatePasteButtons();
           }
           toast(err.message || "Failed to load directory");
         }
@@ -903,6 +996,33 @@ export function bindFiles({ toast }) {
       uploadBtn.setAttribute("aria-label", "Upload files");
     }
 
+    const copyBtn = container.querySelector(".fe_fileexplorer_folder_tool_copy");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        copySelection("copy");
+      }, true);
+    }
+
+    const cutBtn = container.querySelector(".fe_fileexplorer_folder_tool_cut");
+    if (cutBtn) {
+      cutBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        copySelection("move");
+      }, true);
+    }
+
+    const pasteBtn = container.querySelector(".fe_fileexplorer_folder_tool_paste");
+    if (pasteBtn) {
+      pasteBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        pasteClipboard(pasteTarget());
+      }, true);
+    }
+
     const elems = feInstance.GetElements ? feInstance.GetElements() : null;
     if (elems && elems.navtools && !elems.navtools.querySelector(".fe_fileexplorer_navtool_refresh")) {
       const btnNavRefresh = document.createElement("button");
@@ -917,12 +1037,31 @@ export function bindFiles({ toast }) {
     }
 
     container.addEventListener("keydown", (e) => {
+      if (e.target.closest && e.target.closest(".fe_fileexplorer_textarea")) return;
+      if (e.ctrlKey || e.metaKey) {
+        const key = e.key ? e.key.toLowerCase() : "";
+        if (key === "c" || e.keyCode === 67) {
+          e.preventDefault();
+          e.stopPropagation();
+          copySelection("copy");
+        } else if (key === "x" || e.keyCode === 88) {
+          e.preventDefault();
+          e.stopPropagation();
+          copySelection("move");
+        } else if (key === "v" || e.keyCode === 86) {
+          e.preventDefault();
+          e.stopPropagation();
+          pasteClipboard(pasteTarget());
+        }
+      }
       if (e.key === "F5" || (e.key.toLowerCase() === "r" && (e.ctrlKey || e.metaKey))) {
         e.preventDefault();
         e.stopPropagation();
         triggerRefresh();
       }
-    });
+    }, true);
+
+    updatePasteButtons();
   }
 
   if (showDotfilesInput) {

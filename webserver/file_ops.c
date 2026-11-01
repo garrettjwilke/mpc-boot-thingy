@@ -298,7 +298,7 @@ const char *file_ops_access_error(const char *req_path) {
     return NULL;
 }
 
-static void json_escape(const char *in, char *out, size_t out_sz) {
+void json_escape(const char *in, char *out, size_t out_sz) {
     size_t j = 0;
     for (const unsigned char *p = (const unsigned char *)in; *p && j + 6 < out_sz; p++) {
         if (*p == '"') {
@@ -479,7 +479,118 @@ int file_ops_rename(const char *old_path, const char *new_name) {
     return rename(src_real, dst_real);
 }
 
-static int copy_single_file(const char *src, const char *dst) {
+static int scan_path_size(const char *path, unsigned long long *out_bytes, size_t *out_files, int depth) {
+    if (depth > 64) return -1;
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (!d) return -1;
+        struct dirent *de;
+        int rc = 0;
+        while ((de = readdir(d)) != NULL) {
+            if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+            char child[PATH_MAX];
+            if (snprintf(child, sizeof child, "%s/%s", path, de->d_name) >= (int)sizeof child) {
+                rc = -1;
+                break;
+            }
+            if (scan_path_size(child, out_bytes, out_files, depth + 1) != 0) {
+                rc = -1;
+                break;
+            }
+        }
+        closedir(d);
+        return rc;
+    } else if (S_ISREG(st.st_mode)) {
+        if (out_bytes) *out_bytes += (unsigned long long)st.st_size;
+        if (out_files) (*out_files)++;
+    }
+    return 0;
+}
+
+int file_ops_calc_size(const char **items, size_t count, unsigned long long *out_bytes, size_t *out_files) {
+    if (!items || count == 0) return -1;
+    unsigned long long total_bytes = 0;
+    size_t total_files = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!items[i] || !items[i][0]) continue;
+        char real[PATH_MAX], rel[PATH_MAX];
+        if (file_ops_resolve(items[i], real, sizeof real, rel, sizeof rel) != 0) return -1;
+        if (rel[0] == '\0' || is_volume_id(rel)) return -1;
+        if (scan_path_size(real, &total_bytes, &total_files, 0) != 0) return -1;
+    }
+    if (out_bytes) *out_bytes = total_bytes;
+    if (out_files) *out_files = total_files;
+    return 0;
+}
+
+int file_ops_check_space(const char **items, size_t count, const char *dest_dir,
+                         unsigned long long *out_required, unsigned long long *out_free, int *out_fits) {
+    char dst_real[PATH_MAX], dst_rel[PATH_MAX];
+    if (file_ops_resolve(dest_dir, dst_real, sizeof dst_real, dst_rel, sizeof dst_rel) != 0) {
+        return -1;
+    }
+    struct stat dst_st;
+    if (stat(dst_real, &dst_st) != 0 || !S_ISDIR(dst_st.st_mode)) {
+        return -1;
+    }
+
+    unsigned long long req_bytes = 0;
+    size_t req_files = 0;
+    if (file_ops_calc_size(items, count, &req_bytes, &req_files) != 0) {
+        return -1;
+    }
+
+    struct statvfs vfs;
+    if (statvfs(dst_real, &vfs) != 0) {
+        return -1;
+    }
+    unsigned long long free_bytes = (unsigned long long)vfs.f_bavail * (unsigned long long)vfs.f_frsize;
+
+    if (out_required) *out_required = req_bytes;
+    if (out_free) *out_free = free_bytes;
+    if (out_fits) *out_fits = (req_bytes <= free_bytes) ? 1 : 0;
+    return 0;
+}
+
+static void make_copy_name(const char *dst_dir, const char *base, char *out, size_t out_sz) {
+    snprintf(out, out_sz, "%s/%s", dst_dir, base);
+    struct stat st;
+    if (stat(out, &st) != 0) return;
+
+    const char *dot = strrchr(base, '.');
+    char stem[256], ext[64];
+    if (dot && dot != base) {
+        size_t slen = (size_t)(dot - base);
+        if (slen >= sizeof stem) slen = sizeof stem - 1;
+        memcpy(stem, base, slen);
+        stem[slen] = '\0';
+        snprintf(ext, sizeof ext, "%s", dot);
+    } else {
+        snprintf(stem, sizeof stem, "%s", base);
+        ext[0] = '\0';
+    }
+
+    int n = 1;
+    while (n < 1000) {
+        if (n == 1) snprintf(out, out_sz, "%s/%s (copy)%s", dst_dir, stem, ext);
+        else snprintf(out, out_sz, "%s/%s (copy %d)%s", dst_dir, stem, n, ext);
+        if (stat(out, &st) != 0) return;
+        n++;
+    }
+}
+
+struct copy_ctx {
+    file_ops_progress_cb cb;
+    void *user;
+    unsigned long long bytes_done;
+    unsigned long long total_bytes;
+    size_t files_done;
+    size_t total_files;
+};
+
+static int copy_single_file_prog(const char *src, const char *dst, const char *display_name, struct copy_ctx *ctx) {
     int sfd = open(src, O_RDONLY);
     if (sfd < 0) return -1;
 
@@ -499,8 +610,9 @@ static int copy_single_file(const char *src, const char *dst) {
         return -1;
     }
 
-    char buf[16384];
+    char buf[32768];
     ssize_t r;
+    int cancelled = 0;
     while ((r = read(sfd, buf, sizeof buf)) > 0) {
         char *p = buf;
         ssize_t left = r;
@@ -515,10 +627,17 @@ static int copy_single_file(const char *src, const char *dst) {
             }
             left -= w;
             p += w;
+            if (ctx) ctx->bytes_done += (unsigned long long)w;
+        }
+        if (ctx && ctx->cb) {
+            if (ctx->cb(ctx->user, display_name, ctx->bytes_done, ctx->total_bytes, ctx->files_done, ctx->total_files) != 0) {
+                cancelled = 1;
+                break;
+            }
         }
     }
     close(sfd);
-    if (r < 0) {
+    if (cancelled || r < 0) {
         close(dfd);
         unlink(tmp);
         return -1;
@@ -535,11 +654,17 @@ static int copy_single_file(const char *src, const char *dst) {
         unlink(tmp);
         return -1;
     }
+    if (ctx) ctx->files_done++;
+    if (ctx && ctx->cb) {
+        if (ctx->cb(ctx->user, display_name, ctx->bytes_done, ctx->total_bytes, ctx->files_done, ctx->total_files) != 0) {
+            return -1;
+        }
+    }
     return 0;
 }
 
-static int copy_recursive(const char *src, const char *dst, int depth) {
-    if (depth > 32) return -1;
+static int copy_recursive_prog(const char *src, const char *dst, const char *rel_disp, struct copy_ctx *ctx, int depth) {
+    if (depth > 64) return -1;
     struct stat st;
     if (lstat(src, &st) != 0) return -1;
 
@@ -551,13 +676,14 @@ static int copy_recursive(const char *src, const char *dst, int depth) {
         int rc = 0;
         while ((de = readdir(d)) != NULL) {
             if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
-            char c_src[PATH_MAX], c_dst[PATH_MAX];
+            char c_src[PATH_MAX], c_dst[PATH_MAX], c_disp[PATH_MAX];
             if (snprintf(c_src, sizeof c_src, "%s/%s", src, de->d_name) >= (int)sizeof c_src ||
-                snprintf(c_dst, sizeof c_dst, "%s/%s", dst, de->d_name) >= (int)sizeof c_dst) {
+                snprintf(c_dst, sizeof c_dst, "%s/%s", dst, de->d_name) >= (int)sizeof c_dst ||
+                snprintf(c_disp, sizeof c_disp, "%s/%s", rel_disp, de->d_name) >= (int)sizeof c_disp) {
                 rc = -1;
                 break;
             }
-            if (copy_recursive(c_src, c_dst, depth + 1) != 0) {
+            if (copy_recursive_prog(c_src, c_dst, c_disp, ctx, depth + 1) != 0) {
                 rc = -1;
                 break;
             }
@@ -565,12 +691,37 @@ static int copy_recursive(const char *src, const char *dst, int depth) {
         closedir(d);
         return rc;
     } else if (S_ISREG(st.st_mode)) {
-        return copy_single_file(src, dst);
+        return copy_single_file_prog(src, dst, rel_disp, ctx);
     }
     return 0;
 }
 
-int file_ops_copy(const char **items, size_t count, const char *dest_dir) {
+static int copy_recursive(const char *src, const char *dst, int depth) {
+    return copy_recursive_prog(src, dst, dst, NULL, depth);
+}
+
+int file_ops_copy_progress(const char **items, size_t count, const char *dest_dir,
+                           file_ops_progress_cb cb, void *user) {
+    unsigned long long req_bytes = 0, free_bytes = 0;
+    int fits = 0;
+    if (file_ops_check_space(items, count, dest_dir, &req_bytes, &free_bytes, &fits) != 0) {
+        return -1;
+    }
+    if (!fits) {
+        errno = ENOSPC;
+        return -1;
+    }
+
+    size_t total_files = 0;
+    file_ops_calc_size(items, count, NULL, &total_files);
+
+    struct copy_ctx ctx;
+    memset(&ctx, 0, sizeof ctx);
+    ctx.cb = cb;
+    ctx.user = user;
+    ctx.total_bytes = req_bytes;
+    ctx.total_files = total_files;
+
     char dst_dir_real[PATH_MAX], dst_dir_rel[PATH_MAX];
     if (file_ops_resolve(dest_dir, dst_dir_real, sizeof dst_dir_real, dst_dir_rel, sizeof dst_dir_rel) != 0) {
         return -1;
@@ -596,6 +747,10 @@ int file_ops_copy(const char **items, size_t count, const char *dest_dir) {
             return -1;
         }
 
+        if (strcmp(src_real, target_real) == 0) {
+            make_copy_name(dst_dir_real, base, target_real, sizeof target_real);
+        }
+
         /* Prevent copying directory into itself */
         size_t src_len = strlen(src_real);
         if (strncmp(target_real, src_real, src_len) == 0 &&
@@ -603,11 +758,15 @@ int file_ops_copy(const char **items, size_t count, const char *dest_dir) {
             return -1;
         }
 
-        if (copy_recursive(src_real, target_real, 0) != 0) {
+        if (copy_recursive_prog(src_real, target_real, base, &ctx, 0) != 0) {
             return -1;
         }
     }
     return 0;
+}
+
+int file_ops_copy(const char **items, size_t count, const char *dest_dir) {
+    return file_ops_copy_progress(items, count, dest_dir, NULL, NULL);
 }
 
 int file_ops_move(const char **items, size_t count, const char *dest_dir) {

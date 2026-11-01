@@ -30,6 +30,9 @@ int file_ops_resolve(const char *req_path, char *out_resolved, size_t res_sz, ch
    NULL otherwise. */
 const char *file_ops_access_error(const char *req_path);
 
+/* Escape string for JSON output. */
+void json_escape(const char *in, char *out, size_t out_sz);
+
 /* Produce JSON string listing entries in rel_path.
    Caller must free() the returned pointer. Returns NULL on error. */
 char *file_ops_list_json(const char *req_path);
@@ -52,6 +55,26 @@ int file_ops_move(const char **items, size_t count, const char *dest_dir);
 /* Copy one or more entries (relative paths) into dest_dir (relative path) recursively.
    Returns 0 on success, -1 on error. */
 int file_ops_copy(const char **items, size_t count, const char *dest_dir);
+
+/* Recursively calculate total size in bytes and number of regular files for items.
+   Returns 0 on success, -1 on invalid path or error. */
+int file_ops_calc_size(const char **items, size_t count, unsigned long long *out_bytes, size_t *out_files);
+
+/* Check if items will fit in dest_dir based on statvfs free bytes.
+   Returns 0 on success, -1 on error.
+   out_fits is set to 1 if required <= free, 0 otherwise. */
+int file_ops_check_space(const char **items, size_t count, const char *dest_dir,
+                         unsigned long long *out_required, unsigned long long *out_free, int *out_fits);
+
+/* Progress callback type. Return 0 to continue, non-zero to cancel/abort. */
+typedef int (*file_ops_progress_cb)(void *user, const char *cur_name,
+                                    unsigned long long bytes_done, unsigned long long total_bytes,
+                                    size_t files_done, size_t total_files);
+
+/* Copy one or more entries with real-time progress callback and cancellation support.
+   Returns 0 on success, -1 on error (or if cancelled). */
+int file_ops_copy_progress(const char **items, size_t count, const char *dest_dir,
+                           file_ops_progress_cb cb, void *user);
 
 /* Delete one or more entries (relative paths) recursively.
    Returns 0 on success, -1 on error. */

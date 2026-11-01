@@ -92,12 +92,72 @@ export async function moveFiles(items, dest) {
   }));
 }
 
-export async function copyFiles(items, dest) {
-  return readBody(await fetch("/api/files/copy", {
+export async function checkFileSpace(items, dest) {
+  return readBody(await fetch("/api/files/check", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ items, dest })
   }));
+}
+
+export async function copyFilesStream(items, dest, signal = null, onProgress = null) {
+  const res = await fetch("/api/files/copy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items, dest }),
+    signal
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let body = {};
+    try { body = JSON.parse(text); } catch (e) { body = { error: text || res.statusText }; }
+    throw new Error(body.error || res.statusText || "copy failed");
+  }
+
+  const reader = res.body ? res.body.getReader() : null;
+  if (!reader) return { ok: true };
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let lastResult = { ok: true };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed.error) throw new Error(parsed.error);
+        if (parsed.status === "progress" && onProgress) {
+          onProgress(parsed);
+        }
+        lastResult = parsed;
+      } catch (err) {
+        if (err.message && !err.message.includes("JSON")) throw err;
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    try {
+      const parsed = JSON.parse(buffer.trim());
+      if (parsed.error) throw new Error(parsed.error);
+      lastResult = parsed;
+    } catch (err) {
+      if (err.message && !err.message.includes("JSON")) throw err;
+    }
+  }
+
+  return lastResult;
+}
+
+export async function copyFiles(items, dest) {
+  return copyFilesStream(items, dest);
 }
 
 export async function deleteFiles(items) {

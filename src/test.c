@@ -27,6 +27,16 @@ static void dummy_progress(const char *phase, void *user) {
     snprintf((char *)user, 128, "%s", phase);
 }
 
+struct test_prog_ctx { int calls; int cancel_after; };
+
+static int test_prog(void *u, const char *name, unsigned long long bd, unsigned long long tb, size_t fd, size_t tf) {
+  (void)name; (void)bd; (void)tb; (void)fd; (void)tf;
+  struct test_prog_ctx *c = (struct test_prog_ctx *)u;
+  c->calls++;
+  if (c->cancel_after && c->calls >= c->cancel_after) return -1;
+  return 0;
+}
+
 static void write_file(const char *path, const char *body) {
   FILE *f = fopen(path, "w");
   assert(f);
@@ -1210,17 +1220,50 @@ int main(void) {
     snprintf(fpath2, sizeof fpath2, "%s/samples/readme.txt", test_data);
     assert(access(fpath2, F_OK) == 0);
 
-    /* 6. Recursive copy, including onto the SD card root */
+    /* 5b. Space calculation and checks */
+    unsigned long long calc_sz = 0;
+    size_t calc_cnt = 0;
+    const char *calc_items[] = {"internal/samples"};
+    assert(file_ops_calc_size(calc_items, 1, &calc_sz, &calc_cnt) == 0);
+    assert(calc_sz > 0 && calc_cnt == 2);
+
+    unsigned long long req_bytes = 0, free_bytes = 0;
+    int fits = 0;
+    assert(file_ops_check_space(calc_items, 1, "internal", &req_bytes, &free_bytes, &fits) == 0);
+    assert(fits == 1);
+    assert(req_bytes == calc_sz);
+    assert(free_bytes > 0);
+
+    /* 6. Recursive copy, including onto the SD card root and SD to internal */
     const char *copy_items[] = {"internal/samples/drums"};
     assert(file_ops_copy(copy_items, 1, "") != 0);
     assert(file_ops_copy(copy_items, 1, "internal") == 0);
     char fcopy[1024];
     snprintf(fcopy, sizeof fcopy, "%s/drums/snare.wav", test_data);
     assert(access(fcopy, F_OK) == 0);
+    assert(access(fpath1, F_OK) == 0); /* Source still exists: 2 copies */
+
     assert(file_ops_copy(copy_items, 1, "sd") == 0);
     char sdcopy[1024];
     snprintf(sdcopy, sizeof sdcopy, "%s/drums/snare.wav", test_sd);
     assert(access(sdcopy, F_OK) == 0);
+
+    /* Copy from SD to Internal */
+    const char *sd_items[] = {"sd/drums"};
+    assert(file_ops_mkdir("internal/imported") == 0);
+    assert(file_ops_copy(sd_items, 1, "internal/imported") == 0);
+    char imported_copy[1024];
+    snprintf(imported_copy, sizeof imported_copy, "%s/imported/drums/snare.wav", test_data);
+    assert(access(imported_copy, F_OK) == 0);
+    assert(access(sdcopy, F_OK) == 0); /* Both copies exist */
+
+    /* Copy with progress and cancel */
+    struct test_prog_ctx pctx = {0, 0};
+    assert(file_ops_copy_progress(copy_items, 1, "internal/imported", test_prog, &pctx) == 0);
+    assert(pctx.calls > 0);
+
+    struct test_prog_ctx pctx_cancel = {0, 1};
+    assert(file_ops_copy_progress(copy_items, 1, "internal/imported", test_prog, &pctx_cancel) != 0);
 
     /* 7. Move */
     const char *move_items[] = {"internal/drums"};
