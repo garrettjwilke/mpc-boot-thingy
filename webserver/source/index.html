@@ -56,23 +56,32 @@
       </div>
     </section>
     <section id="tab-files" class="tab">
-      <div class="card">
-        <div class="row file-header-row">
-          <div class="file-path-area">
-            <h3>Storage</h3>
-            <span class="muted">Internal is /data/UserContent. SD Card is the removable card.</span>
+      <div class="card fb-card">
+        <div class="fb-body">
+          <div class="row file-header-row">
+            <div class="file-path-area">
+              <h3>Storage</h3>
+              <span class="muted">Internal is /data/UserContent. SD Card is the removable card.</span>
+            </div>
+            <div class="row">
+              <span id="fb-disk" class="badge">Loading storage…</span>
+              <label class="show-hidden" for="fb-show-dotfiles">
+                <input id="fb-show-dotfiles" type="checkbox" />
+                Show hidden
+              </label>
+              <button class="btn sm" id="fb-btn-zip-all" type="button">📦 Backup UserContent as ZIP</button>
+            </div>
           </div>
-          <div class="row">
-            <span id="fb-disk" class="badge">Loading storage…</span>
-            <label class="show-hidden" for="fb-show-dotfiles">
-              <input id="fb-show-dotfiles" type="checkbox" />
-              Show hidden
-            </label>
-            <button class="btn sm" id="fb-btn-zip-all" type="button">📦 Backup UserContent as ZIP</button>
+
+          <div id="filemanager" class="fe-container"></div>
+        </div>
+        <div id="fb-offline" class="fb-offline" hidden>
+          <div class="fb-offline-card">
+            <p class="fb-offline-title">File browser disconnected</p>
+            <p class="muted">The file browser lost its connection. Reconnect to keep using it.</p>
+            <button class="btn" id="fb-reconnect" type="button">Reconnect</button>
           </div>
         </div>
-
-        <div id="filemanager" class="fe-container"></div>
       </div>
     </section>
     <section id="tab-terminal" class="tab">
