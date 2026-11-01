@@ -37,21 +37,15 @@
     <section id="tab-boot" class="tab active">
       <div class="card">
         <h3>Boot programs</h3>
-        <p class="muted">Hold SHIFT during the prompt to open the menu on the MPC. Otherwise the default starts. Boot
-          thingy opens that menu now.</p>
         <button class="btn secondary sm boot-new" id="boot-new" type="button">New Entry</button>
         <div id="apps"></div>
       </div>
       <div class="card">
         <h3>Install an app</h3>
-        <p class="muted">The new app is used on the next boot when it is the default and SHIFT is not held. It must
-          be an aarch64 Linux executable, a script whose first line runs sh or bash, or a zip of an autorun package. The
-          zip keeps that package in its own folder.</p>
         <button class="btn" id="install-open" type="button">Install App</button>
       </div>
       <div class="card">
         <h3>Reboot MPC</h3>
-        <p class="muted">Clears the boot counter so the updater stays closed, then reboots.</p>
         <button class="btn" id="reboot" type="button">Reboot MPC</button>
       </div>
     </section>
