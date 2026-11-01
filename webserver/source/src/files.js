@@ -101,6 +101,351 @@ export function bindFiles({ toast }) {
     return `${entries.length} items`;
   }
 
+  const clipboardGroup = "mpc_boot_data";
+  let contextRow = null;
+  let activeMenu = null;
+
+  function canModify(folder) {
+    if (!folder || folder.waiting) return false;
+    const attrs = folder.GetAttributes ? folder.GetAttributes() || {} : {};
+    return !("canmodify" in attrs) || !!attrs.canmodify;
+  }
+
+  function entryFromRow(row) {
+    if (!row || !feInstance) return null;
+    const folder = feInstance.GetCurrentFolder();
+    const entries = folder && folder.GetEntries ? folder.GetEntries() : [];
+    return entries.find((entry) => entry.id === row.dataset.feid) || null;
+  }
+
+  function hideClipboardOverlay() {
+    const elems = feInstance && feInstance.GetElements ? feInstance.GetElements() : null;
+    const wrap = elems && elems.itemsclipboardoverlaypastewrap;
+    if (!wrap) return;
+    wrap.classList.add("fe_fileexplorer_hidden");
+    wrap.classList.remove("fe_fileexplorer_items_clipboard_contextmenu");
+    wrap.classList.remove("fe_fileexplorer_items_show_clipboard_overlay_paste");
+    if (elems.itemsclipboardoverlay && document.activeElement === elems.itemsclipboardoverlay) {
+      elems.itemsclipboardoverlay.blur();
+    }
+  }
+
+  function closeContextMenu() {
+    if (!activeMenu) return;
+    const menu = activeMenu;
+    activeMenu = null;
+    menu.Destroy();
+  }
+
+  async function createNewFolderEntry(folder) {
+    const rel = getFolderRelPath(folder);
+    let candidate = "New Folder";
+    let n = 1;
+    const existing = folder.GetEntries();
+    while (existing.some((entry) => entry.name === candidate)) {
+      candidate = `New Folder ${++n}`;
+    }
+    const targetPath = rel ? rel + "/" + candidate : candidate;
+    await createFolder(targetPath);
+    return {
+      name: candidate,
+      id: candidate,
+      type: "folder",
+      hash: candidate + "_" + Date.now()
+    };
+  }
+
+  async function startNewFolder() {
+    const folder = feInstance.GetCurrentFolder();
+    if (!canModify(folder)) return;
+    try {
+      const entry = await createNewFolderEntry(folder);
+      if (!feInstance.IsMappedFolder(folder)) return;
+      folder.SetEntry(entry);
+      if (feInstance.GetCurrentFolder() === folder) {
+        feInstance.SetFocusItem(entry.id, true);
+        feInstance.ScrollToFocusedItem();
+        feInstance.SetSelectedItems([entry.id]);
+        feInstance.RenameSelectedItem();
+      }
+      toast("Created folder " + entry.name);
+    } catch (err) {
+      toast(err.message || "Failed to create folder");
+    }
+  }
+
+  async function downloadEntries(folder, ids, entries) {
+    const rel = getFolderRelPath(folder);
+    if (ids.length === 1 && entries.length === 1 && entries[0].type === "file") {
+      const filePath = rel ? rel + "/" + ids[0] : ids[0];
+      const a = document.createElement("a");
+      a.href = downloadFileUrl(filePath);
+      a.download = entries[0].name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      return;
+    }
+    const items = ids.map((id) => (rel ? rel + "/" + id : id));
+    const zipName = ids.length === 1
+      ? `${entries[0].name}.zip`
+      : `mpc-usercontent-export-${new Date().toISOString().slice(0, 10)}.zip`;
+    toast("Preparing ZIP export...");
+    await exportZip(items, zipName);
+    toast("ZIP export complete");
+  }
+
+  async function downloadCurrentDirectory() {
+    const folder = feInstance.GetCurrentFolder();
+    const rel = getFolderRelPath(folder);
+    if (!rel) {
+      toast("Preparing full /data/UserContent backup as ZIP...");
+      await exportZip([], `mpc-usercontent-backup-${new Date().toISOString().slice(0, 10)}.zip`);
+      toast("Full backup download started!");
+      return;
+    }
+    toast("Preparing ZIP export...");
+    await exportZip([rel], `${destinationName(folder)}.zip`);
+    toast("ZIP export complete");
+  }
+
+  async function transferItems(op, srcpath, srcids, destRel, destName) {
+    const entries = selectedEntries(feInstance, srcpath, srcids);
+    const verb = op === "move" ? "Move" : "Copy";
+    if (!confirm(`${verb} ${describeSelection(entries)} into "${destName}"?`)) {
+      return "Cancelled";
+    }
+    const srcRel = pathIds(srcpath);
+    const items = srcids.map((id) => (srcRel ? srcRel + "/" + id : id));
+    if (op === "move") await moveFiles(items, destRel);
+    else await copyFiles(items, destRel);
+    return items.length;
+  }
+
+  function pasteTarget(entry) {
+    const folder = feInstance.GetCurrentFolder();
+    const rel = getFolderRelPath(folder);
+    if (entry && entry.type === "folder") {
+      return {
+        destRel: rel ? rel + "/" + entry.id : entry.id,
+        destName: entry.name,
+        allowed: true
+      };
+    }
+    return {
+      destRel: rel,
+      destName: destinationName(folder),
+      allowed: canModify(folder)
+    };
+  }
+
+  function copySelection(type) {
+    const folder = feInstance.GetCurrentFolder();
+    const ids = feInstance.GetSelectedItemIDs();
+    if (!folder || !ids.length) return;
+    const text = JSON.stringify({
+      "application/file-explorer-clipboard": {
+        type,
+        source: "menu",
+        group: clipboardGroup,
+        path: folder.GetPath(),
+        ids
+      }
+    });
+    const elems = feInstance.GetElements();
+    const wrap = elems.itemsclipboardoverlaypastewrap;
+    const overlay = elems.itemsclipboardoverlay;
+    wrap.classList.remove("fe_fileexplorer_hidden");
+    overlay.value = text;
+    overlay.focus();
+    overlay.select();
+    try {
+      document.execCommand(type === "move" ? "cut" : "copy");
+    } catch (err) {
+      // The text write below still publishes the payload.
+    }
+    hideClipboardOverlay();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    toast(type === "move" ? "Cut to clipboard" : "Copied to clipboard");
+  }
+
+  async function pasteClipboard(target) {
+    if (!target.allowed) return;
+    let text = "";
+    try {
+      text = await navigator.clipboard.readText();
+    } catch (err) {
+      toast("Nothing to paste");
+      return;
+    }
+    let payload = null;
+    try {
+      const data = JSON.parse(text);
+      payload = data["application/file-explorer-clipboard"] || null;
+    } catch (err) {
+      payload = null;
+    }
+    if (!payload || payload.group !== clipboardGroup || !Array.isArray(payload.path) || !Array.isArray(payload.ids) || !payload.ids.length) {
+      toast("Nothing to paste");
+      return;
+    }
+    const op = payload.type === "move" ? "move" : "copy";
+    try {
+      const count = await transferItems(op, payload.path, payload.ids, target.destRel, target.destName);
+      if (count === "Cancelled") return;
+      toast(op === "move" ? `Moved ${count} item(s)` : `Copied ${count} item(s)`);
+      triggerRefresh(true);
+    } catch (err) {
+      toast(err.message || (op === "move" ? "Move failed" : "Copy failed"));
+    }
+  }
+
+  function runContextAction(id, folder, target) {
+    if (id === "rename") feInstance.RenameSelectedItem();
+    else if (id === "copy") copySelection("copy");
+    else if (id === "cut") copySelection("move");
+    else if (id === "paste") pasteClipboard(target);
+    else if (id === "delete") feInstance.DeleteSelectedItems(true);
+    else if (id === "download") {
+      downloadEntries(folder, feInstance.GetSelectedItemIDs(), feInstance.GetSelectedFolderEntries())
+        .catch((err) => toast(err.message || "Download failed"));
+    } else if (id === "new-folder") startNewFolder();
+    else if (id === "download-dir") {
+      downloadCurrentDirectory().catch((err) => toast(err.message || "Download failed"));
+    }
+  }
+
+  function openContextMenu(clientX, clientY, row, forceItems) {
+    const folder = feInstance.GetCurrentFolder();
+    if (!folder || folder.waiting || !window.FileExplorer || !window.FileExplorer.PopupMenu) return;
+    const entry = entryFromRow(row);
+    const onItem = !!entry || !!forceItems;
+    const ids = feInstance.GetSelectedItemIDs();
+    const modifiable = canModify(folder);
+    const target = pasteTarget(onItem ? entry : null);
+    const label = (text) => feInstance.EscapeHTML(text);
+    const items = onItem
+      ? [
+          { id: "rename", name: label("Rename"), enabled: modifiable && ids.length === 1 },
+          { id: "copy", name: label("Copy"), enabled: ids.length > 0 },
+          { id: "cut", name: label("Cut"), enabled: ids.length > 0 && modifiable },
+          { id: "paste", name: label("Paste"), enabled: target.allowed },
+          "split",
+          { id: "delete", name: label("Delete"), enabled: ids.length > 0 && modifiable },
+          "split",
+          { id: "download", name: label("Download"), enabled: ids.length > 0 }
+        ]
+      : [
+          { id: "new-folder", name: label("New folder"), enabled: modifiable },
+          { id: "paste", name: label("Paste"), enabled: target.allowed },
+          "split",
+          { id: "download-dir", name: label("Download this directory"), enabled: true }
+        ];
+
+    closeContextMenu();
+    const main = feInstance.GetElements().mainwrap;
+    const menu = new window.FileExplorer.PopupMenu(main, {
+      items,
+      onposition(popupelem) {
+        const rect = main.getBoundingClientRect();
+        const maxLeft = Math.max(0, main.clientWidth - popupelem.offsetWidth - 2);
+        const maxTop = Math.max(0, main.clientHeight - popupelem.offsetHeight - 2);
+        popupelem.style.left = Math.min(Math.max(0, clientX - rect.left), maxLeft) + "px";
+        popupelem.style.top = Math.min(Math.max(0, clientY - rect.top), maxTop) + "px";
+      },
+      onselected(id) {
+        if (handled) {
+          activeMenu = null;
+          this.Destroy();
+          return;
+        }
+        handled = true;
+        activeMenu = null;
+        this.Destroy();
+        runContextAction(id, folder, target);
+      },
+      oncancel() {
+        activeMenu = null;
+        this.Destroy();
+      }
+    });
+    activeMenu = menu;
+    let handled = false;
+    const pop = main.querySelector(":scope > .fe_fileexplorer_popup_wrap");
+    if (pop) {
+      const under = document.elementFromPoint(clientX, clientY);
+      const hovered = under && under.closest ? under.closest(".fe_fileexplorer_popup_item_wrap") : null;
+      if (hovered) hovered.focus();
+      const chooseItem = (e) => {
+        if (handled || activeMenu !== menu) return;
+        if (e.type === "mouseup" && e.button > 0) return;
+        const item = e.target.closest && e.target.closest(".fe_fileexplorer_popup_item_wrap");
+        if (!item || item.classList.contains("fe_fileexplorer_popup_item_disabled")) return;
+        handled = true;
+        activeMenu = null;
+        menu.Destroy();
+        runContextAction(item.dataset.itemid, folder, target);
+      };
+      pop.addEventListener("mouseup", chooseItem);
+      pop.addEventListener("click", chooseItem);
+    }
+  }
+
+  function fileListTarget(node) {
+    if (!node || !node.closest || !container.contains(node)) return false;
+    return !!node.closest(".fe_fileexplorer_items_scroll_wrap, .fe_fileexplorer_items_clipboard_overlay");
+  }
+
+  function bindContextMenu() {
+    container.addEventListener("mousedown", (e) => {
+      if (e.button !== 2 || !feInstance) return;
+      if (!e.target.closest || !e.target.closest(".fe_fileexplorer_items_scroll_wrap")) return;
+      e.stopPropagation();
+      const row = e.target.closest(".fe_fileexplorer_item_wrap");
+      contextRow = row;
+      const folder = feInstance.GetCurrentFolder();
+      if (!folder || folder.waiting) return;
+      if (row && row.dataset.feid) {
+        const id = row.dataset.feid;
+        if (!feInstance.GetSelectedItemIDs().includes(id)) feInstance.SetSelectedItems([id]);
+        feInstance.SetFocusItem(id, true);
+      } else {
+        feInstance.ClearSelectedItems(true);
+        contextRow = null;
+      }
+    }, true);
+
+    container.addEventListener("contextmenu", (e) => {
+      if (!feInstance || !fileListTarget(e.target)) return;
+      if (e.target.closest && e.target.closest(".fe_fileexplorer_textarea")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      hideClipboardOverlay();
+      const direct = e.target.closest && e.target.closest(".fe_fileexplorer_item_wrap");
+      const onOverlay = e.target.closest && e.target.closest(".fe_fileexplorer_items_clipboard_overlay");
+      const row = direct || (onOverlay ? contextRow : null);
+      openContextMenu(e.clientX, e.clientY, row);
+    }, true);
+
+    container.addEventListener("keydown", (e) => {
+      if (!feInstance) return;
+      const menuKey = e.key === "ContextMenu" || e.keyCode === 93 || (e.shiftKey && e.key === "F10");
+      if (!menuKey || !fileListTarget(e.target)) return;
+      if (e.target.closest && e.target.closest(".fe_fileexplorer_popup_wrap, .fe_fileexplorer_textarea")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      hideClipboardOverlay();
+      const focused = feInstance.GetFocusedItem();
+      const ids = feInstance.GetSelectedItemIDs();
+      const row = focused && ids.includes(focused.dataset.feid) ? focused : null;
+      const anchor = row || container.querySelector(".fe_fileexplorer_items_scroll_wrap");
+      const rect = anchor ? anchor.getBoundingClientRect() : { left: e.clientX, top: e.clientY };
+      openContextMenu(rect.left + 16, rect.top + 16, row, ids.length > 0);
+    }, true);
+  }
+
   let activeOverlay = null;
 
   function lockUI({ title = "Transferring files to MPC…", message = "Uploading…", onCancel = null } = {}) {
@@ -359,23 +704,9 @@ export function bindFiles({ toast }) {
 
       onnewfolder: async function (created, folder) {
         try {
-          const rel = getFolderRelPath(folder);
-          let candidate = "New Folder";
-          let n = 1;
-          const existing = folder.GetEntries();
-          while (existing.some((e) => e.name === candidate)) {
-            candidate = `New Folder ${++n}`;
-          }
-          const targetPath = rel ? rel + "/" + candidate : candidate;
-          await createFolder(targetPath);
-          const entry = {
-            name: candidate,
-            id: candidate,
-            type: "folder",
-            hash: candidate + "_" + Date.now()
-          };
+          const entry = await createNewFolderEntry(folder);
           created(entry);
-          toast("Created folder " + candidate);
+          toast("Created folder " + entry.name);
         } catch (err) {
           created(err.message || "Failed to create folder");
           toast(err.message || "Failed to create folder");
@@ -402,19 +733,14 @@ export function bindFiles({ toast }) {
       },
 
       onmove: async function (moved, srcpath, srcids, destfolder) {
-        const entries = selectedEntries(this, srcpath, srcids);
-        const destName = destinationName(destfolder);
-        if (!confirm(`Move ${describeSelection(entries)} into "${destName}"?`)) {
-          moved("Cancelled");
-          return;
-        }
         try {
-          const srcRel = pathIds(srcpath);
-          const destRel = getFolderRelPath(destfolder);
-          const items = srcids.map((id) => (srcRel ? srcRel + "/" + id : id));
-          await moveFiles(items, destRel);
+          const count = await transferItems("move", srcpath, srcids, getFolderRelPath(destfolder), destinationName(destfolder));
+          if (count === "Cancelled") {
+            moved("Cancelled");
+            return;
+          }
           moved(true);
-          toast(`Moved ${srcids.length} item(s)`);
+          toast(`Moved ${count} item(s)`);
           triggerRefresh(true);
         } catch (err) {
           moved(err.message || "Move failed");
@@ -423,19 +749,14 @@ export function bindFiles({ toast }) {
       },
 
       oncopy: async function (copied, srcpath, srcids, destfolder) {
-        const entries = selectedEntries(this, srcpath, srcids);
-        const destName = destinationName(destfolder);
-        if (!confirm(`Copy ${describeSelection(entries)} into "${destName}"?`)) {
-          copied("Cancelled");
-          return;
-        }
         try {
-          const srcRel = pathIds(srcpath);
-          const destRel = getFolderRelPath(destfolder);
-          const items = srcids.map((id) => (srcRel ? srcRel + "/" + id : id));
-          await copyFiles(items, destRel);
+          const count = await transferItems("copy", srcpath, srcids, getFolderRelPath(destfolder), destinationName(destfolder));
+          if (count === "Cancelled") {
+            copied("Cancelled");
+            return;
+          }
           copied(true);
-          toast(`Copied ${srcids.length} item(s)`);
+          toast(`Copied ${count} item(s)`);
           triggerRefresh(true);
         } catch (err) {
           copied(err.message || "Copy failed");
@@ -493,24 +814,7 @@ export function bindFiles({ toast }) {
 
       oninitdownload: async function (startdownload, folder, ids, entries) {
         try {
-          const rel = getFolderRelPath(folder);
-          if (ids.length === 1 && entries.length === 1 && entries[0].type === "file") {
-            const filePath = rel ? rel + "/" + ids[0] : ids[0];
-            const a = document.createElement("a");
-            a.href = downloadFileUrl(filePath);
-            a.download = entries[0].name;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-          } else {
-            const items = ids.map((id) => (rel ? rel + "/" + id : id));
-            const zipName = ids.length === 1
-              ? `${entries[0].name}.zip`
-              : `mpc-usercontent-export-${new Date().toISOString().slice(0, 10)}.zip`;
-            toast("Preparing ZIP export...");
-            await exportZip(items, zipName);
-            toast("ZIP export complete");
-          }
+          await downloadEntries(folder, ids, entries);
         } catch (err) {
           toast(err.message || "Download failed");
         }
@@ -591,6 +895,7 @@ export function bindFiles({ toast }) {
     };
 
     feInstance = new window.FileExplorer(container, options);
+    bindContextMenu();
 
     const uploadBtn = container.querySelector(".fe_fileexplorer_folder_tool_upload");
     if (uploadBtn) {
