@@ -286,6 +286,45 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
   border: 1px solid var(--border);
 }
 
+.fb-card { position: relative; }
+#tab-files.fb-disconnected .fb-body {
+  opacity: 0.45;
+  filter: grayscale(0.55);
+  pointer-events: none;
+  user-select: none;
+}
+.fb-offline {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.fb-offline[hidden] { display: none !important; }
+.fb-offline-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  padding: 22px 24px;
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+}
+.fb-offline-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fb-offline-card .muted { margin-bottom: 16px; }
+.fb-offline .btn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 /* js-fileexplorer Theme Integration */
 :root[data-theme="dark"] .fe_fileexplorer_wrap .fe_fileexplorer_inner_wrap {
   background-color: var(--panel);

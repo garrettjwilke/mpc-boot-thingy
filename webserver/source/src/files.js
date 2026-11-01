@@ -16,14 +16,24 @@ import {
   exportZip
 } from "./api.js";
 
+const PROBE_EVERY_MS = 20000;
+const REQUEST_TIMEOUT_MS = 5000;
+
 export function bindFiles({ toast }) {
   const container = document.getElementById("filemanager");
+  const tab = document.getElementById("tab-files");
   const elDisk = document.getElementById("fb-disk");
+  const offlineEl = document.getElementById("fb-offline");
+  const reconnectBtn = document.getElementById("fb-reconnect");
   const btnZipAll = document.getElementById("fb-btn-zip-all");
   const showDotfilesInput = document.getElementById("fb-show-dotfiles");
 
   let feInstance = null;
   let showDotfiles = false;
+  let connected = true;
+  let probeTimer = null;
+  let probePromise = null;
+  const folderLoads = new WeakMap();
 
   function isDotEntry(name) {
     return typeof name === "string" && name.startsWith(".");
@@ -48,12 +58,105 @@ export function bindFiles({ toast }) {
     }
   }
 
+  function transferLocked() {
+    const overlay = document.getElementById("ui-lock-overlay");
+    return !!(overlay && !overlay.hidden);
+  }
+
+  function filesTabOpen() {
+    return !!(tab && tab.classList.contains("active") && document.visibilityState !== "hidden");
+  }
+
+  function setConnected(ok) {
+    const was = connected;
+    connected = ok;
+    if (tab) tab.classList.toggle("fb-disconnected", !ok);
+    if (offlineEl) offlineEl.hidden = ok;
+    if (!ok) {
+      closeContextMenu();
+      if (elDisk) {
+        elDisk.textContent = "Disconnected";
+        elDisk.classList.add("warn");
+      }
+    } else if (!was && elDisk) {
+      elDisk.textContent = "Loading storage…";
+      elDisk.classList.remove("warn");
+    }
+  }
+
+  function startFolderLoad(folder) {
+    const prev = folderLoads.get(folder);
+    if (prev) {
+      clearTimeout(prev.timer);
+      prev.ctrl.abort();
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    const state = { ctrl, timer };
+    folderLoads.set(folder, state);
+    return state;
+  }
+
+  function finishFolderLoad(folder, state) {
+    clearTimeout(state.timer);
+    if (folderLoads.get(folder) === state) folderLoads.delete(folder);
+  }
+
+  function probeConnection() {
+    if (transferLocked()) return Promise.resolve(connected);
+    if (probePromise) return probePromise;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    probePromise = (async () => {
+      const was = connected;
+      try {
+        const res = await fetch("/api/status", { cache: "no-store", signal: ctrl.signal });
+        if (transferLocked()) return connected;
+        setConnected(res.ok);
+        if (res.ok && !was) triggerRefresh(true);
+        return res.ok;
+      } catch {
+        if (transferLocked()) return connected;
+        setConnected(false);
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    probePromise.finally(() => {
+      probePromise = null;
+    });
+    return probePromise;
+  }
+
+  function stopProbe() {
+    if (probeTimer) clearInterval(probeTimer);
+    probeTimer = null;
+  }
+
+  function scheduleProbe() {
+    stopProbe();
+    if (!filesTabOpen()) return;
+    probeTimer = setInterval(() => {
+      if (!filesTabOpen()) {
+        stopProbe();
+        return;
+      }
+      if (transferLocked()) return;
+      probeConnection();
+    }, PROBE_EVERY_MS);
+  }
+
   async function updateDiskStats() {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const data = await fetchFiles("");
-      showDisk(data);
-    } catch (e) {
-      // Ignore initial stats error
+      const data = await fetchFiles("", ctrl.signal);
+      if (connected) showDisk(data);
+    } catch {
+      // Ignore stats error. Directory refresh owns the disconnect state.
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -117,7 +220,7 @@ export function bindFiles({ toast }) {
           return parsed;
         }
       }
-    } catch (e) {}
+    } catch (e) { }
     return null;
   }
 
@@ -129,7 +232,7 @@ export function bindFiles({ toast }) {
       } else {
         sessionStorage.removeItem("mpc_file_clipboard");
       }
-    } catch (e) {}
+    } catch (e) { }
     updatePasteButtons();
   }
 
@@ -351,7 +454,7 @@ export function bindFiles({ toast }) {
 
     const text = JSON.stringify({ "application/file-explorer-clipboard": payload });
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).catch(() => {});
+      navigator.clipboard.writeText(text).catch(() => { });
     }
     toast(type === "move" ? `Cut ${ids.length} item(s)` : `Copied ${ids.length} item(s)`);
   }
@@ -419,21 +522,21 @@ export function bindFiles({ toast }) {
     const canPaste = target.allowed && hasClipboardData();
     const items = onItem
       ? [
-          { id: "rename", name: label("Rename"), enabled: modifiable && ids.length === 1 },
-          { id: "copy", name: label("Copy"), enabled: ids.length > 0 },
-          { id: "cut", name: label("Cut"), enabled: ids.length > 0 && modifiable },
-          { id: "paste", name: label("Paste"), enabled: canPaste },
-          "split",
-          { id: "delete", name: label("Delete"), enabled: ids.length > 0 && modifiable },
-          "split",
-          { id: "download", name: label("Download"), enabled: ids.length > 0 }
-        ]
+        { id: "rename", name: label("Rename"), enabled: modifiable && ids.length === 1 },
+        { id: "copy", name: label("Copy"), enabled: ids.length > 0 },
+        { id: "cut", name: label("Cut"), enabled: ids.length > 0 && modifiable },
+        { id: "paste", name: label("Paste"), enabled: canPaste },
+        "split",
+        { id: "delete", name: label("Delete"), enabled: ids.length > 0 && modifiable },
+        "split",
+        { id: "download", name: label("Download"), enabled: ids.length > 0 }
+      ]
       : [
-          { id: "new-folder", name: label("New folder"), enabled: modifiable },
-          { id: "paste", name: label("Paste"), enabled: canPaste },
-          "split",
-          { id: "download-dir", name: label("Download this directory"), enabled: true }
-        ];
+        { id: "new-folder", name: label("New folder"), enabled: modifiable },
+        { id: "paste", name: label("Paste"), enabled: canPaste },
+        "split",
+        { id: "download-dir", name: label("Download this directory"), enabled: true }
+      ];
 
     closeContextMenu();
     const main = feInstance.GetElements().mainwrap;
@@ -744,8 +847,11 @@ export function bindFiles({ toast }) {
 
       onrefresh: async function (folder, required) {
         const rel = getFolderRelPath(folder);
+        const load = startFolderLoad(folder);
         try {
-          const data = await fetchFiles(rel);
+          const data = await fetchFiles(rel, load.ctrl.signal);
+          if (folderLoads.get(folder) !== load) return;
+          setConnected(true);
           showDisk(data);
           const newEntries = (data.entries || [])
             .filter((e) => showDotfiles || !isDotEntry(e.name))
@@ -765,12 +871,24 @@ export function bindFiles({ toast }) {
             updatePasteButtons();
           }
         } catch (err) {
+          if (folderLoads.get(folder) !== load) return;
+          if (err && (err.name === "AbortError" || err.name === "TypeError")) {
+            setConnected(false);
+            if (this.IsMappedFolder(folder)) {
+              const current = folder.GetEntries ? folder.GetEntries().slice() : [];
+              folder.SetEntries(current);
+              updatePasteButtons();
+            }
+            return;
+          }
           if (this.IsMappedFolder(folder)) {
             folder.SetEntries([]);
             if (!rel) folder.SetAttributes({ canmodify: false });
             updatePasteButtons();
           }
           toast(err.message || "Failed to load directory");
+        } finally {
+          finishFolderLoad(folder, load);
         }
       },
 
@@ -1083,6 +1201,40 @@ export function bindFiles({ toast }) {
     });
   }
 
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      stopProbe();
+      return;
+    }
+    if (!tab || !tab.classList.contains("active")) return;
+    const was = connected;
+    probeConnection().then((ok) => {
+      if (ok && !was) triggerRefresh(true);
+    });
+    scheduleProbe();
+  });
+
+  document.querySelectorAll("nav button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.dataset.tab === "files") return;
+      stopProbe();
+    });
+  });
+
+  if (reconnectBtn) {
+    reconnectBtn.addEventListener("click", async () => {
+      reconnectBtn.disabled = true;
+      reconnectBtn.textContent = "Reconnecting…";
+      try {
+        const ok = await probeConnection();
+        if (ok) triggerRefresh(true);
+      } finally {
+        reconnectBtn.disabled = false;
+        reconnectBtn.textContent = "Reconnect";
+      }
+    });
+  }
+
   // Load explorer
   initExplorer();
   updateDiskStats();
@@ -1092,7 +1244,10 @@ export function bindFiles({ toast }) {
       triggerRefresh(true);
     },
     show() {
-      triggerRefresh(true);
+      probeConnection().then((ok) => {
+        if (ok) triggerRefresh(true);
+      });
+      scheduleProbe();
     }
   };
 }

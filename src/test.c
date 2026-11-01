@@ -27,13 +27,22 @@ static void dummy_progress(const char *phase, void *user) {
     snprintf((char *)user, 128, "%s", phase);
 }
 
-struct test_prog_ctx { int calls; int cancel_after; };
+struct test_prog_ctx {
+  int calls;
+  int cancel_after;
+};
 
-static int test_prog(void *u, const char *name, unsigned long long bd, unsigned long long tb, size_t fd, size_t tf) {
-  (void)name; (void)bd; (void)tb; (void)fd; (void)tf;
+static int test_prog(void *u, const char *name, unsigned long long bd,
+                     unsigned long long tb, size_t fd, size_t tf) {
+  (void)name;
+  (void)bd;
+  (void)tb;
+  (void)fd;
+  (void)tf;
   struct test_prog_ctx *c = (struct test_prog_ctx *)u;
   c->calls++;
-  if (c->cancel_after && c->calls >= c->cancel_after) return -1;
+  if (c->cancel_after && c->calls >= c->cancel_after)
+    return -1;
   return 0;
 }
 
@@ -202,7 +211,8 @@ int main(void) {
   boot_frame(&view, &in, &boot);
   assert(boot.action == BOOT_ACT_NONE);
 
-  /* Pressing encoder on row 0 opens USB storage. Start waits for the next frame. */
+  /* Pressing encoder on row 0 opens USB storage. Start waits for the next
+   * frame. */
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
@@ -380,7 +390,8 @@ int main(void) {
   assert(boot.action == BOOT_ACT_NONE);
   assert(boot.usb.phase == UI_USB_SD_PHASE_ACTIVE);
 
-  /* B1 draws the eject screen. The following frame finishes and asks main to reload. */
+  /* B1 draws the eject screen. The following frame finishes and asks main to
+   * reload. */
   input_begin(&in, 0);
   in.down = 1u << IN_B1;
   boot_frame(&view, &in, &boot);
@@ -391,7 +402,8 @@ int main(void) {
   boot_frame(&view, &in, &boot);
   assert(boot.action == BOOT_ACT_USB_SD_DONE);
   assert(!ui_usb_sd_is_active(&boot.usb));
-  /* Main reloads the card and returns to the apps list. Stay here to re-enter. */
+  /* Main reloads the card and returns to the apps list. Stay here to re-enter.
+   */
   boot.action = BOOT_ACT_NONE;
   boot.screen = BOOT_SCREEN_SETTINGS;
 
@@ -869,24 +881,29 @@ int main(void) {
   snprintf(path, sizeof path, "%s/autorun/boot-menu/boot-1.entry", dir);
   assert(access(path, F_OK) != 0);
 
-  /* A nested autorun package is a boot entry. boot.entry wins when it exists. */
+  /* A nested autorun package is a boot entry. boot.entry wins when it exists.
+   */
   snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun", dir);
   mkdir_p(path);
-  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun/autorun.json", dir);
+  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun/autorun.json",
+           dir);
   write_file(path, "{\"value0\":{\"scripts\":[{\"path\":\"start.sh\"}]}}\n");
   snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun/start.sh", dir);
   write_file(path, "#!/bin/sh\n");
-  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun/payload.bin", dir);
+  snprintf(path, sizeof path, "%s/autorun/apps/hand-mod/autorun/payload.bin",
+           dir);
   write_file(path, "data\n");
   snprintf(path, sizeof path, "%s/autorun/apps/named-mod/autorun", dir);
   mkdir_p(path);
-  snprintf(path, sizeof path, "%s/autorun/apps/named-mod/autorun/autorun.sh", dir);
+  snprintf(path, sizeof path, "%s/autorun/apps/named-mod/autorun/autorun.sh",
+           dir);
   write_file(path, "#!/bin/sh\n");
   snprintf(path, sizeof path, "%s/autorun/apps/named-mod/boot.entry", dir);
   write_file(path, "title=Named mod\nrun=autorun/autorun.sh\n");
   snprintf(path, sizeof path, "%s/autorun/apps/sh-only/autorun", dir);
   mkdir_p(path);
-  snprintf(path, sizeof path, "%s/autorun/apps/sh-only/autorun/autorun.sh", dir);
+  snprintf(path, sizeof path, "%s/autorun/apps/sh-only/autorun/autorun.sh",
+           dir);
   write_file(path, "#!/bin/sh\n");
   snprintf(path, sizeof path, "%s/autorun/apps/evil/autorun", dir);
   mkdir_p(path);
@@ -898,10 +915,14 @@ int main(void) {
   {
     int hand = -1, named = -1, shonly = -1, evil = -1, i;
     for (i = 0; i < updated.n; i++) {
-      if (strcmp(updated.items[i].id, "app:hand-mod") == 0) hand = i;
-      if (strcmp(updated.items[i].id, "app:named-mod") == 0) named = i;
-      if (strcmp(updated.items[i].id, "app:sh-only") == 0) shonly = i;
-      if (strcmp(updated.items[i].id, "app:evil") == 0) evil = i;
+      if (strcmp(updated.items[i].id, "app:hand-mod") == 0)
+        hand = i;
+      if (strcmp(updated.items[i].id, "app:named-mod") == 0)
+        named = i;
+      if (strcmp(updated.items[i].id, "app:sh-only") == 0)
+        shonly = i;
+      if (strcmp(updated.items[i].id, "app:evil") == 0)
+        evil = i;
     }
     assert(hand > 0);
     assert(strcmp(updated.items[hand].title, "hand-mod") == 0);
@@ -928,7 +949,8 @@ int main(void) {
   {
     int hand = -1, i;
     for (i = 0; i < updated.n; i++) {
-      if (strcmp(updated.items[i].id, "app:hand-mod") == 0) hand = i;
+      if (strcmp(updated.items[i].id, "app:hand-mod") == 0)
+        hand = i;
     }
     assert(hand > 0);
     assert(strcmp(updated.items[hand].title, "Hand Mod") == 0);
@@ -942,34 +964,48 @@ int main(void) {
     int i;
     snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun", dir);
     mkdir_p(path);
-    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/autorun.sh", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/autorun.sh",
+             dir);
     write_file(path, "#!/bin/sh\nsetsid sh /run/qol-run.sh \"$DIR\"\n");
-    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/qol-run.sh", dir);
-    write_file(path, "#!/bin/sh\nsystemctl stop ac50.service\nexport LD_PRELOAD=/tmp/mpcqol.so\n");
-    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/mpcqol.so", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/qol-run.sh",
+             dir);
+    write_file(path, "#!/bin/sh\nsystemctl stop ac50.service\nexport "
+                     "LD_PRELOAD=/tmp/mpcqol.so\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/mpcqol.so",
+             dir);
     write_file(path, "LD_PRELOAD ac50 not a script\n");
-    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/autorun.sh", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/autorun.sh",
+             dir);
     assert(menu_autorun_kind(path) == 1);
-    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/qol-run.sh", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/qol-run.sh",
+             dir);
     assert(menu_autorun_kind(path) == -1);
 
     snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun", dir);
     mkdir_p(path);
-    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.json", dir);
-    write_file(path, "{\"value0\":{\"scripts\":[{\"path\":\"./autorun.sh\"}]}}\n");
-    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.sh", dir);
-    write_file(path, "#!/bin/sh\nsystemd-run --unit=mpc-sample-usb-ssh /bin/sh worker.sh\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.json",
+             dir);
+    write_file(path,
+               "{\"value0\":{\"scripts\":[{\"path\":\"./autorun.sh\"}]}}\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.sh",
+             dir);
+    write_file(
+        path,
+        "#!/bin/sh\nsystemd-run --unit=mpc-sample-usb-ssh /bin/sh worker.sh\n");
     assert(menu_autorun_kind(path) == 0);
-    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/linked.sh", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/linked.sh",
+             dir);
     assert(symlink("/tmp/mpc-boot-marker.sh", path) == 0);
     write_file("/tmp/mpc-boot-marker.sh", "#!/bin/sh\nLD_PRELOAD=/tmp/x.so\n");
-    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.sh", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/sshkit/autorun/autorun.sh",
+             dir);
     assert(menu_autorun_kind(path) == 0);
     unlink("/tmp/mpc-boot-marker.sh");
 
     snprintf(path, sizeof path, "%s/autorun/apps/named/autorun", dir);
     mkdir_p(path);
-    snprintf(path, sizeof path, "%s/autorun/apps/named/autorun/autorun.json", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/named/autorun/autorun.json",
+             dir);
     write_file(path, "{\"value0\":{\"scripts\":[{\"path\":\"start.sh\"}]}}\n");
     snprintf(path, sizeof path, "%s/autorun/apps/named/autorun/start.sh", dir);
     write_file(path, "#!/bin/sh\nexport LD_PRELOAD=/tmp/mod.so\n");
@@ -980,7 +1016,8 @@ int main(void) {
     snprintf(path, sizeof path, "%s/autorun/apps/late/autorun/autorun.sh", dir);
     big = fopen(path, "wb");
     assert(big);
-    for (i = 0; i < 65536; i++) assert(fputc('a', big) == 'a');
+    for (i = 0; i < 65536; i++)
+      assert(fputc('a', big) == 'a');
     fputs("LD_PRELOAD\n", big);
     fclose(big);
     assert(menu_autorun_kind(path) == 0);
@@ -995,42 +1032,50 @@ int main(void) {
     assert(menu_autorun_kind(path) == -1);
     snprintf(path, sizeof path, "%s/autorun/apps/20-lab/mpcfw", dir);
     assert(menu_autorun_kind(path) == -1);
-    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/missing.sh", dir);
+    snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/missing.sh",
+             dir);
     assert(menu_autorun_kind(path) == -1);
   }
 
-  /* Device unzip: a deflated archive, a root package, and a path that escapes. */
+  /* Device unzip: a deflated archive, a root package, and a path that escapes.
+   */
   {
     char script[2048], cmd[640], run[256], zipout[512];
     snprintf(path, sizeof path, "%s/mkzip.py", dir);
-    snprintf(script, sizeof script,
-             "import zipfile, sys\n"
-             "kind = sys.argv[1]\n"
-             "dest = sys.argv[2]\n"
-             "if kind == 'hub':\n"
-             "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_DEFLATED)\n"
-             "    z.writestr('proj-1.0/README.md', 'skip')\n"
-             "    z.writestr('proj-1.0/DATA/nope.txt', 'nope')\n"
-             "    z.writestr('proj-1.0/autorun/autorun.json', '{\"value0\":{\"scripts\":[{\"path\":\"autorun.sh\"}]}}')\n"
-             "    z.writestr('proj-1.0/autorun/autorun.sh', '#!/bin/sh\\necho hi\\n')\n"
-             "    z.writestr('proj-1.0/autorun/note.txt', 'keep')\n"
-             "    z.close()\n"
-             "elif kind == 'root':\n"
-             "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED)\n"
-             "    z.writestr('autorun.sh', '#!/bin/sh\\n')\n"
-             "    z.writestr('extra.txt', 'keep')\n"
-             "    z.close()\n"
-             "elif kind == 'slip':\n"
-             "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED)\n"
-             "    z.writestr('autorun/autorun.sh', '#!/bin/sh\\n')\n"
-             "    z.writestr('autorun/../escaped.txt', 'nope')\n"
-             "    z.close()\n");
+    snprintf(
+        script, sizeof script,
+        "import zipfile, sys\n"
+        "kind = sys.argv[1]\n"
+        "dest = sys.argv[2]\n"
+        "if kind == 'hub':\n"
+        "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_DEFLATED)\n"
+        "    z.writestr('proj-1.0/README.md', 'skip')\n"
+        "    z.writestr('proj-1.0/DATA/nope.txt', 'nope')\n"
+        "    z.writestr('proj-1.0/autorun/autorun.json', "
+        "'{\"value0\":{\"scripts\":[{\"path\":\"autorun.sh\"}]}}')\n"
+        "    z.writestr('proj-1.0/autorun/autorun.sh', '#!/bin/sh\\necho "
+        "hi\\n')\n"
+        "    z.writestr('proj-1.0/autorun/note.txt', 'keep')\n"
+        "    z.close()\n"
+        "elif kind == 'root':\n"
+        "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED)\n"
+        "    z.writestr('autorun.sh', '#!/bin/sh\\n')\n"
+        "    z.writestr('extra.txt', 'keep')\n"
+        "    z.close()\n"
+        "elif kind == 'slip':\n"
+        "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED)\n"
+        "    z.writestr('autorun/autorun.sh', '#!/bin/sh\\n')\n"
+        "    z.writestr('autorun/../escaped.txt', 'nope')\n"
+        "    z.close()\n");
     write_file(path, script);
-    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' hub '%s/hub.zip'", dir, dir);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' hub '%s/hub.zip'", dir,
+             dir);
     assert(system(cmd) == 0);
-    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' root '%s/root.zip'", dir, dir);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' root '%s/root.zip'", dir,
+             dir);
     assert(system(cmd) == 0);
-    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' slip '%s/slip.zip'", dir, dir);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' slip '%s/slip.zip'", dir,
+             dir);
     assert(system(cmd) == 0);
 
     snprintf(zipout, sizeof zipout, "%s/zip-hub", dir);
@@ -1106,7 +1151,8 @@ int main(void) {
   sd_sync_and_drop_caches(NULL);
   sd_sync_and_drop_caches(dir);
   char dev_dummy[64], fs_dummy[64];
-  assert(sd_find_device(NULL, dev_dummy, sizeof dev_dummy, fs_dummy, sizeof fs_dummy) != 0);
+  assert(sd_find_device(NULL, dev_dummy, sizeof dev_dummy, fs_dummy,
+                        sizeof fs_dummy) != 0);
   assert(sd_check_repair(NULL) != 0);
   assert(sd_check_repair("/nonexistent/path/for/sd") != 0);
 
@@ -1156,28 +1202,41 @@ int main(void) {
 
     /* 1. Sandboxing and path resolution */
     char resolved[1024], rel[1024];
-    assert(file_ops_resolve("", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("/", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("internal", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(file_ops_resolve("", resolved, sizeof resolved, rel, sizeof rel) !=
+           0);
+    assert(file_ops_resolve("/", resolved, sizeof resolved, rel, sizeof rel) !=
+           0);
+    assert(file_ops_resolve("internal", resolved, sizeof resolved, rel,
+                            sizeof rel) == 0);
     assert(strcmp(rel, "internal") == 0);
-    assert(file_ops_resolve("internal/drums/kick.wav", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(file_ops_resolve("internal/drums/kick.wav", resolved,
+                            sizeof resolved, rel, sizeof rel) == 0);
     assert(strcmp(rel, "internal/drums/kick.wav") == 0);
-    assert(file_ops_resolve("sd", resolved, sizeof resolved, rel, sizeof rel) == 0);
+    assert(file_ops_resolve("sd", resolved, sizeof resolved, rel, sizeof rel) ==
+           0);
     assert(strcmp(rel, "sd") == 0);
 
     /* Traversal outside either volume must fail */
-    assert(file_ops_resolve("../", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("../etc/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("internal/../../etc/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("internal/drums/../../etc/shadow", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("sd/../etc/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("drums/./../..", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("../", resolved, sizeof resolved, rel,
+                            sizeof rel) != 0);
+    assert(file_ops_resolve("../etc/passwd", resolved, sizeof resolved, rel,
+                            sizeof rel) != 0);
+    assert(file_ops_resolve("internal/../../etc/passwd", resolved,
+                            sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("internal/drums/../../etc/shadow", resolved,
+                            sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("sd/../etc/passwd", resolved, sizeof resolved, rel,
+                            sizeof rel) != 0);
+    assert(file_ops_resolve("drums/./../..", resolved, sizeof resolved, rel,
+                            sizeof rel) != 0);
 
     char linkpath[1024];
     snprintf(linkpath, sizeof linkpath, "%s/escape", test_data);
     assert(symlink("/etc", linkpath) == 0);
-    assert(file_ops_resolve("internal/escape", resolved, sizeof resolved, rel, sizeof rel) != 0);
-    assert(file_ops_resolve("internal/escape/passwd", resolved, sizeof resolved, rel, sizeof rel) != 0);
+    assert(file_ops_resolve("internal/escape", resolved, sizeof resolved, rel,
+                            sizeof rel) != 0);
+    assert(file_ops_resolve("internal/escape/passwd", resolved, sizeof resolved,
+                            rel, sizeof rel) != 0);
 
     char *root_json = file_ops_list_json("");
     assert(root_json != NULL);
@@ -1229,7 +1288,8 @@ int main(void) {
 
     unsigned long long req_bytes = 0, free_bytes = 0;
     int fits = 0;
-    assert(file_ops_check_space(calc_items, 1, "internal", &req_bytes, &free_bytes, &fits) == 0);
+    assert(file_ops_check_space(calc_items, 1, "internal", &req_bytes,
+                                &free_bytes, &fits) == 0);
     assert(fits == 1);
     assert(req_bytes == calc_sz);
     assert(free_bytes > 0);
@@ -1253,17 +1313,20 @@ int main(void) {
     assert(file_ops_mkdir("internal/imported") == 0);
     assert(file_ops_copy(sd_items, 1, "internal/imported") == 0);
     char imported_copy[1024];
-    snprintf(imported_copy, sizeof imported_copy, "%s/imported/drums/snare.wav", test_data);
+    snprintf(imported_copy, sizeof imported_copy, "%s/imported/drums/snare.wav",
+             test_data);
     assert(access(imported_copy, F_OK) == 0);
     assert(access(sdcopy, F_OK) == 0); /* Both copies exist */
 
     /* Copy with progress and cancel */
     struct test_prog_ctx pctx = {0, 0};
-    assert(file_ops_copy_progress(copy_items, 1, "internal/imported", test_prog, &pctx) == 0);
+    assert(file_ops_copy_progress(copy_items, 1, "internal/imported", test_prog,
+                                  &pctx) == 0);
     assert(pctx.calls > 0);
 
     struct test_prog_ctx pctx_cancel = {0, 1};
-    assert(file_ops_copy_progress(copy_items, 1, "internal/imported", test_prog, &pctx_cancel) != 0);
+    assert(file_ops_copy_progress(copy_items, 1, "internal/imported", test_prog,
+                                  &pctx_cancel) != 0);
 
     /* 7. Move */
     const char *move_items[] = {"internal/drums"};
@@ -1275,7 +1338,8 @@ int main(void) {
     assert(access(fmove, F_OK) == 0);
     assert(access(fcopy, F_OK) != 0);
 
-    /* 8. ZIP export of Internal only. Archive paths stay relative to UserContent. */
+    /* 8. ZIP export of Internal only. Archive paths stay relative to
+     * UserContent. */
     char zip_file[1024];
     snprintf(zip_file, sizeof zip_file, "%s/export.zip", dir);
     int zfd = open(zip_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -1289,9 +1353,12 @@ int main(void) {
              "import zipfile, sys\n"
              "zf = zipfile.ZipFile(\"%s/export.zip\", \"r\")\n"
              "names = zf.namelist()\n"
-             "assert any(\"samples/readme.txt\" in n for n in names), f\"missing readme: {names}\"\n"
-             "assert any(\"backup/drums/snare.wav\" in n for n in names), f\"missing snare: {names}\"\n"
-             "assert not any(n.startswith(\"sd/\") or \"/sd/\" in n for n in names), f\"sd leaked: {names}\"\n"
+             "assert any(\"samples/readme.txt\" in n for n in names), "
+             "f\"missing readme: {names}\"\n"
+             "assert any(\"backup/drums/snare.wav\" in n for n in names), "
+             "f\"missing snare: {names}\"\n"
+             "assert not any(n.startswith(\"sd/\") or \"/sd/\" in n for n in "
+             "names), f\"sd leaked: {names}\"\n"
              "data = zf.read(\"samples/readme.txt\").decode(\"utf-8\")\n"
              "assert data == \"Sample note\", f\"bad content: {data}\"\n"
              "assert zf.testzip() is None, \"zip CRC test failed\"\n"

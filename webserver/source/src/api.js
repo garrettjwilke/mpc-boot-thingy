@@ -63,9 +63,12 @@ export async function rebootDevice() {
   return readBody(await fetch("/api/reboot", { method: "POST" }));
 }
 
-export async function fetchFiles(path = "") {
+export async function fetchFiles(path = "", signal = null) {
   const q = path ? "?path=" + encodeURIComponent(path) : "";
-  return readBody(await fetch("/api/files/list" + q, { cache: "no-store" }));
+  return readBody(await fetch("/api/files/list" + q, {
+    cache: "no-store",
+    signal: signal || undefined
+  }));
 }
 
 export async function createFolder(path) {
