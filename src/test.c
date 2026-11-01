@@ -1194,6 +1194,13 @@ int main(void) {
   assert(format_sd_card(dir, "MPC-Sample", dummy_progress, last_status) != 0);
   format_sd_set_mock(0, 0);
 
+  format_sd_set_mock(1, 0);
+  assert(format_sd_blank(dir, "MPC-Sample", dummy_progress, last_status) == 0);
+  assert(strcmp(last_status, "Format complete.") == 0);
+  format_sd_set_mock(1, 1);
+  assert(format_sd_blank(dir, NULL, dummy_progress, last_status) != 0);
+  format_sd_set_mock(0, 0);
+
   /* Web File Browser: virtual Storage root over Internal and the SD card. */
   {
     char test_data[512];

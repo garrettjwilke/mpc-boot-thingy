@@ -18,6 +18,11 @@ int format_sd_is_mock(void);
 int format_sd_card(const char *card, const char *label,
                    format_progress_fn progress, void *userdata);
 
+/* Formats the SD card and remounts it at the same path, empty.
+   Does not restore an existing boot tree. Returns 0 on success. */
+int format_sd_blank(const char *card, const char *label,
+                    format_progress_fn progress, void *userdata);
+
 #ifdef __cplusplus
 }
 #endif
