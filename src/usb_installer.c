@@ -725,11 +725,17 @@ int main(int argc, char **argv) {
   (void)argc;
   log_msg("=== USB Installer started ===");
 
-  /* Stop ac50 if running so we own the display and surface */
+  /* Stop whoever holds the display. ac50 is the stock app. Boot thingy
+     keeps the screen when that service is already stopped. */
   char *stop_argv[] = {"systemctl", "stop", "ac50.service", NULL};
   run_cmd(stop_argv);
   char *kill_argv[] = {"killall", "-9", "MPC Sample", NULL};
   run_cmd(kill_argv);
+  char *kill_boot_unit[] = {"systemctl", "kill", "-s", "KILL",
+                            "mpc-boot-thingy.service", NULL};
+  run_cmd(kill_boot_unit);
+  char *kill_boot[] = {"killall", "-9", "mpc-boot-thingy", NULL};
+  run_cmd(kill_boot);
   usleep(100 * 1000);
 
   char card[512] = {0};
