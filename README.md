@@ -5,6 +5,27 @@ you can install applications and choose between them easily from the menu.
 
 there are other enhancements this provides, but ehh...they're there... :)
 
+## apps you can try now
+
+**how to install apps:**
+> make sure boot thingy is installed, plug in your MPC Sample to your computer via USB. download the zip file from the release, and install it from the boot thingy web tool: [http://mpc-sample.local:8080](http://mpc-sample.local:8080)
+
+* [SampQOL-OS](https://github.com/snarebes/SampQOL-OS.git)
+   - many enhancements to the OS that improve overall functionality and UX.
+* [mpc-furnace](https://github.com/garrettjwilke/mpc-furnace)
+   - furnace editor for MPC Sample.
+   - create music for retro video game consoles.
+* [mpc-mdsdrv](https://github.com/garrettjwilke/mpc-mdsdrv)
+   - gui creation tool for [MDSDRV](https://github.com/superctr/MDSDRV) sound driver
+* [mpc-gen1recomp](https://github.com/garrettjwilke/mpc-gen1recomp)
+   - run the original pokemans games on your MPC Sample.
+* [mpc-cavestory](https://github.com/garrettjwilke/mpc-cavestory)
+   - play the original cavestory game on your MPC Sample
+   - making music is not why you bought an MPC Sample, you bought it to play video games!
+* [mpc-tic80](https://github.com/garrettjwilke/mpc-tic80)
+   - tic80 software in your MPC Sample
+   - way too many tic80 games to waste time on
+
 ## install
 
 ### usb install (recommended)
