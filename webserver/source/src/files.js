@@ -61,6 +61,46 @@ export function bindFiles({ toast }) {
     return ids.filter(Boolean).join("/");
   }
 
+  function pathIds(path) {
+    if (!Array.isArray(path)) return "";
+    return path
+      .map((part) => (Array.isArray(part) ? part[0] : part))
+      .filter(Boolean)
+      .join("/");
+  }
+
+  function destinationName(folder) {
+    const path = folder && folder.GetPath ? folder.GetPath() : [];
+    if (!path.length) return "Storage";
+    const last = path[path.length - 1];
+    if (Array.isArray(last)) return last[1] || last[0] || "Storage";
+    return String(last || "Storage");
+  }
+
+  function selectedEntries(fe, srcpath, srcids) {
+    const folder = fe && fe.GetMappedFolderFromPath ? fe.GetMappedFolderFromPath(srcpath) : null;
+    const entries = folder && folder.GetEntries ? folder.GetEntries() : [];
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    return srcids.map((id) => byId.get(id) || { id, name: String(id), type: "file" });
+  }
+
+  function describeSelection(entries) {
+    if (entries.length === 1) {
+      const entry = entries[0];
+      return entry.type === "folder"
+        ? `the folder "${entry.name}" and everything inside it`
+        : `"${entry.name}"`;
+    }
+    const folders = entries.filter((entry) => entry.type === "folder").length;
+    if (folders === entries.length) {
+      return `${entries.length} folders and everything inside them`;
+    }
+    if (folders) {
+      return `${entries.length} items, including ${folders} folder${folders === 1 ? "" : "s"} and their contents`;
+    }
+    return `${entries.length} items`;
+  }
+
   let activeOverlay = null;
 
   function lockUI({ title = "Transferring files to MPC…", message = "Uploading…", onCancel = null } = {}) {
@@ -297,6 +337,11 @@ export function bindFiles({ toast }) {
       },
 
       onrename: async function (renamed, folder, entry, newname) {
+        const kind = entry.type === "folder" ? "folder" : "file";
+        if (!confirm(`Rename the ${kind} "${entry.name}" to "${newname}"?`)) {
+          renamed("Cancelled");
+          return;
+        }
         try {
           const rel = getFolderRelPath(folder);
           const itemPath = rel ? rel + "/" + entry.id : entry.id;
@@ -339,9 +384,8 @@ export function bindFiles({ toast }) {
 
       ondelete: async function (deleted, folder, ids, entries) {
         const count = entries.length;
-        const msg = count === 1 ? `"${entries[0].name}"` : `${count} items`;
-        if (!confirm(`Are you sure you want to permanently delete ${msg}? This cannot be undone.`)) {
-          deleted("Cancelled deletion");
+        if (!confirm(`Delete ${describeSelection(entries)}? This cannot be undone.`)) {
+          deleted("Cancelled");
           return;
         }
         try {
@@ -358,8 +402,14 @@ export function bindFiles({ toast }) {
       },
 
       onmove: async function (moved, srcpath, srcids, destfolder) {
+        const entries = selectedEntries(this, srcpath, srcids);
+        const destName = destinationName(destfolder);
+        if (!confirm(`Move ${describeSelection(entries)} into "${destName}"?`)) {
+          moved("Cancelled");
+          return;
+        }
         try {
-          const srcRel = srcpath.filter(Boolean).join("/");
+          const srcRel = pathIds(srcpath);
           const destRel = getFolderRelPath(destfolder);
           const items = srcids.map((id) => (srcRel ? srcRel + "/" + id : id));
           await moveFiles(items, destRel);
@@ -373,8 +423,14 @@ export function bindFiles({ toast }) {
       },
 
       oncopy: async function (copied, srcpath, srcids, destfolder) {
+        const entries = selectedEntries(this, srcpath, srcids);
+        const destName = destinationName(destfolder);
+        if (!confirm(`Copy ${describeSelection(entries)} into "${destName}"?`)) {
+          copied("Cancelled");
+          return;
+        }
         try {
-          const srcRel = srcpath.filter(Boolean).join("/");
+          const srcRel = pathIds(srcpath);
           const destRel = getFolderRelPath(destfolder);
           const items = srcids.map((id) => (srcRel ? srcRel + "/" + id : id));
           await copyFiles(items, destRel);
