@@ -96,6 +96,7 @@ main { max-width: 1100px; margin: 22px auto; padding: 0 24px 48px; }
 .card h3 { margin: 0 0 12px; font-size: 15px; }
 .muted { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
 .btn {
+  display: inline-block;
   background: var(--accent);
   color: #fff;
   border: none;
@@ -104,6 +105,7 @@ main { max-width: 1100px; margin: 22px auto; padding: 0 24px 48px; }
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  text-decoration: none;
 }
 .btn:hover { background: var(--accent-hover); }
 .btn.secondary {
