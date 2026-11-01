@@ -674,6 +674,21 @@ static int run_boot_script(const char *card, const struct menu_entry *e) {
 
 #define AUTORUN_RC "/run/mpc-boot-autorun.rc"
 
+/* 1 when an autorun script checks for this menu's pid file. Those scripts
+   (mpc-ui-toolkit pack-autorun.sh) run the app in the foreground and return
+   when it quits, so the menu should wait and reopen instead of handing off. */
+static int script_waits_for_menu(const char *path) {
+  FILE *f = fopen(path, "rb");
+  char buf[65536 + 1];
+  size_t n;
+  if (!f)
+    return 0;
+  n = fread(buf, 1, sizeof buf - 1, f);
+  fclose(f);
+  buf[n] = 0;
+  return strstr(buf, "/run/mpc-boot-thingy.pid") != NULL;
+}
+
 /* Sidecar scripts return. A replacement package backgrounds its launcher and
    returns too. 120s is a backstop so a stuck script still reaches stock. */
 static int wait_autorun_rc(void) {
@@ -772,6 +787,10 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
   int kind;
   resolve_run(e->base[0] ? e->base : card, e->run, path, sizeof path);
   kind = menu_autorun_kind(path);
+  /* mpc-ui-toolkit packages run in the foreground when the menu is alive and
+     expect the menu to take the screen back. Run them like any other app. */
+  if (kind >= 0 && script_waits_for_menu(path))
+    kind = -1;
   if (kind >= 0) {
     if (lstat(path, &script_st) != 0 || S_ISLNK(script_st.st_mode) ||
         !S_ISREG(script_st.st_mode)) {
