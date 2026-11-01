@@ -11,9 +11,12 @@
 #include "screen.h"
 #include "sd_check.h"
 #include "surface.h"
+#include "testapp.h"
 #include "theme.h"
 #include "ui.h"
 #include "usb_sd.h"
+
+#include <sys/mount.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -378,12 +381,21 @@ static void on_format_progress(const char *phase, void *userdata) {
   draw_menu_frame(ctx->scr, ctx->back, ctx->front, ctx->midi, &quiet, ctx->ui);
 }
 
+static int handoff_testapp(struct surface *midi, struct screen *scr);
+
 static int wait_shift(struct surface *midi, struct parser *p,
-                      struct input_dev *dev) {
+                      struct input_dev *dev, struct screen *scr) {
   button_led(midi, INPUT_BUTTON_NOTE[IN_SHIFT], 8);
   double start = mono_ms();
   int held = 0;
   while (mono_ms() - start < WINDOW_MS) {
+    int handed = handoff_testapp(midi, scr);
+    if (handed < 0)
+      return -1;
+    if (handed > 0) {
+      held = 1;
+      break;
+    }
     if (g_reload_requested || g_boot_now_requested)
       break;
     struct pollfd pf = {.fd = midi->fd, .events = POLLIN};
@@ -700,6 +712,16 @@ static int launch_autorun(struct surface *midi, struct screen *scr,
   surface_close(midi);
   screen_close(scr);
   unlink(AUTORUN_RC);
+  {
+    /* RemainAfterExit keeps the last handoff unit loaded. Drop it, or the
+       next systemd-run fails with "already loaded". */
+    char *stop_argv[] = {"systemctl", "stop", "mpc-boot-autorun.service",
+                         NULL};
+    char *reset_argv[] = {"systemctl", "reset-failed",
+                          "mpc-boot-autorun.service", NULL};
+    run_cmd(stop_argv);
+    run_cmd(reset_argv);
+  }
   if (run_cmd(argv) != 0) {
     fprintf(stderr, "autorun handoff failed\n");
     return 0;
@@ -838,6 +860,39 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
   }
   flush_and_drop_caches(card);
   return 0;
+}
+
+static void release_devices(struct surface *midi, struct screen *scr);
+static int reopen_after_app(struct surface *midi, struct screen *scr);
+
+/* The stock launcher is about to start. Drop the screen and pads, then wait
+   until it and the installer are gone. 1 means the menu should be drawn
+   again. -1 means the screen could not be reopened. */
+static int handoff_testapp(struct surface *midi, struct screen *scr) {
+  double start;
+  int seen;
+  if (!testapp_request_pending())
+    return 0;
+  fprintf(stderr, "testapp: releasing the screen\n");
+  release_devices(midi, scr);
+  if (testapp_mark_ready() != 0)
+    fprintf(stderr, "testapp: could not mark ready\n");
+  start = mono_ms();
+  seen = 0;
+  for (;;) {
+    if (testapp_proc_has_launcher("/proc"))
+      seen = 1;
+    else if (seen)
+      break;
+    else if (mono_ms() - start > 3000.0)
+      break;
+    usleep(50 * 1000);
+  }
+  if (reopen_after_app(midi, scr) != 0) {
+    fprintf(stderr, "testapp: could not reopen the screen\n");
+    return -1;
+  }
+  return 1;
 }
 
 static int reopen_after_app(struct surface *midi, struct screen *scr) {
@@ -1010,6 +1065,128 @@ static int wants_menu(int argc, char **argv) {
   return 0;
 }
 
+static int g_testapp_wrapped;
+
+static int file_is_elf(const char *path) {
+  FILE *f = fopen(path, "rb");
+  unsigned char b[4];
+  int ok;
+  if (!f)
+    return 0;
+  ok = fread(b, 1, 4, f) == 4 && b[0] == 0x7f && b[1] == 'E' && b[2] == 'L' &&
+       b[3] == 'F';
+  fclose(f);
+  return ok;
+}
+
+static int file_contains(const char *path, const char *needle) {
+  FILE *f = fopen(path, "rb");
+  char buf[4096];
+  size_t n;
+  if (!f || !needle)
+    return 0;
+  n = fread(buf, 1, sizeof buf - 1, f);
+  fclose(f);
+  buf[n] = 0;
+  return strstr(buf, needle) != NULL;
+}
+
+static void unmount_testapp_wrapper(void) {
+  if (!g_testapp_wrapped)
+    return;
+  g_testapp_wrapped = 0;
+  if (umount("/usr/bin/test-app-launcher") != 0)
+    fprintf(stderr, "testapp: umount failed: %s\n", strerror(errno));
+}
+
+static void arm_testapp_unmount(void) {
+  if (g_testapp_wrapped)
+    return;
+  g_testapp_wrapped = 1;
+  atexit(unmount_testapp_wrapper);
+}
+
+/* Cover the stock launcher so a /testapp upload asks us to drop the screen
+   before the real launcher starts. A missing launcher is left alone. */
+static void install_testapp_wrapper(void) {
+  const char *src = "/usr/bin/test-app-launcher";
+  const char *real = "/run/test-app-launcher.real";
+  const char *wrap = "/run/test-app-launcher.wrap";
+  static const char script[] =
+      "#!/bin/sh\n"
+      "# mpc-boot-thingy testapp handoff\n"
+      "REAL=/run/test-app-launcher.real\n"
+      "REQ=/run/mpc-boot-testapp.request\n"
+      "READY=/run/mpc-boot-testapp.ready\n"
+      "PIDFILE=/run/mpc-boot-thingy.pid\n"
+      "alive=0\n"
+      "if [ -f \"$PIDFILE\" ]; then\n"
+      "  pid=$(cat \"$PIDFILE\" 2>/dev/null || true)\n"
+      "  if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then\n"
+      "    alive=1\n"
+      "  fi\n"
+      "fi\n"
+      "if [ \"$alive\" -eq 1 ]; then\n"
+      "  rm -f \"$READY\"\n"
+      "  : > \"$REQ\"\n"
+      "  i=0\n"
+      "  while [ \"$i\" -lt 40 ]; do\n"
+      "    if [ -f \"$READY\" ]; then\n"
+      "      break\n"
+      "    fi\n"
+      "    i=$((i + 1))\n"
+      "    sleep 0.05\n"
+      "  done\n"
+      "  rm -f \"$REQ\" \"$READY\"\n"
+      "fi\n"
+      "exec \"$REAL\" \"$@\"\n";
+  FILE *out;
+  if (access(src, F_OK) != 0)
+    return;
+  if (!file_is_elf(real)) {
+    if (!file_is_elf(src)) {
+      fprintf(stderr, "testapp: launcher is not an ELF binary\n");
+      return;
+    }
+    if (copy_file(src, real) != 0 || !file_is_elf(real)) {
+      fprintf(stderr, "testapp: could not save the launcher\n");
+      unlink(real);
+      return;
+    }
+  }
+  if (chmod(real, 0755) != 0) {
+    fprintf(stderr, "testapp: could not mark the launcher executable\n");
+    return;
+  }
+  out = fopen(wrap, "w");
+  if (!out) {
+    fprintf(stderr, "testapp: could not write the wrapper\n");
+    return;
+  }
+  if (fputs(script, out) < 0) {
+    fclose(out);
+    fprintf(stderr, "testapp: could not write the wrapper\n");
+    return;
+  }
+  if (fclose(out) != 0) {
+    fprintf(stderr, "testapp: could not write the wrapper\n");
+    return;
+  }
+  if (chmod(wrap, 0755) != 0) {
+    fprintf(stderr, "testapp: could not mark the wrapper executable\n");
+    return;
+  }
+  if (mount(wrap, src, "", MS_BIND, NULL) != 0) {
+    if (!file_is_elf(src) && file_contains(src, "mpc-boot-testapp.request")) {
+      arm_testapp_unmount();
+      return;
+    }
+    fprintf(stderr, "testapp: bind mount failed: %s\n", strerror(errno));
+    return;
+  }
+  arm_testapp_unmount();
+}
+
 int main(int argc, char **argv) {
   struct sigaction sa;
   memset(&sa, 0, sizeof sa);
@@ -1045,6 +1222,7 @@ int main(int argc, char **argv) {
     restore_stock_if_stopped(card);
     return 1;
   }
+  install_testapp_wrapper();
   if (screen_open(&scr) != 0) {
     release_devices(&midi, &scr);
     restore_stock_if_stopped(card);
@@ -1081,7 +1259,14 @@ int main(int argc, char **argv) {
     else
       printf("prompt: hold SHIFT for boot thingy\n");
     fflush(stdout);
-    held = wait_shift(&midi, &parser, &dev);
+    held = wait_shift(&midi, &parser, &dev, &scr);
+    if (held < 0) {
+      release_devices(&midi, &scr);
+      restore_stock_if_stopped(card);
+      free(back);
+      free(front);
+      return 1;
+    }
   }
   if (has_boot_now) {
     int bsel = -1;
@@ -1158,6 +1343,20 @@ int main(int argc, char **argv) {
 
   int rc = 1;
   for (;;) {
+    int handed = handoff_testapp(&midi, &scr);
+    if (handed < 0) {
+      rc = 1;
+      break;
+    }
+    if (handed > 0) {
+      memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
+      parser = (struct parser){0};
+      dev = (struct input_dev){0};
+      input_begin(&quiet, &dev);
+      started = mono_ms();
+      wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
+      continue;
+    }
     if (g_reload_requested) {
       g_reload_requested = 0;
       reload_menu_state(card, sizeof card, &menu, &ui, catalog, &npatches,
@@ -1224,14 +1423,18 @@ int main(int argc, char **argv) {
       }
     }
     struct pollfd pf = {.fd = midi.fd, .events = POLLIN};
-    int pr = poll(&pf, 1, poll_ms(wake, started));
+    int wait_for = poll_ms(wake, started);
+    int pr;
+    if (wait_for > 200)
+      wait_for = 200;
+    pr = poll(&pf, 1, wait_for);
     if (pr < 0) {
       if (errno == EINTR)
         continue;
       break;
     }
     if (pr == 0) {
-      if (wake <= 0)
+      if (wake <= 0 || (int)(mono_ms() - started) < wake)
         continue;
       input_begin(&quiet, &dev);
       started = mono_ms();

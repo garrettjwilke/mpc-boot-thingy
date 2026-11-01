@@ -7,6 +7,7 @@
 #include "menu.h"
 #include "png.h"
 #include "sd_check.h"
+#include "testapp.h"
 #include "theme.h"
 #include "ui.h"
 #include "unzip.h"
@@ -21,6 +22,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+extern int setenv(const char *name, const char *value, int overwrite);
 
 static void dummy_progress(const char *phase, void *user) {
   if (phase && user)
@@ -1389,6 +1392,46 @@ int main(void) {
     assert(still != NULL);
     assert(strstr(still, "\"id\":\"sd\"") != NULL);
     free(still);
+  }
+
+  {
+    char req[512], ready[512], proc[512];
+    snprintf(req, sizeof req, "%s/testapp.request", dir);
+    snprintf(ready, sizeof ready, "%s/testapp.ready", dir);
+    snprintf(proc, sizeof proc, "%s/proc", dir);
+    assert(setenv("MPC_BOOT_TESTAPP_REQUEST", req, 1) == 0);
+    assert(setenv("MPC_BOOT_TESTAPP_READY", ready, 1) == 0);
+    assert(!testapp_request_pending());
+    write_file(req, "1\n");
+    assert(testapp_request_pending());
+    assert(access(ready, F_OK) != 0);
+    assert(testapp_mark_ready() == 0);
+    assert(access(ready, F_OK) == 0);
+    assert(testapp_request_pending());
+    assert(!testapp_comm_matches(NULL));
+    assert(!testapp_comm_matches(""));
+    assert(!testapp_comm_matches("mpc-boot-thingy"));
+    assert(!testapp_comm_matches("sh"));
+    assert(testapp_comm_matches("test-app-launcher"));
+    assert(testapp_comm_matches("test-app-launche"));
+    assert(testapp_comm_matches("usb_installer"));
+    assert(testapp_comm_matches("usb_installer_t"));
+    assert(testapp_comm_matches("usb_installer_testapp"));
+    mkdir_p(proc);
+    snprintf(path, sizeof path, "%s/1", proc);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/1/comm", proc);
+    write_file(path, "mpc-boot-thingy\n");
+    snprintf(path, sizeof path, "%s/2", proc);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/2/comm", proc);
+    write_file(path, "test-app-launche\n");
+    assert(testapp_proc_has_launcher(proc));
+    write_file(path, "usb_installer_t\n");
+    assert(testapp_proc_has_launcher(proc));
+    assert(unlink(path) == 0);
+    assert(!testapp_proc_has_launcher(proc));
+    assert(!testapp_proc_has_launcher(NULL));
   }
 
   puts("selftest ok");
