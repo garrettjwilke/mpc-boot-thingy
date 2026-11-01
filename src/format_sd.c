@@ -217,3 +217,127 @@ int format_sd_card(const char *card, const char *label,
   return 0;
 }
 
+static void unmount_dev(const char *dev) {
+  if (access("/usr/bin/edisksctl", X_OK) == 0) {
+    char *edisks_argv[] = {"/usr/bin/edisksctl", "unmount", (char *)dev, NULL};
+    run_cmd_quiet(edisks_argv);
+  }
+  char *umount_argv[] = {"umount", (char *)dev, NULL};
+  if (run_cmd_quiet(umount_argv) != 0) {
+    char *umount_l_argv[] = {"umount", "-l", (char *)dev, NULL};
+    run_cmd_quiet(umount_l_argv);
+  }
+}
+
+static int mount_dev(const char *dev, const char *card) {
+  char *mkdir_mnt[] = {"mkdir", "-p", (char *)card, NULL};
+  run_cmd_quiet(mkdir_mnt);
+  char *mount_argv[] = {"mount", "-o", "rw,dirsync", (char *)dev, (char *)card,
+                        NULL};
+  if (run_cmd_quiet(mount_argv) == 0)
+    return 0;
+  char *mount_fb[] = {"mount", (char *)dev, (char *)card, NULL};
+  return run_cmd_quiet(mount_fb);
+}
+
+int format_sd_blank(const char *card, const char *label,
+                    format_progress_fn progress, void *userdata) {
+  char lbl[16];
+  snprintf(lbl, sizeof lbl, "%s",
+           (label && label[0]) ? label : "MPC-Sample");
+
+  if (format_sd_is_mock()) {
+    report_progress(progress, userdata, "Unmounting SD card...");
+    usleep(50 * 1000);
+    report_progress(progress, userdata, "Formatting exFAT filesystem...");
+    usleep(50 * 1000);
+    if (s_mock_format_fail) {
+      report_progress(progress, userdata, "Error: format failed!");
+      return -1;
+    }
+    report_progress(progress, userdata, "Remounting SD card...");
+    usleep(50 * 1000);
+    report_progress(progress, userdata, "Format complete.");
+    return 0;
+  }
+
+  if (!card || !card[0]) {
+    report_progress(progress, userdata, "Error: Could not locate SD device!");
+    return -1;
+  }
+
+  char dev[256] = {0}, fstype[64] = {0};
+  if (sd_find_device(card, dev, sizeof dev, fstype, sizeof fstype) != 0 ||
+      strncmp(dev, "/dev/", 5) != 0) {
+    report_progress(progress, userdata, "Error: Could not locate SD device!");
+    return -1;
+  }
+
+  char cwd[512];
+  if (!getcwd(cwd, sizeof cwd))
+    cwd[0] = 0;
+
+  report_progress(progress, userdata, "Stopping background services...");
+  char *stop_web[] = {"systemctl", "stop", "mpc-boot-web.service", NULL};
+  run_cmd_quiet(stop_web);
+  char *stop_ssh[] = {"systemctl", "stop", "mpc-boot-ssh.service", NULL};
+  run_cmd_quiet(stop_ssh);
+
+  if (chdir("/run") != 0)
+    (void)chdir("/");
+
+  report_progress(progress, userdata, "Unmounting SD card...");
+  sync();
+  usleep(50 * 1000);
+  sync();
+  unmount_dev(dev);
+  usleep(100 * 1000);
+
+  report_progress(progress, userdata, "Formatting exFAT filesystem...");
+  char *mkfs_tool = NULL;
+  if (access("/usr/sbin/mkfs.exfat", X_OK) == 0)
+    mkfs_tool = "/usr/sbin/mkfs.exfat";
+  else if (access("/sbin/mkfs.exfat", X_OK) == 0)
+    mkfs_tool = "/sbin/mkfs.exfat";
+  else
+    mkfs_tool = "mkfs.exfat";
+
+  int formatted = 0;
+  for (int attempt = 0; attempt < 4 && !formatted; attempt++) {
+    char *fmt_argv[] = {mkfs_tool, "-L", lbl, dev, NULL};
+    if (attempt)
+      usleep(200 * 1000);
+    if (run_cmd_quiet(fmt_argv) == 0)
+      formatted = 1;
+  }
+  if (!formatted) {
+    char vfat_lbl[12];
+    snprintf(vfat_lbl, sizeof vfat_lbl, "%s", lbl);
+    char *vfat_argv[] = {"mkfs.vfat", "-F", "32", "-n", vfat_lbl, dev, NULL};
+    if (run_cmd_quiet(vfat_argv) == 0)
+      formatted = 1;
+  }
+  if (!formatted) {
+    mount_dev(dev, card);
+    if (cwd[0])
+      (void)chdir(cwd);
+    report_progress(progress, userdata, "Error: mkfs failed!");
+    return -3;
+  }
+
+  report_progress(progress, userdata, "Remounting SD card...");
+  if (mount_dev(dev, card) != 0) {
+    if (cwd[0])
+      (void)chdir(cwd);
+    report_progress(progress, userdata,
+                    "Error: Mounting formatted card failed!");
+    return -4;
+  }
+
+  sync();
+  if (cwd[0])
+    (void)chdir(cwd);
+  report_progress(progress, userdata, "Format complete.");
+  return 0;
+}
+

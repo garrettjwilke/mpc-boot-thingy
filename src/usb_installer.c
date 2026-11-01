@@ -3,9 +3,11 @@
    Triggered over USB via POST /testapp on port 80.
    Runs completely in RAM, draws a confirmation screen, installs/updates
    boot-thingy on the SD card, then waits for the user to reboot. An existing
-   autoboot can be kept as a named boot entry or deleted. */
+   autoboot can be kept as a named boot entry or deleted. The card can also
+   be reformatted first; that erases the card, then installs boot thingy. */
 
 #define _GNU_SOURCE
+#include "format_sd.h"
 #include "input.h"
 #include "screen.h"
 #include "sd_check.h"
@@ -653,12 +655,16 @@ static void wait_for_reboot(struct screen *scr, uint32_t *back, uint32_t *front,
   }
 }
 
-/* Left is choice 0, right is choice 1. Returns -1 while nothing is chosen. */
+/* Left is choice 0, right is choice 1. The wheel moves between those two.
+   offer_format adds the top B2 key, which returns 2. danger paints the right
+   button as the destructive one. Returns -1 while nothing is chosen. */
 static int installer_yes_no(struct ui *u, const struct input *in,
                             struct ui_soft_state *soft, int *selected,
                             long elapsed_ms, int button_y, const char *left,
-                            const char *right) {
+                            const char *right, int danger, int offer_format) {
   int choice = -1;
+  if (*selected != 0)
+    *selected = 1;
   if (in) {
     if (in->encoder > 0)
       *selected = 1;
@@ -667,7 +673,7 @@ static int installer_yes_no(struct ui *u, const struct input *in,
   }
 
   int active_key = *selected == 0 ? 0 : 2;
-  const char *labels[3] = {left, "", right};
+  const char *labels[3] = {left, offer_format ? "Format" : "", right};
   struct ui_soft_style soft_st = {
       .fill = 0x2a303a,
       .text = 0xd0d8e0,
@@ -684,6 +690,8 @@ static int installer_yes_no(struct ui *u, const struct input *in,
   if (armed) {
     if (input_down(in, IN_B1) || input_down(in, IN_STOP))
       choice = 0;
+    else if (offer_format && input_down(in, IN_B2))
+      choice = 2;
     else if (input_down(in, IN_B3) || input_down(in, IN_PLAY))
       choice = 1;
     else if (in->encoder_press)
@@ -692,23 +700,27 @@ static int installer_yes_no(struct ui *u, const struct input *in,
       choice = 0;
     else if (key_pressed == 2)
       choice = 1;
+    else if (offer_format && key_pressed == 1)
+      choice = 2;
   }
 
+  int left_hot = *selected == 0;
+  int right_hot = *selected == 1;
   struct ui_button b_no = {
-      .fill = (*selected == 0 ? 0x442222 : 0x22262c),
-      .text = (*selected == 0 ? 0xffffff : 0x8892a0),
-      .highlighted = (*selected == 0),
-      .highlight = 0xff4444,
+      .fill = left_hot ? (danger ? 0x224422 : 0x442222) : 0x22262c,
+      .text = left_hot ? 0xffffff : 0x8892a0,
+      .highlighted = left_hot,
+      .highlight = danger ? 0x44ff44 : 0xff4444,
       .highlight_px = 2,
   };
   if (ui_button(u, 24, button_y, 126, 42, left, b_no, armed ? in : NULL))
     choice = 0;
 
   struct ui_button b_yes = {
-      .fill = (*selected == 1 ? 0x224422 : 0x22262c),
-      .text = (*selected == 1 ? 0xffffff : 0x8892a0),
-      .highlighted = (*selected == 1),
-      .highlight = 0x44ff44,
+      .fill = right_hot ? (danger ? 0x442222 : 0x224422) : 0x22262c,
+      .text = right_hot ? 0xffffff : 0x8892a0,
+      .highlighted = right_hot,
+      .highlight = danger ? 0xff4444 : 0x44ff44,
       .highlight_px = 2,
   };
   if (ui_button(u, 170, button_y, 126, 42, right, b_yes, armed ? in : NULL))
@@ -716,9 +728,30 @@ static int installer_yes_no(struct ui *u, const struct input *in,
 
   for (int p = 0; p < 16; p++)
     ui_led(u, p, 0, 0, 0);
-  ui_led(u, 0, *selected == 0 ? 120 : 15, 0, 0);
-  ui_led(u, 3, 0, *selected == 1 ? 120 : 15, 0);
+  if (danger) {
+    ui_led(u, 0, 0, *selected == 0 ? 120 : 15, 0);
+    ui_led(u, 3, *selected == 1 ? 120 : 15, 0, 0);
+  } else {
+    ui_led(u, 0, *selected == 0 ? 120 : 15, 0, 0);
+    ui_led(u, 3, 0, *selected == 1 ? 120 : 15, 0);
+  }
   return choice;
+}
+
+struct install_fmt_ctx {
+  struct screen *scr;
+  uint32_t *back;
+  uint32_t *front;
+  struct surface *midi;
+};
+
+static void on_install_format(const char *phase, void *userdata) {
+  struct install_fmt_ctx *ctx = userdata;
+  if (!ctx)
+    return;
+  draw_status_screen(ctx->scr, ctx->back, ctx->front, ctx->midi, "Formatting...",
+                     phase ? phase : "Erasing the SD card...");
+  log_msg("format: %s", phase ? phase : "");
 }
 
 int main(int argc, char **argv) {
@@ -802,21 +835,23 @@ int main(int argc, char **argv) {
   snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
   memset(&editor, 0, sizeof editor);
 
-  enum { STEP_KEEP, STEP_EDIT, STEP_CONFIRM };
+  enum { STEP_KEEP, STEP_EDIT, STEP_CONFIRM, STEP_FORMAT_WARN };
   int step = mode == MODE_MIGRATE ? STEP_KEEP : STEP_CONFIRM;
+  int step_before_warn = STEP_CONFIRM;
   int selected = 1; /* 0 = left, 1 = right. Keep and Yes start selected. */
   int keep_old = 0;
-  int choice = -1; /* install: -1 pending, 0 = No, 1 = Yes */
+  int choice = -1; /* -1 pending, 0 = No, 1 = install, 2 = reformat then install */
 
   const char *question =
       (mode == MODE_UPDATE) ? "Update boot thingy?" : "Install boot thingy?";
 
-  struct timespec start_ts;
-  clock_gettime(CLOCK_MONOTONIC, &start_ts);
-
   log_msg("Entering UI loop: mode=%d question='%s'", mode, question);
   if (mode == MODE_MIGRATE)
     log_msg("Existing autoboot found");
+
+  struct timespec start_ts, arm_ts;
+  clock_gettime(CLOCK_MONOTONIC, &start_ts);
+  arm_ts = start_ts;
 
   while (choice < 0) {
     input_begin(&in, &dev);
@@ -839,6 +874,8 @@ int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     long elapsed_ms = (now.tv_sec - start_ts.tv_sec) * 1000 +
                       (now.tv_nsec - start_ts.tv_nsec) / 1000000;
+    long armed_ms = (now.tv_sec - arm_ts.tv_sec) * 1000 +
+                    (now.tv_nsec - arm_ts.tv_nsec) / 1000000;
 
     /* 5 minute timeout: cancel & reboot */
     if (elapsed_ms > 300000) {
@@ -891,7 +928,9 @@ int main(int argc, char **argv) {
       ui_text(&u, 20, 48, "USB INSTALLER", 0xffb000, 1);
 
       int button_y = 134;
-      const char *footer = "Top buttons: No / Yes       Wheel: Select";
+      int offer_format = step != STEP_FORMAT_WARN;
+      int danger = step == STEP_FORMAT_WARN;
+      const char *footer = "Top: No / Format / Yes    Wheel: Select";
       const char *left = "No";
       const char *right = "Yes";
       if (step == STEP_KEEP) {
@@ -903,9 +942,18 @@ int main(int argc, char **argv) {
         ui_text(&u, 16, 128, "Would you like to keep or delete", 0xffffff, 1);
         ui_text(&u, 16, 144, "the existing autoboot?", 0xffffff, 1);
         button_y = 164;
-        footer = "Top: Delete / Keep        Wheel: Select";
+        footer = "Top: Delete / Format / Keep  Wheel: Select";
         left = "Delete";
         right = "Keep";
+      } else if (step == STEP_FORMAT_WARN) {
+        ui_text(&u, 20, 64, "Reformat SD card?", 0xffffff, 1);
+        ui_text(&u, 20, 92, "ALL data on the SD card will be", 0xffb000, 1);
+        ui_text(&u, 20, 108, "erased. This cannot be undone.", 0xffb000, 1);
+        ui_text(&u, 20, 132, "Boot thingy is installed after.", 0x9aa4b0, 1);
+        button_y = 156;
+        footer = "Top: Cancel / Reformat      Wheel: Select";
+        left = "Cancel";
+        right = "Reformat";
       } else {
         char shown[40];
         char subtitle_buf[80];
@@ -925,16 +973,22 @@ int main(int argc, char **argv) {
         ui_text(&u, 20, 104, subtitle, 0x9aa4b0, 1);
       }
 
-      int pick = installer_yes_no(&u, &in, &soft_state, &selected, elapsed_ms,
-                                  button_y, left, right);
-      int footer_y = step == STEP_KEEP ? 214 : 198;
+      int pick = installer_yes_no(&u, &in, &soft_state, &selected, armed_ms,
+                                  button_y, left, right, danger, offer_format);
+      int footer_y = step == STEP_CONFIRM ? 198 : 214;
       ui_text(&u, 16, footer_y, footer, 0x707c8c, 1);
 
-      if (pick == 0 || pick == 1)
-        log_msg("%s -> %s", step == STEP_KEEP ? "Keep prompt" : "Install prompt",
-                step == STEP_KEEP ? (pick ? "Keep" : "Delete")
-                                  : (pick ? "Yes" : "No"));
-      if (step == STEP_KEEP && pick == 1) {
+      if (pick >= 0)
+        log_msg("step %d choice %d", step, pick);
+      if (step == STEP_FORMAT_WARN && pick == 0) {
+        log_msg("Reformat cancelled");
+        step = step_before_warn;
+        selected = 1;
+        clock_gettime(CLOCK_MONOTONIC, &arm_ts);
+      } else if (step == STEP_FORMAT_WARN && pick == 1) {
+        log_msg("Reformat confirmed");
+        choice = 2;
+      } else if (step == STEP_KEEP && pick == 1) {
         snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
         snprintf(edit_buf, sizeof edit_buf, "%s", app_title);
         ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf,
@@ -944,6 +998,13 @@ int main(int argc, char **argv) {
         keep_old = 0;
         selected = 1;
         step = STEP_CONFIRM;
+        clock_gettime(CLOCK_MONOTONIC, &arm_ts);
+      } else if (pick == 2) {
+        log_msg("Reformat SD card selected");
+        step_before_warn = step;
+        selected = 0;
+        step = STEP_FORMAT_WARN;
+        clock_gettime(CLOCK_MONOTONIC, &arm_ts);
       } else if (pick >= 0) {
         choice = pick;
       }
@@ -956,24 +1017,53 @@ int main(int argc, char **argv) {
 
   log_msg("Choice resolved to: %d", choice);
 
-  if (choice == 1) {
+  if (choice == 1 || choice == 2) {
+    int install_mode = mode;
+    int install_keep = keep_old;
+    int formatted = 0;
+    if (choice == 2) {
+      struct install_fmt_ctx fctx = {
+          .scr = &scr,
+          .back = back,
+          .front = front,
+          .midi = &midi,
+      };
+      draw_status_screen(&scr, back, front, &midi, "Formatting...",
+                         "Erasing the SD card...");
+      log_msg("Calling format_sd_blank");
+      if (format_sd_blank(card, "MPC-Sample", on_install_format, &fctx) != 0) {
+        log_msg("Format failed");
+        wait_for_reboot(&scr, back, front, &midi, "Format failed",
+                        "The SD card could not be reformatted.");
+        goto done;
+      }
+      log_msg("Format succeeded");
+      formatted = 1;
+      install_mode = MODE_INSTALL;
+      install_keep = 0;
+    }
     draw_status_screen(&scr, back, front, &midi, "Installing...",
                        "Copying boot thingy to SD card...");
     log_msg("Calling perform_install");
-    if (perform_install(card, staged, mode, keep_old, app_title) == 0) {
+    if (perform_install(card, staged, install_mode, install_keep, app_title) ==
+        0) {
       log_msg("Install succeeded");
       wait_for_reboot(&scr, back, front, &midi, "Complete!",
-                      "Boot thingy is installed.");
+                      formatted ? "Reformatted. Boot thingy is installed."
+                                : "Boot thingy is installed.");
     } else {
       log_msg("Install failed");
-      wait_for_reboot(&scr, back, front, &midi, "Install failed",
-                      "Could not copy boot thingy to the SD card.");
+      wait_for_reboot(
+          &scr, back, front, &midi, "Install failed",
+          formatted ? "Card was reformatted, but copy failed."
+                    : "Could not copy boot thingy to the SD card.");
     }
   } else {
     log_msg("Install cancelled");
     wait_for_reboot(&scr, back, front, &midi, "Cancelled", "No changes made.");
   }
 
+done:
   log_msg("Closing screen and surface");
   free(back);
   free(front);
