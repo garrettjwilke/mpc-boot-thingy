@@ -5,6 +5,8 @@ you can install applications and choose between them easily from the menu.
 
 there are other enhancements this provides, but ehh...they're there... :)
 
+[![Watch the video](https://www.youtube.com/watch?v=0PymkOFAauc)](https://www.youtube.com/watch?v=0PymkOFAauc)
+
 ## apps you can try now
 
 **how to install apps:**
