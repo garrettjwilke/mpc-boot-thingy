@@ -6,6 +6,13 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+
+static int64_t mono_now_ms(void) {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
 
 static int wrap(int v, int n) {
   if (n <= 0)
@@ -266,12 +273,21 @@ void boot_ui_saved(struct boot_ui *ui) {
   ui->save_args[0] = 0;
   ui->save_npatches = 0;
   ui->notice[0] = 0;
+  ui->notice_until_ms = 0;
+}
+
+static int64_t ui_now_ms(const struct ui *u) {
+  if (u && u->now_ms)
+    return u->now_ms;
+  return mono_now_ms();
 }
 
 void boot_ui_notice(struct boot_ui *ui, const char *text) {
   if (!ui)
     return;
   snprintf(ui->notice, sizeof ui->notice, "%s", text ? text : "");
+  /* Timing is resolved against the ui clock on the next frame. */
+  ui->notice_until_ms = 0;
 }
 
 void boot_draw_prompt(struct ui *u, int theme) {
@@ -313,8 +329,18 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     input_begin(&ev, 0);
   int shift_held = ev.shift || ((ev.held & (1u << IN_SHIFT)) != 0);
   ev.shift = shift_held;
-  if (ev.down || ev.encoder || ev.encoder_press)
+  if (ev.down || ev.encoder || ev.encoder_press) {
     s->notice[0] = 0;
+    s->notice_until_ms = 0;
+  }
+  if (s->notice[0]) {
+    if (s->notice_until_ms == 0)
+      s->notice_until_ms = ui_now_ms(u) + 2000;
+    if (ui_now_ms(u) >= s->notice_until_ms) {
+      s->notice[0] = 0;
+      s->notice_until_ms = 0;
+    }
+  }
 
   if (s->screen == BOOT_SCREEN_TEXT_EDIT) {
     const struct boot_theme *th = theme_at(s->theme);
@@ -363,6 +389,19 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       }
     } else if (res == UI_TEXT_CANCEL) {
       s->screen = s->text_prev_screen;
+    }
+    if (s->notice[0]) {
+      struct ui_paint pop = {.fill_set = 1,
+                             .fill = th->box,
+                             .border_set = 1,
+                             .border = th->border,
+                             .border_px = 1};
+      ui_box(u, 8, UI_H - 44, 304, 36, pop);
+      int tw = (int)strlen(s->notice) * FONT_S_W;
+      int tx = (UI_W - tw) / 2;
+      if (tx < 12)
+        tx = 12;
+      ui_text(u, tx, UI_H - 32, s->notice, th->text, 1);
     }
     return 0;
   }
@@ -619,13 +658,21 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     hint = UI_USB_SD_HINT;
   else
     hint = "hold shift for options";
-  if (s->notice[0])
-    hint = s->notice;
-  ui_text(u, 12, 40, title, th->text, 1);
-  if (hint[0])
-    ui_text(u, 12, 56, hint, th->dim, 1);
+  int is_apps = (s->screen == BOOT_SCREEN_APPS);
+  if (is_apps && shift_held) {
+    ui_text(u, 12, 40, "http://mpc-sample.local:8080", th->dim, 1);
+    ui_text(u, 12, 56, "http://192.168.155.1:8080", th->dim, 1);
+  } else {
+    ui_text(u, 12, 40, title, th->text, 1);
+    if (hint[0])
+      ui_text(u, 12, 56, hint, th->dim, 1);
+  }
 
-  int list_y = hint[0] ? 76 : 60;
+  int list_y;
+  if (is_apps && shift_held)
+    list_y = 76;
+  else
+    list_y = hint[0] ? 76 : 60;
   int list_h = UI_H - list_y - 8;
   struct ui_list_style rows_st = list_style(th);
   if (n > MENU_MAX)
@@ -794,6 +841,32 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       discard_entry(s);
     else if (hit == 2)
       s->screen = BOOT_SCREEN_ENTRY;
+  }
+
+  if (s->notice[0]) {
+    if (s->notice_until_ms == 0)
+      s->notice_until_ms = ui_now_ms(u) + 2000;
+    struct ui_paint pop = {.fill_set = 1,
+                           .fill = th->box,
+                           .border_set = 1,
+                           .border = th->border,
+                           .border_px = 1};
+    ui_box(u, 8, UI_H - 44, 304, 36, pop);
+    int tw = (int)strlen(s->notice) * FONT_S_W;
+    int tx = (UI_W - tw) / 2;
+    if (tx < 12)
+      tx = 12;
+    ui_text(u, tx, UI_H - 32, s->notice, th->text, 1);
+    if (s->notice_until_ms > 0) {
+      int64_t rem = s->notice_until_ms - ui_now_ms(u);
+      if (rem < 1)
+        rem = 1;
+      if (rem > 2000)
+        rem = 2000;
+      ui_wake(u, (int)rem);
+    } else {
+      ui_wake(u, 2000);
+    }
   }
 
   return 0;
