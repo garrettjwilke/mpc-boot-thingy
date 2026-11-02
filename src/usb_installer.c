@@ -835,7 +835,10 @@ int main(int argc, char **argv) {
   snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
   memset(&editor, 0, sizeof editor);
 
-  enum { STEP_KEEP, STEP_EDIT, STEP_CONFIRM, STEP_FORMAT_WARN };
+  char disk_label[32];
+  snprintf(disk_label, sizeof disk_label, "MPC-Sample");
+
+  enum { STEP_KEEP, STEP_EDIT, STEP_CONFIRM, STEP_FORMAT_WARN, STEP_DISK_NAME };
   int step = mode == MODE_MIGRATE ? STEP_KEEP : STEP_CONFIRM;
   int step_before_warn = STEP_CONFIRM;
   int selected = 1; /* 0 = left, 1 = right. Keep and Yes start selected. */
@@ -884,7 +887,35 @@ int main(int argc, char **argv) {
       break;
     }
 
-    if (step == STEP_EDIT) {
+    if (step == STEP_DISK_NAME) {
+      struct ui u = {.px = back};
+      ui_clear(&u, 0x121418);
+      struct ui_text_editor_style ed_st = ui_text_editor_style_default();
+      ed_st.fill = 0x121418;
+      ed_st.text_box = 0x1b1f24;
+      ed_st.title = 0xffb000;
+      ed_st.highlight = 0xffb000;
+      int res = ui_text_editor(&u, 0, 0, UI_W, UI_H, &editor, ed_st, &in);
+      if (res == UI_TEXT_OK) {
+        char cleaned[32];
+        clean_title(cleaned, sizeof cleaned, edit_buf);
+        if (!cleaned[0]) {
+          log_msg("Empty disk label ignored");
+          snprintf(edit_buf, sizeof edit_buf, "%s", disk_label);
+          ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf,
+                              "DISK NAME");
+        } else {
+          snprintf(disk_label, sizeof disk_label, "%s", cleaned);
+          log_msg("Disk label set to '%s'", disk_label);
+          choice = 2;
+        }
+      } else if (res == UI_TEXT_CANCEL) {
+        log_msg("Disk naming cancelled");
+        snprintf(disk_label, sizeof disk_label, "MPC-Sample");
+        choice = 2;
+      }
+      draw_frame(&scr, back, front, &midi, &u);
+    } else if (step == STEP_EDIT) {
       struct ui u = {.px = back};
       ui_clear(&u, 0x121418);
       struct ui_text_editor_style ed_st = ui_text_editor_style_default();
@@ -987,7 +1018,13 @@ int main(int argc, char **argv) {
         clock_gettime(CLOCK_MONOTONIC, &arm_ts);
       } else if (step == STEP_FORMAT_WARN && pick == 1) {
         log_msg("Reformat confirmed");
-        choice = 2;
+        snprintf(disk_label, sizeof disk_label, "MPC-Sample");
+        snprintf(edit_buf, sizeof edit_buf, "%s", disk_label);
+        ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf,
+                            "DISK NAME");
+        step = STEP_DISK_NAME;
+        selected = 1;
+        clock_gettime(CLOCK_MONOTONIC, &arm_ts);
       } else if (step == STEP_KEEP && pick == 1) {
         snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
         snprintf(edit_buf, sizeof edit_buf, "%s", app_title);
@@ -1031,7 +1068,7 @@ int main(int argc, char **argv) {
       draw_status_screen(&scr, back, front, &midi, "Formatting...",
                          "Erasing the SD card...");
       log_msg("Calling format_sd_blank");
-      if (format_sd_blank(card, "MPC-Sample", on_install_format, &fctx) != 0) {
+      if (format_sd_blank(card, disk_label, on_install_format, &fctx) != 0) {
         log_msg("Format failed");
         wait_for_reboot(&scr, back, front, &midi, "Format failed",
                         "The SD card could not be reformatted.");
