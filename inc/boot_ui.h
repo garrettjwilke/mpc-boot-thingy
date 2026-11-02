@@ -79,6 +79,7 @@ struct boot_ui {
   int text_edit_mode;
   int text_prev_screen;
   char notice[96];
+  int64_t notice_until_ms;
   char format_label[32];
   char format_status[128];
   struct ui_usb_sd usb;
