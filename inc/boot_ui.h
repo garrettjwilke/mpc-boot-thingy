@@ -92,6 +92,7 @@ void boot_ui_set_catalog(struct boot_ui *ui, const struct boot_patch *patches,
 int boot_ui_dirty(const struct boot_ui *ui);
 void boot_ui_saved(struct boot_ui *ui);
 void boot_ui_notice(struct boot_ui *ui, const char *text);
+void boot_ui_set_web_connected(int connected);
 int boot_frame(struct ui *u, const struct input *in, void *state);
 void boot_draw_prompt(struct ui *u, int theme);
 void boot_draw_loading(struct ui *u, int theme);
