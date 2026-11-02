@@ -4,14 +4,156 @@
 #include "theme.h"
 #include "usb_sd.h"
 
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <time.h>
+#include <unistd.h>
 
 static int64_t mono_now_ms(void) {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
   return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static int env_is_truthy(const char *v) {
+  if (!v || !v[0])
+    return -1;
+  if (v[0] == '1')
+    return 1;
+  if (v[0] == '0')
+    return 0;
+  if (strcmp(v, "true") == 0 || strcmp(v, "yes") == 0 ||
+      strcmp(v, "on") == 0 || strcmp(v, "connected") == 0)
+    return 1;
+  if (strcmp(v, "false") == 0 || strcmp(v, "no") == 0 ||
+      strcmp(v, "off") == 0 || strcmp(v, "disconnected") == 0)
+    return 0;
+  return -1;
+}
+
+static int g_web_connected_override = -1;
+
+void boot_ui_set_web_connected(int connected) {
+  g_web_connected_override = connected;
+}
+
+static int web_connected(void) {
+  if (g_web_connected_override >= 0)
+    return g_web_connected_override;
+  static const char *direct_vars[] = {
+      "MPC_BOOT_WEB_CONNECTED", "MPC_WEB_CONNECTED",
+      "MPC_BOOT_WEB_STATUS", "MPC_WEB_STATUS", NULL};
+  static const char *file_vars[] = {
+      "MPC_BOOT_WEB_CONNECTED_FILE", "MPC_WEB_CONNECTED_FILE",
+      "MPC_BOOT_WEB_STATUS_FILE", "MPC_WEB_STATUS_FILE",
+      "MPC_BOOT_WEB_LINK_FILE", "MPC_WEB_LINK_FILE", NULL};
+  for (int i = 0; direct_vars[i]; i++) {
+    const char *v = getenv(direct_vars[i]);
+    int r = env_is_truthy(v);
+    if (r >= 0)
+      return r;
+  }
+  for (int i = 0; file_vars[i]; i++) {
+    const char *path = getenv(file_vars[i]);
+    if (path && path[0]) {
+      FILE *f = fopen(path, "r");
+      if (f) {
+        char buf[64];
+        size_t n = fread(buf, 1, sizeof buf - 1, f);
+        fclose(f);
+        buf[n] = 0;
+        int r = env_is_truthy(buf);
+        if (r >= 0)
+          return r;
+        return 1; /* file exists => connected */
+      }
+      return 0; /* specified file missing => disconnected */
+    }
+  }
+  /* USB device controller state: configured means the host enumerated us. */
+  int udc_any = 0;
+  int udc_configured = 0;
+  {
+    DIR *d = opendir("/sys/class/udc");
+    if (d) {
+      struct dirent *de;
+      while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.')
+          continue;
+        char path[256];
+        snprintf(path, sizeof path, "/sys/class/udc/%s/state", de->d_name);
+        FILE *sf = fopen(path, "r");
+        if (sf) {
+          udc_any = 1;
+          char buf[64];
+          if (fgets(buf, sizeof buf, sf)) {
+            if (strstr(buf, "configured"))
+              udc_configured = 1;
+          }
+          fclose(sf);
+        }
+      }
+      closedir(d);
+    }
+  }
+
+  /* Network interface carrying 192.168.155.1 must be running (carrier up). */
+  {
+    struct ifaddrs *ifa = NULL;
+    if (getifaddrs(&ifa) == 0) {
+      int found = 0;
+      int running = 0;
+      for (struct ifaddrs *p = ifa; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET)
+          continue;
+        struct sockaddr_in *sin = (struct sockaddr_in *)p->ifa_addr;
+        if (sin->sin_addr.s_addr != inet_addr("192.168.155.1"))
+          continue;
+        found = 1;
+        int sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sock >= 0) {
+          struct ifreq ifr;
+          memset(&ifr, 0, sizeof ifr);
+          snprintf(ifr.ifr_name, sizeof ifr.ifr_name, "%s", p->ifa_name);
+          if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+            if (ifr.ifr_flags & IFF_RUNNING)
+              running = 1;
+          }
+          close(sock);
+        }
+      }
+      freeifaddrs(ifa);
+      if (found) {
+        if (udc_any)
+          return udc_configured && running;
+        return running;
+      }
+      if (udc_any)
+        return udc_configured;
+    }
+  }
+
+  /* Real device detection: USB link IP present in routing table. */
+  FILE *f = fopen("/proc/net/fib_trie", "r");
+  if (!f)
+    return 0;
+  char line[256];
+  int connected = 0;
+  while (fgets(line, sizeof line, f)) {
+    if (strstr(line, "192.168.155.1")) {
+      connected = 1;
+      break;
+    }
+  }
+  fclose(f);
+  return connected;
 }
 
 static int wrap(int v, int n) {
@@ -660,8 +802,9 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     hint = "hold shift for options";
   int is_apps = (s->screen == BOOT_SCREEN_APPS);
   if (is_apps && shift_held) {
-    ui_text(u, 12, 40, "http://mpc-sample.local:8080", th->dim, 1);
-    ui_text(u, 12, 56, "http://192.168.155.1:8080", th->dim, 1);
+    uint32_t link_color = web_connected() ? 0x00ff00 : 0xff0000;
+    ui_text(u, 12, 40, "http://mpc-sample.local:8080", link_color, 1);
+    ui_text(u, 12, 56, "http://192.168.155.1:8080", link_color, 1);
   } else {
     ui_text(u, 12, 40, title, th->text, 1);
     if (hint[0])
