@@ -14,6 +14,8 @@ there are other enhancements this provides, but ehh...they're there... :)
 
 * [SampQOL-OS](https://github.com/snarebes/SampQOL-OS.git)
    - many enhancements to the OS that improve overall functionality and UX.
+* [GRIDZILLA](https://www.thesoundfactorynj.com/gridzilla)
+   - modern daw-like sequencing UI/UX...super custom workflow.
 * [mpc-furnace](https://github.com/garrettjwilke/mpc-furnace)
    - furnace editor for MPC Sample.
    - create music for retro video game consoles.
