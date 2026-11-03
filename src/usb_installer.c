@@ -3,8 +3,9 @@
    Triggered over USB via POST /testapp on port 80.
    Runs completely in RAM, draws a confirmation screen, installs/updates
    boot-thingy on the SD card, then waits for the user to reboot. An existing
-   autoboot can be kept as a named boot entry or deleted. The card can also
-   be reformatted first; that erases the card, then installs boot thingy. */
+   autoboot shows a Continue/Cancel warning and is erased on Continue. The card
+   can also be reformatted first; that erases the card, then installs boot
+   thingy. */
 
 #define _GNU_SOURCE
 #include "format_sd.h"
@@ -241,10 +242,6 @@ static int copy_tree(const char *src, const char *dst) {
 }
 
 /* Menu titles are MENU_TITLE bytes, including the NUL. */
-#define APP_NAME_MAX 64
-#define DEFAULT_APP_NAME "old autoboot"
-#define DEFAULT_APP_FOLDER "old-autoboot"
-
 static void clean_title(char *dst, size_t n, const char *src) {
   size_t j = 0;
   if (!dst || n == 0)
@@ -265,111 +262,8 @@ static void clean_title(char *dst, size_t n, const char *src) {
   dst[j] = 0;
 }
 
-/* Lowercase slug, matching setup.sh. Stops at 48 characters so a numeric
-   suffix still fits in the folder name. */
-static int slug_of(const char *title, char *out, size_t n) {
-  size_t j = 0;
-  size_t cap;
-  int dash = 1;
-  if (!out || n < 2) {
-    if (out && n)
-      out[0] = 0;
-    return -1;
-  }
-  cap = n - 1;
-  if (cap > 48)
-    cap = 48;
-  for (const unsigned char *p = (const unsigned char *)(title ? title : "");
-       *p; p++) {
-    unsigned char c = *p;
-    int alnum;
-    if (c >= 'A' && c <= 'Z')
-      c = (unsigned char)(c - 'A' + 'a');
-    alnum = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
-    if (alnum) {
-      if (j >= cap)
-        break;
-      out[j++] = (char)c;
-      dash = 0;
-    } else if (!dash && j < cap) {
-      out[j++] = '-';
-      dash = 1;
-    }
-  }
-  if (j && out[j - 1] == '-')
-    j--;
-  out[j] = 0;
-  return j ? 0 : -1;
-}
-
-static int path_exists(const char *path) {
-  struct stat st;
-  return path && stat(path, &st) == 0;
-}
-
-/* Folder under autorun/apps/. A name already in the staged tree gets -2, -3, ... */
-static void app_folder_for(const char *staged, const char *title, char *out,
-                           size_t n) {
-  char base[64];
-  if (!out || n == 0)
-    return;
-  if (slug_of(title, base, sizeof base) != 0)
-    snprintf(base, sizeof base, "%s", DEFAULT_APP_FOLDER);
-  for (int i = 0; i < 50; i++) {
-    char cand[64];
-    char path[512];
-    int wr;
-    if (i == 0)
-      wr = snprintf(cand, sizeof cand, "%s", base);
-    else
-      wr = snprintf(cand, sizeof cand, "%s-%d", base, i + 1);
-    if (wr < 0 || (size_t)wr >= sizeof cand)
-      continue;
-    if (staged && staged[0]) {
-      wr = snprintf(path, sizeof path, "%s/apps/%s", staged, cand);
-      if (wr < 0 || (size_t)wr >= sizeof path)
-        continue;
-      if (path_exists(path))
-        continue;
-    }
-    snprintf(out, n, "%s", cand);
-    return;
-  }
-  snprintf(out, n, "%s", DEFAULT_APP_FOLDER);
-}
-
-static void ellipsize(char *dst, size_t n, const char *src, int max_chars) {
-  int len = 0;
-  if (!dst || n == 0)
-    return;
-  if (!src)
-    src = "";
-  if (max_chars < 0)
-    max_chars = 0;
-  if ((size_t)max_chars >= n)
-    max_chars = (int)n - 1;
-  while (src[len])
-    len++;
-  if (len <= max_chars) {
-    memcpy(dst, src, (size_t)len);
-    dst[len] = 0;
-    return;
-  }
-  if (max_chars <= 3) {
-    memset(dst, '.', (size_t)max_chars);
-    dst[max_chars] = 0;
-    return;
-  }
-  memcpy(dst, src, (size_t)(max_chars - 3));
-  dst[max_chars - 3] = '.';
-  dst[max_chars - 2] = '.';
-  dst[max_chars - 1] = '.';
-  dst[max_chars] = 0;
-}
-
 static int perform_install(const char *card, const char *staged,
-                           enum install_mode mode, int keep_old,
-                           const char *migrate_title) {
+                           enum install_mode mode) {
   log_msg("perform_install started: card=%s staged=%s mode=%d", card, staged,
           mode);
   int failed = 0;
@@ -378,70 +272,7 @@ static int perform_install(const char *card, const char *staged,
   char dest_autorun[512];
   snprintf(dest_autorun, sizeof dest_autorun, "%s/autorun", card);
 
-  if (mode == MODE_MIGRATE && keep_old) {
-    log_msg("Migrating existing autoboot from %s", dest_autorun);
-    /* Stage old autorun to RAM */
-    char ram_stage[512];
-    snprintf(ram_stage, sizeof ram_stage, "/run/old_autoboot");
-    char *rm_argv[] = {"rm", "-rf", ram_stage, NULL};
-    run_cmd(rm_argv);
-
-    char *mv_argv[] = {"mv", dest_autorun, ram_stage, NULL};
-    if (run_cmd(mv_argv) != 0) {
-      char *cp_argv[] = {"cp", "-a", dest_autorun, ram_stage, NULL};
-      run_cmd(cp_argv);
-      char *rm_dest[] = {"rm", "-rf", dest_autorun, NULL};
-      run_cmd(rm_dest);
-    }
-
-    /* Install clean boot-thingy */
-    char *mkdir_argv[] = {"mkdir", "-p", dest_autorun, NULL};
-    run_cmd(mkdir_argv);
-    if (copy_tree(staged, (char *)card) != 0) {
-      log_msg("Failed to copy staged tree");
-      failed = 1;
-    }
-
-    /* Move old autorun into apps/<folder> and name its boot entry. */
-    char title[APP_NAME_MAX];
-    char folder[64];
-    char app_dir[512], app_autorun[512];
-    clean_title(title, sizeof title, migrate_title);
-    if (!title[0])
-      snprintf(title, sizeof title, "%s", DEFAULT_APP_NAME);
-    app_folder_for(staged, title, folder, sizeof folder);
-    log_msg("Saving existing autoboot as '%s' in apps/%s", title, folder);
-    if (snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/%s", card, folder) >=
-        (int)sizeof app_dir) {
-      log_msg("App path too long, using %s", DEFAULT_APP_FOLDER);
-      snprintf(folder, sizeof folder, "%s", DEFAULT_APP_FOLDER);
-      snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/%s", card, folder);
-    }
-    snprintf(app_autorun, sizeof app_autorun, "%s/autorun", app_dir);
-
-    char *mk_app[] = {"mkdir", "-p", app_dir, NULL};
-    run_cmd(mk_app);
-
-    char *mv_old[] = {"mv", ram_stage, app_autorun, NULL};
-    if (run_cmd(mv_old) != 0) {
-      char *cp_old[] = {"cp", "-a", ram_stage, app_autorun, NULL};
-      if (run_cmd(cp_old) != 0) {
-        log_msg("Failed to save existing autoboot");
-        failed = 1;
-      }
-    }
-
-    char entry_file[512];
-    snprintf(entry_file, sizeof entry_file, "%s/boot.entry", app_dir);
-    FILE *ef = fopen(entry_file, "w");
-    if (ef) {
-      fprintf(ef, "title=%s\nrun=autorun/autorun.sh\n", title);
-      fclose(ef);
-      log_msg("Wrote %s", entry_file);
-    } else {
-      log_msg("Failed to write %s", entry_file);
-    }
-  } else if (mode == MODE_UPDATE) {
+  if (mode == MODE_UPDATE) {
     log_msg("Updating existing boot-thingy installation");
     /* Preserve user apps, configs, and host key */
     char hold_dir[512];
@@ -829,28 +660,25 @@ int main(int argc, char **argv) {
   struct input in = {0};
   struct ui_soft_state soft_state = {0};
 
-  char app_title[APP_NAME_MAX];
-  char edit_buf[APP_NAME_MAX];
+  char edit_buf[32];
   struct ui_text_editor editor;
-  snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
   memset(&editor, 0, sizeof editor);
 
   char disk_label[32];
   snprintf(disk_label, sizeof disk_label, "MPC-Sample");
 
-  enum { STEP_KEEP, STEP_EDIT, STEP_CONFIRM, STEP_FORMAT_WARN, STEP_DISK_NAME };
-  int step = mode == MODE_MIGRATE ? STEP_KEEP : STEP_CONFIRM;
+  enum { STEP_CONFIRM, STEP_WARN_AUTORUN, STEP_FORMAT_WARN, STEP_DISK_NAME };
+  int step = mode == MODE_MIGRATE ? STEP_WARN_AUTORUN : STEP_CONFIRM;
   int step_before_warn = STEP_CONFIRM;
-  int selected = 1; /* 0 = left, 1 = right. Keep and Yes start selected. */
-  int keep_old = 0;
-  int choice = -1; /* -1 pending, 0 = No, 1 = install, 2 = reformat then install */
+  int selected = 1; /* 0 = left, 1 = right. Continue and Yes start selected. */
+  int choice = -1; /* -1 pending, 0 = cancel, 1 = install, 2 = reformat then install */
 
   const char *question =
       (mode == MODE_UPDATE) ? "Update boot thingy?" : "Install boot thingy?";
 
   log_msg("Entering UI loop: mode=%d question='%s'", mode, question);
   if (mode == MODE_MIGRATE)
-    log_msg("Existing autoboot found");
+    log_msg("Existing autorun found; Continue erases it");
 
   struct timespec start_ts, arm_ts;
   clock_gettime(CLOCK_MONOTONIC, &start_ts);
@@ -915,37 +743,6 @@ int main(int argc, char **argv) {
         choice = 2;
       }
       draw_frame(&scr, back, front, &midi, &u);
-    } else if (step == STEP_EDIT) {
-      struct ui u = {.px = back};
-      ui_clear(&u, 0x121418);
-      struct ui_text_editor_style ed_st = ui_text_editor_style_default();
-      ed_st.fill = 0x121418;
-      ed_st.text_box = 0x1b1f24;
-      ed_st.title = 0xffb000;
-      ed_st.highlight = 0xffb000;
-      int res = ui_text_editor(&u, 0, 0, UI_W, UI_H, &editor, ed_st, &in);
-      if (res == UI_TEXT_OK) {
-        char cleaned[APP_NAME_MAX];
-        clean_title(cleaned, sizeof cleaned, edit_buf);
-        if (!cleaned[0]) {
-          log_msg("Empty app name ignored");
-          snprintf(edit_buf, sizeof edit_buf, "%s", app_title);
-          ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf,
-                              "NAME ENTRY");
-        } else {
-          snprintf(app_title, sizeof app_title, "%s", cleaned);
-          log_msg("Boot entry name set to '%s'", app_title);
-          keep_old = 1;
-          selected = 1;
-          step = STEP_CONFIRM;
-        }
-      } else if (res == UI_TEXT_CANCEL) {
-        log_msg("Entry naming cancelled");
-        keep_old = 0;
-        selected = 1;
-        step = STEP_KEEP;
-      }
-      draw_frame(&scr, back, front, &midi, &u);
     } else {
       struct ui u = {.px = back};
       ui_clear(&u, 0x121418);
@@ -959,23 +756,21 @@ int main(int argc, char **argv) {
       ui_text(&u, 20, 48, "USB INSTALLER", 0xffb000, 1);
 
       int button_y = 134;
-      int offer_format = step != STEP_FORMAT_WARN;
+      int offer_format = step != STEP_FORMAT_WARN && step != STEP_WARN_AUTORUN;
       int danger = step == STEP_FORMAT_WARN;
       const char *footer = "Top: No / Format / Yes    Wheel: Select";
       const char *left = "No";
       const char *right = "Yes";
-      if (step == STEP_KEEP) {
-        ui_text(&u, 16, 66, "An existing autoboot is already on this SD card.",
-                0xffffff, 1);
-        ui_text(&u, 16, 88, "boot thingy will add it as a boot entry", 0x9aa4b0,
+      if (step == STEP_WARN_AUTORUN) {
+        ui_text(&u, 16, 66, "An existing autorun is on this SD card.", 0xffffff,
                 1);
-        ui_text(&u, 16, 104, "if you want to keep it.", 0x9aa4b0, 1);
-        ui_text(&u, 16, 128, "Would you like to keep or delete", 0xffffff, 1);
-        ui_text(&u, 16, 144, "the existing autoboot?", 0xffffff, 1);
-        button_y = 164;
-        footer = "Top: Delete / Format / Keep  Wheel: Select";
-        left = "Delete";
-        right = "Keep";
+        ui_text(&u, 16, 88, "Continuing erases it and installs", 0xffb000, 1);
+        ui_text(&u, 16, 104, "boot thingy in its place.", 0xffb000, 1);
+        ui_text(&u, 16, 128, "Continue or cancel?", 0xffffff, 1);
+        button_y = 156;
+        footer = "Top: Cancel / Continue      Wheel: Select";
+        left = "Cancel";
+        right = "Continue";
       } else if (step == STEP_FORMAT_WARN) {
         ui_text(&u, 20, 64, "Reformat SD card?", 0xffffff, 1);
         ui_text(&u, 20, 92, "ALL data on the SD card will be", 0xffb000, 1);
@@ -986,20 +781,9 @@ int main(int argc, char **argv) {
         left = "Cancel";
         right = "Reformat";
       } else {
-        char shown[40];
-        char subtitle_buf[80];
-        const char *subtitle;
-        if (mode == MODE_MIGRATE && keep_old) {
-          ellipsize(shown, sizeof shown, app_title, 36);
-          snprintf(subtitle_buf, sizeof subtitle_buf, "Saved as %s", shown);
-          subtitle = subtitle_buf;
-        } else if (mode == MODE_MIGRATE) {
-          subtitle = "Existing autoboot will be removed";
-        } else if (mode == MODE_UPDATE) {
-          subtitle = "Update boot thingy files on SD card";
-        } else {
-          subtitle = "Install boot thingy to SD card";
-        }
+        const char *subtitle = (mode == MODE_UPDATE)
+                                   ? "Update boot thingy files on SD card"
+                                   : "Install boot thingy to SD card";
         ui_text(&u, 20, 72, question, 0xffffff, 1);
         ui_text(&u, 20, 104, subtitle, 0x9aa4b0, 1);
       }
@@ -1025,17 +809,12 @@ int main(int argc, char **argv) {
         step = STEP_DISK_NAME;
         selected = 1;
         clock_gettime(CLOCK_MONOTONIC, &arm_ts);
-      } else if (step == STEP_KEEP && pick == 1) {
-        snprintf(app_title, sizeof app_title, "%s", DEFAULT_APP_NAME);
-        snprintf(edit_buf, sizeof edit_buf, "%s", app_title);
-        ui_text_editor_init(&editor, edit_buf, (int)sizeof edit_buf,
-                            "NAME ENTRY");
-        step = STEP_EDIT;
-      } else if (step == STEP_KEEP && pick == 0) {
-        keep_old = 0;
-        selected = 1;
-        step = STEP_CONFIRM;
-        clock_gettime(CLOCK_MONOTONIC, &arm_ts);
+      } else if (step == STEP_WARN_AUTORUN && pick == 0) {
+        log_msg("Existing autorun kept; cancelling");
+        choice = 0;
+      } else if (step == STEP_WARN_AUTORUN && pick == 1) {
+        log_msg("Continue: erasing existing autorun");
+        choice = 1;
       } else if (pick == 2) {
         log_msg("Reformat SD card selected");
         step_before_warn = step;
@@ -1056,7 +835,6 @@ int main(int argc, char **argv) {
 
   if (choice == 1 || choice == 2) {
     int install_mode = mode;
-    int install_keep = keep_old;
     int formatted = 0;
     if (choice == 2) {
       struct install_fmt_ctx fctx = {
@@ -1077,13 +855,11 @@ int main(int argc, char **argv) {
       log_msg("Format succeeded");
       formatted = 1;
       install_mode = MODE_INSTALL;
-      install_keep = 0;
     }
     draw_status_screen(&scr, back, front, &midi, "Installing...",
                        "Copying boot thingy to SD card...");
     log_msg("Calling perform_install");
-    if (perform_install(card, staged, install_mode, install_keep, app_title) ==
-        0) {
+    if (perform_install(card, staged, install_mode) == 0) {
       log_msg("Install succeeded");
       wait_for_reboot(&scr, back, front, &midi, "Complete!",
                       formatted ? "Reformatted. Boot thingy is installed."

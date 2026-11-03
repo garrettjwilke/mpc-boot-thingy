@@ -42,7 +42,7 @@ there are other enhancements this provides, but ehh...they're there... :)
 4. add the zip and click on `Upload and run`
 5. on the MPC, you can then install boot thingy.
 
-> if you have an existing `autoboot`, it will ask if you want to keep it. it will be installed automatically as a boot entry.
+> if you have an existing `autoboot`, the installer warns you first: continue to erase it and install boot thingy, or cancel to leave the card unchanged.
 
 ### manual SD card install
 
