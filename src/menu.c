@@ -40,6 +40,9 @@ int menu_parse_entry(const char *path, struct menu_entry *e) {
         else if (strcmp(key, "run") == 0) snprintf(e->run, sizeof e->run, "%s", val);
         else if (strcmp(key, "args") == 0) snprintf(e->args, sizeof e->args, "%s", val);
         else if (strcmp(key, "boot") == 0) e->boot_ac50 = strcmp(val, "ac50") == 0;
+        else if (strcmp(key, "card") == 0) e->card_pkg = strcmp(val, "0") != 0;
+        else if (strcmp(key, "dirs") == 0 && strlen(val) < sizeof e->dirs)
+            snprintf(e->dirs, sizeof e->dirs, "%s", val);
         else if (strcmp(key, "patches") == 0 && strlen(val) < sizeof e->patches)
             snprintf(e->patches, sizeof e->patches, "%s", val);
     }
@@ -411,4 +414,68 @@ int menu_split_args(const char *args, char *buf, size_t buf_n, char **out, int m
         if (*p) *p++ = 0;
     }
     return n;
+}
+
+static int dirs_name_ok(const char *s) {
+    size_t n;
+    if (!s || !s[0] || s[0] == '.') return 0;
+    n = strlen(s);
+    if (n >= 200) return 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        unsigned char c = *p;
+        if (c < 0x20 || c == 0x7f || c == '/' || c == '\\') return 0;
+    }
+    if (strstr(s, "..")) return 0;
+    return 1;
+}
+
+static int dirs_rm(const char *path, int depth) {
+    struct stat st;
+    DIR *d;
+    struct dirent *de;
+    if (depth > 16 || lstat(path, &st) != 0) return -1;
+    if (S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) return unlink(path);
+    d = opendir(path);
+    if (!d) return -1;
+    while ((de = readdir(d)) != NULL) {
+        char child[512];
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+        if (snprintf(child, sizeof child, "%s/%s", path, de->d_name) >= (int)sizeof child) {
+            closedir(d);
+            return -1;
+        }
+        if (dirs_rm(child, depth + 1) != 0) {
+            closedir(d);
+            return -1;
+        }
+    }
+    closedir(d);
+    return rmdir(path);
+}
+
+int menu_card_dirs_remove(const char *card, const char *entry_path) {
+    struct menu_entry e;
+    char list[MENU_PATCHES];
+    char *p;
+    if (!card || !card[0] || !entry_path || !entry_path[0]) return 0;
+    if (menu_parse_entry(entry_path, &e) != 0) return 0;
+    if (!e.dirs[0]) return 0;
+    if (strlen(e.dirs) >= sizeof list) return -1;
+    snprintf(list, sizeof list, "%s", e.dirs);
+    p = list;
+    while (*p) {
+        char name[256];
+        char full[512];
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        size_t i = 0;
+        while (*p && *p != ' ' && *p != '\t' && i + 1 < sizeof name) name[i++] = *p++;
+        name[i] = 0;
+        if (!dirs_name_ok(name)) return -1;
+        if (snprintf(full, sizeof full, "%s/%s", card, name) >= (int)sizeof full) return -1;
+        if (lstat(full, &(struct stat){0}) == 0) {
+            if (dirs_rm(full, 0) != 0) return -1;
+        }
+    }
+    return 0;
 }

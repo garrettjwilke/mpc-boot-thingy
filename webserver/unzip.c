@@ -419,6 +419,34 @@ static int write_file(const char *root, const char *rel, const unsigned char *da
     return rc;
 }
 
+/* Like write_file, but replaces an existing file. Used when a card package is
+   installed over a previous copy. */
+static int write_file_over(const char *root, const char *rel, const unsigned char *data, size_t n) {
+    char path[1024];
+    int fd, rc = 0;
+    if (snprintf(path, sizeof path, "%s/%s", root, rel) >= (int)sizeof path) return -1;
+    if (ensure_under(root, rel) != 0) return -1;
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (fd < 0) return -1;
+    while (n) {
+        ssize_t w = write(fd, data, n);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            rc = -1;
+            break;
+        }
+        if (w == 0) {
+            rc = -1;
+            break;
+        }
+        data += w;
+        n -= (size_t)w;
+    }
+    if (close(fd) != 0) rc = -1;
+    if (rc != 0) unlink(path);
+    return rc;
+}
+
 static int note_marker(char *saved, int *set, const char *prefix) {
     if (strlen(prefix) >= 512) return -1;
     if (!*set) {
@@ -635,6 +663,401 @@ int unzip_autorun(const char *zip_path, const char *app_dir, char *script_rel, s
             goto out;
     }
     rc = 0;
+out:
+    if (f) fclose(f);
+    free(buf);
+    return rc;
+}
+
+/* ---- card packages -------------------------------------------------------
+   A zip that, in addition to an autorun package, ships a sibling directory
+   that must live at the SD card root. Gridzilla's WaveGrid/ is the example:
+   its autorun.sh runs ../WaveGrid/start.sh, and that script only works when
+   WaveGrid sits next to /autorun on the physical SD card. Boot thingy owns
+   /autorun, so such a package cannot be stored under autorun/apps/. */
+
+/* Read and inflate one entry (stored or deflated), checking its CRC. */
+static int entry_data(const unsigned char *buf, size_t n, const struct cent *c,
+                      unsigned char **out, size_t *outlen) {
+    size_t data_off, local_name, local_extra;
+    const unsigned char *local;
+    unsigned char *data;
+    *out = NULL;
+    *outlen = 0;
+    if ((size_t)c->local + 30 > n || memcmp(buf + c->local, "PK\003\004", 4) != 0) return -1;
+    local = buf + c->local;
+    local_name = ru16(local + 26);
+    local_extra = ru16(local + 28);
+    data_off = (size_t)c->local + 30u + local_name + local_extra;
+    if (data_off > n || (size_t)c->comp > n - data_off) return -1;
+    if (c->uncomp == 0xffffffffu) return -1;
+    data = malloc(c->uncomp ? c->uncomp : 1);
+    if (!data) return -1;
+    if (c->method == 0) {
+        if (c->uncomp) memcpy(data, buf + data_off, c->uncomp);
+    } else if (c->method == 8) {
+        if (inflate_raw(buf + data_off, c->comp, data, c->uncomp) != 0) {
+            free(data);
+            return -1;
+        }
+    } else {
+        free(data);
+        return -1;
+    }
+    if (crc32_of(data, c->uncomp) != c->crc) {
+        free(data);
+        return -1;
+    }
+    *out = data;
+    *outlen = c->uncomp;
+    return 0;
+}
+
+/* Find the first "../<name>/start.sh" in the autorun script and return <name>. */
+static int find_rel_launch(const unsigned char *text, size_t n, char *name, size_t name_n) {
+    size_t i;
+    for (i = 0; i + 3 < n; i++) {
+        size_t j, slash;
+        if (text[i] != '.' || text[i + 1] != '.' || text[i + 2] != '/') continue;
+        j = i + 3;
+        slash = j;
+        while (slash < n && text[slash] != '/' && text[slash] != '\n' && text[slash] != '\r' &&
+               text[slash] != '"' && text[slash] != '\'' && text[slash] != ' ' && text[slash] != '$' &&
+               text[slash] != ';')
+            slash++;
+        if (slash == j || slash >= n || slash + 9 > n) {
+            i = slash;
+            continue;
+        }
+        if (memcmp(text + slash, "/start.sh", 9) != 0) {
+            i = slash;
+            continue;
+        }
+        if (slash - j + 1 >= name_n) return -1;
+        memcpy(name, text + j, slash - j);
+        name[slash - j] = 0;
+        return 0;
+    }
+    return -1;
+}
+
+/* Wrapper directory of an autorun prefix that ends in "/autorun/".
+   "Gridzilla - V1/autorun/" -> "Gridzilla - V1/"; "autorun/" -> "". */
+static void wrapper_of(const char *prefix, char *out, size_t n) {
+    size_t len = strlen(prefix);
+    size_t i;
+    while (len > 0 && prefix[len - 1] == '/') len--;
+    i = len;
+    while (i > 0 && prefix[i - 1] != '/') i--;
+    if (i + 1 > n) i = n - 1;
+    memcpy(out, prefix, i);
+    out[i] = 0;
+}
+
+int unzip_card_package(const char *zip_path, const char *card_root,
+                       char *launcher, size_t launcher_n,
+                       char *dirs, size_t dirs_n) {
+    FILE *f = NULL;
+    unsigned char *buf = NULL;
+    long sz = 0;
+    size_t n = 0;
+    const unsigned char *eocd, *cd, *cd_end, *p;
+    unsigned entries, seen;
+    char json_prefix[512], sh_prefix[512], prefix[512], wrapper[512];
+    char runtime[256], target[512];
+    int json_set = 0, sh_set = 0, sh_conflict = 0;
+    int rc = -1;
+    err_msg = "could not store the package";
+    if (launcher && launcher_n) launcher[0] = 0;
+    if (dirs && dirs_n) dirs[0] = 0;
+    if (!zip_path || !card_root || !card_root[0] || !launcher || launcher_n == 0 || !dirs || dirs_n == 0)
+        goto out;
+    f = fopen(zip_path, "rb");
+    if (!f) goto out;
+    if (fseek(f, 0, SEEK_END) != 0) goto out;
+    sz = ftell(f);
+    if (sz < 22 || (unsigned long)sz > ZIP_MAX_BYTES) {
+        err_msg = "zip is too large";
+        goto out;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) goto out;
+    n = (size_t)sz;
+    buf = malloc(n ? n : 1);
+    if (!buf || fread(buf, 1, n, f) != n) goto out;
+    fclose(f);
+    f = NULL;
+    eocd = find_eocd(buf, n);
+    if (!eocd) {
+        err_msg = "zip is truncated";
+        goto out;
+    }
+    if (ru16(eocd + 4) != 0 || ru16(eocd + 6) != 0) {
+        err_msg = "zip method is not supported";
+        goto out;
+    }
+    entries = ru16(eocd + 10);
+    if (entries == 0 || entries > ZIP_MAX_ENTRIES || ru16(eocd + 8) != entries) {
+        err_msg = "zip is not an autorun package";
+        goto out;
+    }
+    {
+        uint32_t cd_off = ru32(eocd + 16);
+        uint32_t cd_size = ru32(eocd + 12);
+        if (cd_off == 0xffffffffu || cd_size == 0xffffffffu || (size_t)cd_off + cd_size > n) {
+            err_msg = "zip is too large";
+            goto out;
+        }
+        cd = buf + cd_off;
+        cd_end = cd + cd_size;
+    }
+
+    /* Pass 1: locate the autorun package and read its autorun.sh. */
+    p = cd;
+    seen = 0;
+    while (seen < entries) {
+        struct cent c;
+        char name[512], parent[512];
+        int cr = cent_next(cd_end, &p, &c);
+        if (cr != 0) {
+            err_msg = "zip is truncated";
+            goto out;
+        }
+        seen++;
+        if (c.disk != 0) {
+            err_msg = "zip method is not supported";
+            goto out;
+        }
+        if (copy_name(&c, name, sizeof name) != 0 || !name_ok(name)) {
+            err_msg = "zip path leaves the package";
+            goto out;
+        }
+        if (component_is(name, "__MACOSX")) continue;
+        if (parent_of(name, parent, sizeof parent) != 0) {
+            err_msg = "zip path leaves the package";
+            goto out;
+        }
+        if (base_is(name, "autorun.json")) {
+            if (note_marker(json_prefix, &json_set, parent) != 0) {
+                err_msg = "zip has more than one autorun package";
+                goto out;
+            }
+        } else if (base_is(name, "autorun.sh")) {
+            if (!sh_set) {
+                snprintf(sh_prefix, sizeof sh_prefix, "%s", parent);
+                sh_set = 1;
+            } else if (strcmp(sh_prefix, parent) != 0) {
+                sh_conflict = 1;
+            }
+        }
+    }
+    if (p != cd_end) {
+        err_msg = "zip is truncated";
+        goto out;
+    }
+    if (json_set) snprintf(prefix, sizeof prefix, "%s", json_prefix);
+    else if (sh_conflict) {
+        err_msg = "zip has more than one autorun package";
+        goto out;
+    } else if (sh_set) snprintf(prefix, sizeof prefix, "%s", sh_prefix);
+    else {
+        /* Not an autorun package at all; the caller's plain path reports it. */
+        rc = 0;
+        goto out;
+    }
+    wrapper_of(prefix, wrapper, sizeof wrapper);
+
+    /* Read autorun.sh and look for "../<name>/start.sh". */
+    runtime[0] = 0;
+    {
+        char sh[512];
+        if (snprintf(sh, sizeof sh, "%sautorun.sh", prefix) >= (int)sizeof sh) goto out;
+        p = cd;
+        seen = 0;
+        while (seen < entries) {
+            struct cent c;
+            char name[512];
+            unsigned char *data = NULL;
+            size_t dlen = 0;
+            int cr = cent_next(cd_end, &p, &c);
+            if (cr != 0) {
+                err_msg = "zip is truncated";
+                goto out;
+            }
+            seen++;
+            if (copy_name(&c, name, sizeof name) != 0) continue;
+            if (strcmp(name, sh) != 0) continue;
+            if ((c.mode >> 16 & 0170000) == 0120000 || (c.flags & 1)) {
+                err_msg = "zip is encrypted";
+                goto out;
+            }
+            if (entry_data(buf, n, &c, &data, &dlen) != 0) {
+                err_msg = "zip is truncated";
+                goto out;
+            }
+            if (find_rel_launch(data, dlen, runtime, sizeof runtime) != 0) {
+                free(data);
+                rc = 0; /* plain autorun package */
+                goto out;
+            }
+            free(data);
+            break;
+        }
+        if (!runtime[0]) {
+            rc = 0;
+            goto out;
+        }
+    }
+
+    /* The runtime directory must actually ship a start.sh. */
+    if (snprintf(target, sizeof target, "%s%s/start.sh", wrapper, runtime) >= (int)sizeof target)
+        goto out;
+    {
+        int found = 0;
+        p = cd;
+        seen = 0;
+        while (seen < entries) {
+            struct cent c;
+            char name[512];
+            int cr = cent_next(cd_end, &p, &c);
+            if (cr != 0) {
+                err_msg = "zip is truncated";
+                goto out;
+            }
+            seen++;
+            if (copy_name(&c, name, sizeof name) != 0) continue;
+            if (strcmp(name, target) != 0) continue;
+            if ((c.mode >> 16 & 0170000) == 0120000 || (c.flags & 1)) {
+                err_msg = "zip is encrypted";
+                goto out;
+            }
+            found = 1;
+            break;
+        }
+        if (!found) {
+            err_msg = "launcher is missing";
+            goto out;
+        }
+    }
+
+    /* Pass 2: extract every sibling directory under the wrapper to the card
+       root, skipping the autorun folder, __MACOSX, and loose top-level files
+       (documentation that stays on the computer). */
+    {
+        char top_names[64][256];
+        int ntop = 0;
+        uint64_t total = 0;
+        p = cd;
+        seen = 0;
+        while (seen < entries) {
+            struct cent c;
+            char name[512], rel[512], top[256], dest[1024];
+            size_t rel_len, slash;
+            unsigned char *data = NULL;
+            size_t dlen = 0;
+            int is_dir;
+            int cr = cent_next(cd_end, &p, &c);
+            if (cr != 0) {
+                err_msg = "zip is truncated";
+                goto out;
+            }
+            seen++;
+            if (copy_name(&c, name, sizeof name) != 0) continue;
+            if (component_is(name, "__MACOSX") || !under_prefix(name, wrapper)) continue;
+            if (strlen(name) <= strlen(wrapper)) continue;
+            snprintf(rel, sizeof rel, "%s", name + strlen(wrapper));
+            rel_len = strlen(rel);
+            if (!rel_len) continue;
+            is_dir = rel[rel_len - 1] == '/';
+            if (is_dir) {
+                rel[--rel_len] = 0;
+                if (!rel_len) continue;
+            }
+            /* Skip the autorun folder itself. */
+            if (strcmp(rel, "autorun") == 0 || strncmp(rel, "autorun/", 8) == 0) continue;
+
+            slash = 0;
+            while (slash < rel_len && rel[slash] != '/') slash++;
+            if (slash >= rel_len) {
+                /* A loose top-level file (README, sums, guide). Not runtime data. */
+                continue;
+            }
+            if (slash + 1 >= sizeof top) goto out;
+            memcpy(top, rel, slash);
+            top[slash] = 0;
+
+            if (is_dir) {
+                if (ensure_under(card_root, rel) != 0 ||
+                    snprintf(dest, sizeof dest, "%s/%s", card_root, rel) >= (int)sizeof dest ||
+                    ensure_real_dir(dest) != 0) {
+                    goto out;
+                }
+            } else {
+                if ((c.mode >> 16 & 0170000) == 0120000) {
+                    err_msg = "refusing a symlink";
+                    goto out;
+                }
+                if (c.flags & 1) {
+                    err_msg = "zip is encrypted";
+                    goto out;
+                }
+                if (c.comp == 0xffffffffu || c.uncomp == 0xffffffffu || c.uncomp > ZIP_MAX_ENTRY ||
+                    total + c.uncomp > ZIP_MAX_TOTAL) {
+                    err_msg = "zip is too large";
+                    goto out;
+                }
+                if (c.method == 8 && c.comp > 0 && c.uncomp > 256u * 1024u && c.uncomp / c.comp > 64u) {
+                    err_msg = "zip is too large";
+                    goto out;
+                }
+                if (c.method != 0 && c.method != 8) {
+                    err_msg = "zip method is not supported";
+                    goto out;
+                }
+                if (entry_data(buf, n, &c, &data, &dlen) != 0) {
+                    err_msg = "zip is truncated";
+                    goto out;
+                }
+                if (write_file_over(card_root, rel, data, dlen) != 0) {
+                    free(data);
+                    err_msg = "could not store the package";
+                    goto out;
+                }
+                free(data);
+                total += c.uncomp;
+            }
+
+            /* Record the top-level directory name for cleanup. */
+            {
+                int i, have = 0;
+                for (i = 0; i < ntop; i++) {
+                    if (strcmp(top_names[i], top) == 0) {
+                        have = 1;
+                        break;
+                    }
+                }
+                if (!have && ntop < 64) snprintf(top_names[ntop++], sizeof top_names[0], "%s", top);
+            }
+        }
+
+        if (ntop > 0) {
+            size_t used = 0;
+            int i;
+            for (i = 0; i < ntop; i++) {
+                int w = snprintf(dirs + used, dirs_n - used, "%s%s", i ? " " : "", top_names[i]);
+                if (w < 0 || (size_t)w >= dirs_n - used) {
+                    err_msg = "could not store the package";
+                    goto out;
+                }
+                used += (size_t)w;
+            }
+        }
+    }
+
+    if (snprintf(launcher, launcher_n, "%s/start.sh", runtime) >= (int)launcher_n) {
+        err_msg = "could not store the package";
+        goto out;
+    }
+    rc = 1;
 out:
     if (f) fclose(f);
     free(buf);

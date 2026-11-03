@@ -1241,6 +1241,53 @@ static void install_zip_package(int fd, const char *part, const char *dir,
   send_json(fd, 200, "OK", resp);
 }
 
+/* A card package was already extracted to the card root by
+   unzip_card_package(). Register it as a boot-menu entry that runs the
+   launcher and remembers the card-root directories for later removal. */
+static void install_card_package(int fd, const char *slug, const char *title,
+                                 const char *args, const char *launcher,
+                                 const char *dirs) {
+  char menudir[PATH_MAX], entry[PATH_MAX], body[1024], resp[160];
+  int bn, entryfd = -1;
+  if (snprintf(menudir, sizeof menudir, "%s/autorun/boot-menu", g_card) >=
+          (int)sizeof menudir ||
+      snprintf(entry, sizeof entry, "%s/autorun/boot-menu/%s.entry", g_card,
+               slug) >= (int)sizeof entry) {
+    send_err(fd, 400, "Bad Request", "path is too long");
+    return;
+  }
+  if (ensure_dir(menudir) != 0) {
+    send_err(fd, 500, "Internal Server Error", "could not create boot menu");
+    return;
+  }
+  bn = snprintf(body, sizeof body, "title=%s\nrun=%s\ncard=1\ndirs=%s\n",
+                title, launcher, dirs);
+  if (bn < 0 || (size_t)bn >= sizeof body) {
+    send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
+    return;
+  }
+  if (args[0]) {
+    int w = snprintf(body + bn, sizeof body - (size_t)bn, "args=%s\n", args);
+    if (w < 0 || (size_t)(bn + w) >= sizeof body) {
+      send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
+      return;
+    }
+    bn += w;
+  }
+  entryfd = open(entry, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+  if (entryfd < 0 || write_full(entryfd, body, (size_t)bn) != 0 ||
+      close(entryfd) != 0) {
+    if (entryfd >= 0)
+      close(entryfd);
+    send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
+    return;
+  }
+  reload_boot_thingy();
+  snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"entry:%s.entry\"}\n",
+           slug);
+  send_json(fd, 200, "OK", resp);
+}
+
 static void handle_upload(int fd, struct io *io, int has_len,
                           size_t content_len, const char *query) {
   char title[512], args[512], name[256], slug[80];
@@ -1347,6 +1394,25 @@ static void handle_upload(int fd, struct io *io, int has_len,
         send_err(fd, 500, "Internal Server Error",
                  "could not store the program");
         return;
+      }
+      {
+        char launcher[MENU_RUN], dirs[MENU_RUN];
+        int kind = unzip_card_package(part, g_card, launcher, sizeof launcher,
+                                      dirs, sizeof dirs);
+        if (kind < 0) {
+          unlink(part);
+          rmdir(dir);
+          send_err(fd, 400, "Bad Request", unzip_error());
+          return;
+        }
+        if (kind == 1) {
+          unlink(part);
+          /* A previous plain-autorun install of the same name lives in
+             apps/<slug>. The card package replaces it. */
+          rm_tree(dir, 0);
+          install_card_package(fd, slug, title, args, launcher, dirs);
+          return;
+        }
       }
       install_zip_package(fd, part, dir, slug, title, args);
       return;
@@ -1460,6 +1526,11 @@ static void handle_delete(int fd, const char *query) {
     if (boot_edit_remove(g_card, id) != 0) {
       send_err(fd, 500, "Internal Server Error",
                "could not remove the boot entry");
+      return;
+    }
+    if (menu_card_dirs_remove(g_card, full) != 0) {
+      send_err(fd, 500, "Internal Server Error",
+               "could not remove the card package files");
       return;
     }
     if (!S_ISREG(st.st_mode) || unlink(full) != 0) {

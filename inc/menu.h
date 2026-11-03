@@ -21,8 +21,10 @@ struct menu_entry {
     char base[MENU_PATH]; /* directory a relative run path is joined to */
     char id[MENU_ID];     /* "stock", "app:<folder>", or "entry:<file>" */
     char patches[MENU_PATCHES]; /* comma-separated catalog ids, when boot_ac50 */
+    char dirs[MENU_PATCHES]; /* card package: space-separated card-root dirs to remove */
     int stock;
     int boot_ac50; /* run is a Boot Edit script; launch hands off like Stock */
+    int card_pkg;  /* run is a card-root script (e.g. WaveGrid/start.sh); launch hands off like Stock */
 };
 
 struct menu {
@@ -72,3 +74,8 @@ int menu_set_default(const char *card, const char *id);
 /* Split args on spaces into out[0..). Copies into buf, which must stay alive.
    Returns the number of words. */
 int menu_split_args(const char *args, char *buf, size_t buf_n, char **out, int max);
+
+/* Remove the card-root directories named by a card package's "dirs=" key in
+   entry_path. Each name must be a plain single component. Returns 0 when there
+   is nothing to remove, -1 on an invalid path. */
+int menu_card_dirs_remove(const char *card, const char *entry_path);
