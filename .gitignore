@@ -6,3 +6,4 @@ webserver/content/
 dist/
 .zig-cache/
 ignore/
+.DS_Store

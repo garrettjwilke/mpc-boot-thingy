@@ -756,11 +756,11 @@ static int launch_autorun(struct surface *midi, struct screen *scr,
    screen are still ours. */
 static int launch(struct surface *midi, struct screen *scr, const char *card,
                   const struct menu_entry *e) {
-  if (e->stock || e->boot_ac50) {
+  if (e->stock || e->boot_ac50 || e->card_pkg) {
     int ready = 0;
     if (e->stock)
       ready = stock_ready(card);
-    else {
+    else if (e->boot_ac50) {
       char dir[512];
       ready =
           entry_patch_dir(card, e, dir, sizeof dir) == 0 && stamp_equals(dir);

@@ -137,6 +137,38 @@ int main(void) {
   assert(menu_default_index(&m, dir) == 0);
   assert(menu_default_index(NULL, dir) == 0);
 
+  /* card package entry: card=1 and dirs= are parsed and cleaned up */
+  snprintf(path, sizeof path, "%s/autorun/boot-menu/40-card.entry", dir);
+  write_file(path, "title=Card\nrun=WaveGrid/start.sh\ncard=1\ndirs=WaveGrid\n");
+  snprintf(path, sizeof path, "%s/WaveGrid", dir);
+  mkdir_p(path);
+  snprintf(path, sizeof path, "%s/WaveGrid/start.sh", dir);
+  write_file(path, "#!/bin/sh\necho hi\n");
+  {
+    struct menu cm;
+    assert(menu_load(&cm, dir) == 4);
+    const struct menu_entry *ce = NULL;
+    for (int i = 0; i < cm.n; i++) {
+      if (strcmp(cm.items[i].id, "entry:40-card.entry") == 0) {
+        ce = &cm.items[i];
+        break;
+      }
+    }
+    assert(ce != NULL);
+    assert(ce->card_pkg == 1);
+    assert(strcmp(ce->run, "WaveGrid/start.sh") == 0);
+    assert(strcmp(ce->dirs, "WaveGrid") == 0);
+    snprintf(path, sizeof path, "%s/autorun/boot-menu/40-card.entry", dir);
+    assert(menu_card_dirs_remove(dir, path) == 0);
+    {
+      char wg[512];
+      snprintf(wg, sizeof wg, "%s/WaveGrid", dir);
+      assert(access(wg, F_OK) != 0);
+    }
+    snprintf(path, sizeof path, "%s/autorun/boot-menu/40-card.entry", dir);
+    unlink(path);
+  }
+
   snprintf(path, sizeof path, "%s/autorun/system", dir);
   mkdir_p(path);
   snprintf(path, sizeof path, "%s/autorun/system/boot-default", dir);

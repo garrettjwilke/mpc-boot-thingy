@@ -118,6 +118,14 @@ Replacing an existing name replaces that app folder.
   ./setup.sh --SD "/path/to/mounted/SD" --add /path/to/autorun --title "Lab"
   ./setup.sh --SD "/path/to/mounted/SD" --add /path/to/lab.zip
 
+A card package is an autorun package whose autorun script runs a sibling
+directory at the card root (for example Gridzilla's autorun.sh runs
+../WaveGrid/start.sh). boot thingy owns autorun/, so such a package is
+installed differently: every sibling directory is extracted to the card
+root, and a boot-menu entry runs its start.sh with stock started first so
+the package can take over. The package's own autorun folder and loose
+top-level files (manuals, checksums) stay on your computer.
+
 Older autorun/boot-menu/*.entry files still load. run in those files
 is relative to the card root, so a program in autorun/apps is
 run=autorun/apps/name/program. A boot.entry inside an app folder is
@@ -314,10 +322,10 @@ install_autorun_package() {
     exit 1
   fi
   dest=$sd/autorun/apps/$name
-  python3 - "$src" "$dest" "$title" <<'PY'
+  python3 - "$sd" "$src" "$dest" "$title" <<'PY'
 import os, re, shutil, stat, sys, zipfile
 
-src, dest, title = sys.argv[1:]
+sd, src, dest, title = sys.argv[1:]
 CAP = 64 * 1024 * 1024
 ENTRY_CAP = 32 * 1024 * 1024
 
@@ -523,6 +531,175 @@ def extract_zip(src, pkg):
             with open(dp, "wb") as out:
                 out.write(data)
 
+def find_rel_launch(text):
+    i = 0
+    while True:
+        i = text.find("../", i)
+        if i < 0:
+            return None
+        j = i + 3
+        k = j
+        while k < len(text) and text[k] not in "/\n\r\"' $;":
+            k += 1
+        if k == j or k >= len(text) or k + 9 > len(text) or text[k:k + 9] != "/start.sh":
+            i = k
+            continue
+        return text[j:k]
+
+def wrapper_of(prefix):
+    p = prefix.rstrip("/")
+    idx = p.rfind("/")
+    return p[:idx + 1] if idx >= 0 else ""
+
+def autorun_text_dir(root):
+    js = os.path.join(root, "autorun.json")
+    rel = None
+    if os.path.isfile(js) and not os.path.islink(js):
+        with open(js, "r", errors="replace") as f:
+            text = f.read(65536)
+        m = re.search(r'"path"\s*:\s*"([^"\\\r\n]*)"', text)
+        if m and m.group(1):
+            rel = m.group(1)
+    if rel is None:
+        rel = "autorun.sh"
+    if rel.startswith("./"):
+        rel = rel[2:]
+    if not name_ok(rel) or rel.endswith("/"):
+        return None
+    full = os.path.join(root, *rel.split("/"))
+    if os.path.islink(full) or not os.path.isfile(full):
+        return None
+    with open(full, "r", errors="replace") as f:
+        return f.read(65536)
+
+def autorun_text_zip(src):
+    with zipfile.ZipFile(src) as z:
+        prefix = zip_prefix(z)
+        if prefix is None:
+            return None
+        try:
+            data = z.read(prefix + "autorun.sh")
+        except KeyError:
+            return None
+        return data.decode("utf-8", "replace")
+
+def plan_card(root, kind):
+    if kind == "dir":
+        text = autorun_text_dir(root)
+        if not text:
+            return None
+        name = find_rel_launch(text)
+        if not name:
+            return None
+        wrapper = os.path.dirname(root)
+        if not os.path.isfile(os.path.join(wrapper, name, "start.sh")):
+            return None
+        return (name, wrapper, kind)
+    text = autorun_text_zip(root)
+    if not text:
+        return None
+    name = find_rel_launch(text)
+    if not name:
+        return None
+    with zipfile.ZipFile(root) as z:
+        wrapper = wrapper_of(zip_prefix(z))
+        target = wrapper + name + "/start.sh"
+        found = False
+        for info in z.infolist():
+            if info.filename.replace("\\", "/") == target:
+                found = True
+                break
+    if not found:
+        return None
+    return (name, wrapper, kind)
+
+def card_dirs_dir(wrapper, sd):
+    dirs = []
+    for entry in sorted(os.listdir(wrapper)):
+        if entry == "autorun" or entry == "__MACOSX":
+            continue
+        full = os.path.join(wrapper, entry)
+        if os.path.islink(full):
+            die("refusing a symlink")
+        if os.path.isdir(full):
+            copy_tree(full, os.path.join(sd, entry))
+            dirs.append(entry)
+    return dirs
+
+def card_dirs_zip(root, wrapper, sd):
+    dirs = []
+    with zipfile.ZipFile(root) as z:
+        plan = []
+        for info in z.infolist():
+            name = info.filename.replace("\\", "/")
+            if has_component(name, "__MACOSX"):
+                continue
+            if not name.startswith(wrapper):
+                continue
+            rel = name[len(wrapper):]
+            if not rel:
+                continue
+            if rel == "autorun" or rel.startswith("autorun/"):
+                continue
+            if rel.endswith("/"):
+                rel = rel[:-1]
+                if not rel:
+                    continue
+                is_dir = True
+            else:
+                is_dir = False
+            if "/" not in rel and not is_dir:
+                continue
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if stat.S_ISLNK(mode):
+                die("refusing a symlink")
+            if info.flag_bits & 1:
+                die("zip is encrypted")
+            if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                die("zip method is not supported")
+            if info.file_size > ENTRY_CAP:
+                die("zip is too large")
+            if info.compress_type == zipfile.ZIP_DEFLATED and info.compress_size and info.file_size > 256 * 1024 and info.file_size // info.compress_size > 64:
+                die("zip is too large")
+            plan.append((info, rel, is_dir))
+        total = 0
+        for info, rel, is_dir in plan:
+            total += info.file_size
+            if total > CAP:
+                die("zip is too large")
+        for info, rel, is_dir in plan:
+            top = rel.split("/")[0]
+            if top not in dirs:
+                dirs.append(top)
+            if is_dir:
+                os.makedirs(os.path.join(sd, *rel.split("/")), exist_ok=True)
+                continue
+            try:
+                data = z.read(info)
+            except Exception:
+                die("zip is truncated")
+            if len(data) != info.file_size:
+                die("zip is truncated")
+            dp = os.path.join(sd, *rel.split("/"))
+            os.makedirs(os.path.dirname(dp), exist_ok=True)
+            with open(dp, "wb") as out:
+                out.write(data)
+    return dirs
+
+def card_install(root, kind, wrapper, name):
+    slug = os.path.basename(dest)
+    if kind == "dir":
+        dirs = card_dirs_dir(wrapper, sd)
+    else:
+        dirs = card_dirs_zip(root, wrapper, sd)
+    menu = os.path.join(sd, "autorun", "boot-menu")
+    os.makedirs(menu, exist_ok=True)
+    entry = os.path.join(menu, slug + ".entry")
+    body = "title=%s\nrun=%s/start.sh\ncard=1\ndirs=%s\n" % (title, name, " ".join(dirs))
+    with open(entry, "w") as f:
+        f.write(body)
+    print("Installed %s on the SD card (card package)" % title)
+
 stage = None
 try:
     if os.path.isdir(src) and not os.path.islink(src):
@@ -533,6 +710,11 @@ try:
         kind = "zip"
     else:
         die("not an autorun package")
+    card = plan_card(root, kind)
+    if card is not None:
+        name, wrapper, _ = card
+        card_install(root, kind, wrapper, name)
+        sys.exit(0)
     parent = os.path.dirname(dest)
     os.makedirs(parent, exist_ok=True)
     stage = os.path.join(parent, "." + os.path.basename(dest) + ".incoming")
@@ -550,6 +732,7 @@ try:
     remove_path(dest)
     os.rename(stage, dest)
     stage = None
+    print("Installed %s in %s" % (title, dest))
 except SystemExit:
     if stage:
         remove_path(stage)
@@ -559,7 +742,6 @@ except Exception:
         remove_path(stage)
     die("could not store the package")
 PY
-  echo "Installed $title in $dest"
 }
 
 install_app() {

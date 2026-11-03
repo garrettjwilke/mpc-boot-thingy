@@ -618,6 +618,17 @@ int boot_entry_update(const char *card, const char *id, const char *new_title, c
         }
     }
 
+    if (existing.card_pkg) {
+        int w = snprintf(body + n, sizeof body - (size_t)n, "card=1\n");
+        if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
+        n += w;
+        if (existing.dirs[0]) {
+            w = snprintf(body + n, sizeof body - (size_t)n, "dirs=%s\n", existing.dirs);
+            if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
+            n += w;
+        }
+    }
+
     return write_text(path, body, 0644);
 }
 
@@ -642,6 +653,8 @@ int boot_entry_delete(const char *card, const char *id) {
         if (lstat(entry_path, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
 
         boot_edit_remove(card, id);
+
+        if (menu_card_dirs_remove(card, entry_path) != 0) return -1;
 
         if (unlink(entry_path) != 0) return -1;
     } else {
