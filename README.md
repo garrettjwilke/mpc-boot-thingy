@@ -10,7 +10,9 @@ there are other enhancements this provides, but ehh...they're there... :)
 ## apps you can try now
 
 **how to install apps:**
-> make sure boot thingy is installed, plug in your MPC Sample to your computer via USB. download the zip file from the release, and install it from the boot thingy web tool: [http://mpc-sample.local:8080](http://mpc-sample.local:8080)
+> make sure boot thingy is installed, plug in your MPC Sample to your computer via USB. install your app from the boot thingy web tool: 
+- [http://mpc-sample.local:8080](http://mpc-sample.local:8080)
+- [http://192.168.155.1:8080](http://192.168.155.1:8080)
 
 * [SampQOL-OS](https://github.com/snarebes/SampQOL-OS.git)
    - many enhancements to the OS that improve overall functionality and UX.
