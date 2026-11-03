@@ -855,6 +855,14 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
     _exit(127);
   }
   g_running_child_pid = pid;
+  {
+    /* Record the app's process group so the /testapp wrapper can stop it. */
+    FILE *apf = fopen("/run/mpc-boot-app.pid", "w");
+    if (apf) {
+      fprintf(apf, "%d\n", (int)pid);
+      fclose(apf);
+    }
+  }
   int st = 0;
   while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {
     if (g_reload_requested || g_boot_now_requested) {
@@ -864,6 +872,7 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
     }
   }
   g_running_child_pid = -1;
+  unlink("/run/mpc-boot-app.pid");
   kill(-pid, SIGTERM);
   while (waitpid(-pid, NULL, WNOHANG) > 0) {
   }
@@ -1084,8 +1093,6 @@ static int wants_menu(int argc, char **argv) {
   return 0;
 }
 
-static int g_testapp_wrapped;
-
 static int file_is_elf(const char *path) {
   FILE *f = fopen(path, "rb");
   unsigned char b[4];
@@ -1108,21 +1115,6 @@ static int file_contains(const char *path, const char *needle) {
   fclose(f);
   buf[n] = 0;
   return strstr(buf, needle) != NULL;
-}
-
-static void unmount_testapp_wrapper(void) {
-  if (!g_testapp_wrapped)
-    return;
-  g_testapp_wrapped = 0;
-  if (umount("/usr/bin/test-app-launcher") != 0)
-    fprintf(stderr, "testapp: umount failed: %s\n", strerror(errno));
-}
-
-static void arm_testapp_unmount(void) {
-  if (g_testapp_wrapped)
-    return;
-  g_testapp_wrapped = 1;
-  atexit(unmount_testapp_wrapper);
 }
 
 /* Cover the stock launcher so a /testapp upload asks us to drop the screen
@@ -1156,8 +1148,23 @@ static void install_testapp_wrapper(void) {
       "    i=$((i + 1))\n"
       "    sleep 0.05\n"
       "  done\n"
+      "  if [ -f \"$READY\" ]; then\n"
+      "    rm -f \"$REQ\" \"$READY\"\n"
+      "    exec \"$REAL\" \"$@\"\n"
+      "  fi\n"
       "  rm -f \"$REQ\" \"$READY\"\n"
       "fi\n"
+      "# boot thingy is not running (or could not release the screen in time):\n"
+      "# an app owns the display. Stop the app units and free the DRM device so\n"
+      "# the stock launcher can take over.\n"
+      "systemctl stop wavegrid-sd.service 2>/dev/null || true\n"
+      "systemctl kill -s KILL mpc-boot-autorun.service 2>/dev/null || true\n"
+      "systemctl stop ac50.service 2>/dev/null || true\n"
+      "if [ -f /run/mpc-boot-app.pid ]; then\n"
+      "  pgid=$(cat /run/mpc-boot-app.pid 2>/dev/null || true)\n"
+      "  [ -n \"$pgid\" ] && kill -9 \"-$pgid\" 2>/dev/null || true\n"
+      "fi\n"
+      "killall -9 \"MPC Sample\" 2>/dev/null || true\n"
       "exec \"$REAL\" \"$@\"\n";
   FILE *out;
   if (access(src, F_OK) != 0)
@@ -1197,13 +1204,11 @@ static void install_testapp_wrapper(void) {
   }
   if (mount(wrap, src, "", MS_BIND, NULL) != 0) {
     if (!file_is_elf(src) && file_contains(src, "mpc-boot-testapp.request")) {
-      arm_testapp_unmount();
       return;
     }
     fprintf(stderr, "testapp: bind mount failed: %s\n", strerror(errno));
     return;
   }
-  arm_testapp_unmount();
 }
 
 int main(int argc, char **argv) {
@@ -1234,6 +1239,12 @@ int main(int argc, char **argv) {
   card_root_of(autorun, card, sizeof card);
   flush_and_drop_caches(card);
   sd_check_repair(card);
+
+  /* ac50.service starts in parallel with us at boot and can beat us to the
+     DRM device (drm set master: Resource busy). Stop it up front so the menu
+     can claim the screen and pads. */
+  systemctl_ac50("stop");
+  stopped_ac50 = 1;
 
   struct surface midi = {.fd = -1};
   struct screen scr = {.fd = -1};
