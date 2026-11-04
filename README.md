@@ -18,6 +18,9 @@ there are other enhancements this provides, but ehh...they're there... :)
    - many enhancements to the OS that improve overall functionality and UX.
 * [GRIDZILLA](https://www.thesoundfactorynj.com/gridzilla)
    - modern daw-like sequencing UI/UX...super custom workflow.
+* [beat train](https://github.com/drose030/beat-train-mpc-sample)
+   - drum/rhythm game for the mpc sample.
+   - import your own music to play!
 * [mpc-furnace](https://github.com/garrettjwilke/mpc-furnace)
    - furnace editor for MPC Sample.
    - create music for retro video game consoles.
