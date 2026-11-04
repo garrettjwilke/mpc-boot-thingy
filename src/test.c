@@ -1101,6 +1101,14 @@ int main(void) {
         "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED)\n"
         "    z.writestr('autorun/autorun.sh', '#!/bin/sh\\n')\n"
         "    z.writestr('autorun/../escaped.txt', 'nope')\n"
+        "    z.close()\n"
+        "elif kind == 'bt':\n"
+        "    z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_DEFLATED)\n"
+        "    z.writestr('LICENSE', 'mit\\n')\n"
+        "    z.writestr('BeatTrain/Songs/song1.txt', 'song\\n')\n"
+        "    z.writestr('autorun/autorun.json', "
+        "'{\"value0\":{\"scripts\":[{\"path\":\"autorun.sh\"}]}}')\n"
+        "    z.writestr('autorun/autorun.sh', '#!/bin/sh\\necho bt\\n')\n"
         "    z.close()\n");
     write_file(path, script);
     snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' hub '%s/hub.zip'", dir,
@@ -1110,6 +1118,9 @@ int main(void) {
              dir);
     assert(system(cmd) == 0);
     snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' slip '%s/slip.zip'", dir,
+             dir);
+    assert(system(cmd) == 0);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkzip.py' bt '%s/bt.zip'", dir,
              dir);
     assert(system(cmd) == 0);
 
@@ -1151,6 +1162,58 @@ int main(void) {
     assert(access(path, F_OK) != 0);
     snprintf(path, sizeof path, "%s/autorun/escaped.txt", zipout);
     assert(access(path, F_OK) != 0);
+
+    /* Sibling directory extraction (Beat Train style) */
+    {
+      char dirs_out[256];
+      char card_test[512], app_entry[512], app_dir[512];
+      snprintf(card_test, sizeof card_test, "%s/card-bt", dir);
+      assert(mkdir(card_test, 0755) == 0);
+      /* unzip_sibling_dirs ignores non-BeatTrain sibling directories (like DATA) */
+      snprintf(path, sizeof path, "%s/hub.zip", dir);
+      assert(unzip_sibling_dirs(path, card_test, dirs_out, sizeof dirs_out) == 0);
+      assert(dirs_out[0] == '\0');
+      snprintf(path, sizeof path, "%s/DATA", card_test);
+      assert(access(path, F_OK) != 0);
+
+      /* unzip_sibling_dirs extracts BeatTrain sibling directory */
+      snprintf(path, sizeof path, "%s/bt.zip", dir);
+      assert(unzip_sibling_dirs(path, card_test, dirs_out, sizeof dirs_out) == 0);
+      assert(strcmp(dirs_out, "BeatTrain") == 0);
+      snprintf(path, sizeof path, "%s/BeatTrain/Songs/song1.txt", card_test);
+      assert(access(path, F_OK) == 0);
+      snprintf(path, sizeof path, "%s/LICENSE", card_test);
+      assert(access(path, F_OK) != 0);
+      snprintf(path, sizeof path, "%s/autorun", card_test);
+      assert(access(path, F_OK) != 0);
+
+      /* Deleting an app with dirs= removes the sibling directories */
+      snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/bt", card_test);
+      mkdir_p(app_dir);
+      snprintf(app_entry, sizeof app_entry, "%s/boot.entry", app_dir);
+      write_file(app_entry, "title=BT\nrun=autorun/autorun.sh\ndirs=BeatTrain\n");
+      assert(boot_entry_delete(card_test, "app:bt") == 0);
+      assert(access(app_dir, F_OK) != 0);
+      snprintf(path, sizeof path, "%s/BeatTrain", card_test);
+      assert(access(path, F_OK) != 0);
+
+      /* Beat Train zip test if present in ignore/ */
+      if (access("ignore/beattrain-mpc-sample.zip", F_OK) == 0) {
+        assert(unzip_sibling_dirs("ignore/beattrain-mpc-sample.zip", card_test, dirs_out, sizeof dirs_out) == 0);
+        assert(strcmp(dirs_out, "BeatTrain") == 0);
+        snprintf(path, sizeof path, "%s/BeatTrain/Songs", card_test);
+        struct stat st;
+        assert(stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+        /* Cleanup */
+        snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/beattrain", card_test);
+        mkdir_p(app_dir);
+        snprintf(app_entry, sizeof app_entry, "%s/boot.entry", app_dir);
+        write_file(app_entry, "title=Beat-Train\nrun=autorun/autorun.sh\ndirs=BeatTrain\n");
+        assert(boot_entry_delete(card_test, "app:beattrain") == 0);
+        snprintf(path, sizeof path, "%s/BeatTrain", card_test);
+        assert(access(path, F_OK) != 0);
+      }
+    }
   }
 
   assert(png_load_screen("splash-screen.png", px) == 0);

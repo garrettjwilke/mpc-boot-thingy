@@ -18,3 +18,10 @@ const char *unzip_error(void);
 int unzip_card_package(const char *zip_path, const char *card_root,
                        char *launcher, size_t launcher_n,
                        char *dirs, size_t dirs_n);
+
+/* Extract every sibling directory under the wrapper to card_root (skipping the
+   autorun folder and loose top-level files), and return dirs (space-separated
+   top-level directory names written, or empty string if none).
+   Returns 0 on success, -1 on error (unzip_error()). */
+int unzip_sibling_dirs(const char *zip_path, const char *card_root,
+                       char *dirs, size_t dirs_n);

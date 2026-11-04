@@ -1174,7 +1174,7 @@ static void install_zip_package(int fd, const char *part, const char *dir,
                                 const char *slug, const char *title,
                                 const char *args) {
   char stage[PATH_MAX], backup[PATH_MAX], entry[PATH_MAX], run[MENU_RUN],
-      body[640], resp[160];
+      dirs[MENU_RUN], body[1024], resp[160];
   int bn, entryfd = -1;
   if (snprintf(stage, sizeof stage, "%s/autorun/apps/.%s.incoming", g_card,
                slug) >= (int)sizeof stage ||
@@ -1201,11 +1201,28 @@ static void install_zip_package(int fd, const char *part, const char *dir,
     send_err(fd, 400, "Bad Request", unzip_error());
     return;
   }
-  if (args[0])
-    bn = snprintf(body, sizeof body, "title=%s\nrun=%s\nargs=%s\n", title, run,
-                  args);
-  else
-    bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n", title, run);
+  dirs[0] = 0;
+  if (unzip_sibling_dirs(part, g_card, dirs, sizeof dirs) != 0) {
+    rm_tree(stage, 0);
+    unlink(part);
+    rmdir(dir);
+    send_err(fd, 400, "Bad Request", unzip_error());
+    return;
+  }
+  if (dirs[0]) {
+    if (args[0])
+      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\nargs=%s\ndirs=%s\n",
+                    title, run, args, dirs);
+    else
+      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\ndirs=%s\n", title,
+                    run, dirs);
+  } else {
+    if (args[0])
+      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\nargs=%s\n", title, run,
+                    args);
+    else
+      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n", title, run);
+  }
   if (bn < 0 || (size_t)bn >= sizeof body) {
     rm_tree(stage, 0);
     unlink(part);
@@ -1517,6 +1534,11 @@ static void handle_delete(int fd, const char *query) {
     return;
   }
   if (app) {
+    char entry_path[PATH_MAX];
+    if (snprintf(entry_path, sizeof entry_path, "%s/boot.entry", resolved) <
+        (int)sizeof entry_path) {
+      menu_card_dirs_remove(g_card, entry_path);
+    }
     if (!S_ISDIR(st.st_mode) || rm_tree(resolved, 0) != 0) {
       send_err(fd, 500, "Internal Server Error",
                "could not remove the program");
