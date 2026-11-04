@@ -660,6 +660,30 @@ test ! -e "$empty/autorun/apps/hub/README.md" || fail "zip add copied a file out
 test ! -e "$empty/autorun/apps/hub/autorun/README.md" || fail "zip add copied README into the package"
 test ! -e "$empty/autorun/apps/hub/DATA/nope.txt" || fail "zip add copied a sibling folder"
 
+python3 - "$work/bt.zip" <<'PY'
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED)
+z.writestr("LICENSE", "mit\n")
+z.writestr("autorun/autorun.json", '{"value0":{"scripts":[{"path":"autorun.sh"}]}}')
+z.writestr("autorun/autorun.sh", "#!/bin/sh\necho bt\n")
+z.writestr("BeatTrain/Songs/song1.txt", "song\n")
+z.close()
+PY
+./setup.sh --SD "$empty" --add "$work/bt.zip" --title "Beat Train" >/tmp/mpc-boot-out
+grep -q 'Installed Beat Train' /tmp/mpc-boot-out
+printf '%s\n' 'title=Beat Train' 'run=autorun/autorun.sh' 'dirs=BeatTrain' > "$work/bt.entry"
+cmp "$work/bt.entry" "$empty/autorun/apps/beat-train/boot.entry"
+test -f "$empty/BeatTrain/Songs/song1.txt" || fail "BeatTrain folder was not extracted to SD root"
+test ! -e "$empty/LICENSE" || fail "LICENSE should not be extracted to SD root"
+test ! -e "$empty/autorun/apps/beat-train/LICENSE" || fail "LICENSE copied into app"
+
+if [ -f "ignore/beattrain-mpc-sample.zip" ]; then
+  ./setup.sh --SD "$empty" --add "ignore/beattrain-mpc-sample.zip" --title "Beat Train Real" >/tmp/mpc-boot-out
+  grep -q 'Installed Beat Train Real' /tmp/mpc-boot-out
+  grep -q 'dirs=BeatTrain' "$empty/autorun/apps/beat-train-real/boot.entry" || fail "real beat train missing dirs=BeatTrain"
+  test -d "$empty/BeatTrain/Songs" || fail "real BeatTrain/Songs missing"
+fi
+
 python3 - "$work/slip.zip" <<'PY'
 import sys, zipfile
 z = zipfile.ZipFile(sys.argv[1], "w")

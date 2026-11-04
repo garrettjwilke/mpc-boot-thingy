@@ -754,6 +754,12 @@ static void wrapper_of(const char *prefix, char *out, size_t n) {
     out[i] = 0;
 }
 
+static int extract_sibling_dirs(const unsigned char *buf, size_t n,
+                                const unsigned char *cd, const unsigned char *cd_end,
+                                unsigned entries, const char *wrapper,
+                                const char *card_root, char *dirs, size_t dirs_n,
+                                int allow_all);
+
 int unzip_card_package(const char *zip_path, const char *card_root,
                        char *launcher, size_t launcher_n,
                        char *dirs, size_t dirs_n) {
@@ -942,122 +948,261 @@ int unzip_card_package(const char *zip_path, const char *card_root,
     /* Pass 2: extract every sibling directory under the wrapper to the card
        root, skipping the autorun folder, __MACOSX, and loose top-level files
        (documentation that stays on the computer). */
-    {
-        char top_names[64][256];
-        int ntop = 0;
-        uint64_t total = 0;
-        p = cd;
-        seen = 0;
-        while (seen < entries) {
-            struct cent c;
-            char name[512], rel[512], top[256], dest[1024];
-            size_t rel_len, slash;
-            unsigned char *data = NULL;
-            size_t dlen = 0;
-            int is_dir;
-            int cr = cent_next(cd_end, &p, &c);
-            if (cr != 0) {
-                err_msg = "zip is truncated";
-                goto out;
-            }
-            seen++;
-            if (copy_name(&c, name, sizeof name) != 0) continue;
-            if (component_is(name, "__MACOSX") || !under_prefix(name, wrapper)) continue;
-            if (strlen(name) <= strlen(wrapper)) continue;
-            snprintf(rel, sizeof rel, "%s", name + strlen(wrapper));
-            rel_len = strlen(rel);
-            if (!rel_len) continue;
-            is_dir = rel[rel_len - 1] == '/';
-            if (is_dir) {
-                rel[--rel_len] = 0;
-                if (!rel_len) continue;
-            }
-            /* Skip the autorun folder itself. */
-            if (strcmp(rel, "autorun") == 0 || strncmp(rel, "autorun/", 8) == 0) continue;
-
-            slash = 0;
-            while (slash < rel_len && rel[slash] != '/') slash++;
-            if (slash >= rel_len) {
-                /* A loose top-level file (README, sums, guide). Not runtime data. */
-                continue;
-            }
-            if (slash + 1 >= sizeof top) goto out;
-            memcpy(top, rel, slash);
-            top[slash] = 0;
-
-            if (is_dir) {
-                if (ensure_under(card_root, rel) != 0 ||
-                    snprintf(dest, sizeof dest, "%s/%s", card_root, rel) >= (int)sizeof dest ||
-                    ensure_real_dir(dest) != 0) {
-                    goto out;
-                }
-            } else {
-                if ((c.mode >> 16 & 0170000) == 0120000) {
-                    err_msg = "refusing a symlink";
-                    goto out;
-                }
-                if (c.flags & 1) {
-                    err_msg = "zip is encrypted";
-                    goto out;
-                }
-                if (c.comp == 0xffffffffu || c.uncomp == 0xffffffffu || c.uncomp > ZIP_MAX_ENTRY ||
-                    total + c.uncomp > ZIP_MAX_TOTAL) {
-                    err_msg = "zip is too large";
-                    goto out;
-                }
-                if (c.method == 8 && c.comp > 0 && c.uncomp > 256u * 1024u && c.uncomp / c.comp > 64u) {
-                    err_msg = "zip is too large";
-                    goto out;
-                }
-                if (c.method != 0 && c.method != 8) {
-                    err_msg = "zip method is not supported";
-                    goto out;
-                }
-                if (entry_data(buf, n, &c, &data, &dlen) != 0) {
-                    err_msg = "zip is truncated";
-                    goto out;
-                }
-                if (write_file_over(card_root, rel, data, dlen) != 0) {
-                    free(data);
-                    err_msg = "could not store the package";
-                    goto out;
-                }
-                free(data);
-                total += c.uncomp;
-            }
-
-            /* Record the top-level directory name for cleanup. */
-            {
-                int i, have = 0;
-                for (i = 0; i < ntop; i++) {
-                    if (strcmp(top_names[i], top) == 0) {
-                        have = 1;
-                        break;
-                    }
-                }
-                if (!have && ntop < 64) snprintf(top_names[ntop++], sizeof top_names[0], "%s", top);
-            }
-        }
-
-        if (ntop > 0) {
-            size_t used = 0;
-            int i;
-            for (i = 0; i < ntop; i++) {
-                int w = snprintf(dirs + used, dirs_n - used, "%s%s", i ? " " : "", top_names[i]);
-                if (w < 0 || (size_t)w >= dirs_n - used) {
-                    err_msg = "could not store the package";
-                    goto out;
-                }
-                used += (size_t)w;
-            }
-        }
-    }
+    if (extract_sibling_dirs(buf, n, cd, cd_end, entries, wrapper, card_root, dirs, dirs_n, 1) != 0)
+        goto out;
 
     if (snprintf(launcher, launcher_n, "%s/start.sh", runtime) >= (int)launcher_n) {
         err_msg = "could not store the package";
         goto out;
     }
     rc = 1;
+out:
+    if (f) fclose(f);
+    free(buf);
+    return rc;
+}
+
+/* Extract every sibling directory under wrapper to card_root, skipping
+   the autorun folder itself, __MACOSX, and loose top-level files.
+   Writes space-separated top-level directory names into dirs.
+   Returns 0 on success, -1 on error. */
+static int extract_sibling_dirs(const unsigned char *buf, size_t n,
+                                const unsigned char *cd, const unsigned char *cd_end,
+                                unsigned entries, const char *wrapper,
+                                const char *card_root, char *dirs, size_t dirs_n,
+                                int allow_all) {
+    char top_names[64][256];
+    int ntop = 0;
+    uint64_t total = 0;
+    const unsigned char *p = cd;
+    unsigned seen = 0;
+    if (dirs && dirs_n) dirs[0] = 0;
+
+    while (seen < entries) {
+        struct cent c;
+        char name[512], rel[512], top[256], dest[1024];
+        size_t rel_len, slash;
+        unsigned char *data = NULL;
+        size_t dlen = 0;
+        int is_dir;
+        int cr = cent_next(cd_end, &p, &c);
+        if (cr != 0) {
+            err_msg = "zip is truncated";
+            return -1;
+        }
+        seen++;
+        if (copy_name(&c, name, sizeof name) != 0) continue;
+        if (component_is(name, "__MACOSX") || !under_prefix(name, wrapper)) continue;
+        if (strlen(name) <= strlen(wrapper)) continue;
+        snprintf(rel, sizeof rel, "%s", name + strlen(wrapper));
+        rel_len = strlen(rel);
+        if (!rel_len) continue;
+        is_dir = rel[rel_len - 1] == '/';
+        if (is_dir) {
+            rel[--rel_len] = 0;
+            if (!rel_len) continue;
+        }
+        /* Skip the autorun folder itself. */
+        if (strcmp(rel, "autorun") == 0 || strncmp(rel, "autorun/", 8) == 0) continue;
+
+        slash = 0;
+        while (slash < rel_len && rel[slash] != '/') slash++;
+        if (slash >= rel_len) {
+            if (!is_dir) {
+                /* A loose top-level file (README, sums, guide). Not runtime data. */
+                continue;
+            }
+            if (rel_len + 1 >= sizeof top) return -1;
+            memcpy(top, rel, rel_len);
+            top[rel_len] = 0;
+        } else {
+            if (slash + 1 >= sizeof top) return -1;
+            memcpy(top, rel, slash);
+            top[slash] = 0;
+        }
+
+        if (!allow_all && strcasecmp(top, "BeatTrain") != 0) continue;
+
+        if (is_dir) {
+            if (ensure_under(card_root, rel) != 0 ||
+                snprintf(dest, sizeof dest, "%s/%s", card_root, rel) >= (int)sizeof dest ||
+                ensure_real_dir(dest) != 0) {
+                return -1;
+            }
+        } else {
+            if ((c.mode >> 16 & 0170000) == 0120000) {
+                err_msg = "refusing a symlink";
+                return -1;
+            }
+            if (c.flags & 1) {
+                err_msg = "zip is encrypted";
+                return -1;
+            }
+            if (c.comp == 0xffffffffu || c.uncomp == 0xffffffffu || c.uncomp > ZIP_MAX_ENTRY ||
+                total + c.uncomp > ZIP_MAX_TOTAL) {
+                err_msg = "zip is too large";
+                return -1;
+            }
+            if (c.method == 8 && c.comp > 0 && c.uncomp > 256u * 1024u && c.uncomp / c.comp > 64u) {
+                err_msg = "zip is too large";
+                return -1;
+            }
+            if (c.method != 0 && c.method != 8) {
+                err_msg = "zip method is not supported";
+                return -1;
+            }
+            if (entry_data(buf, n, &c, &data, &dlen) != 0) {
+                err_msg = "zip is truncated";
+                return -1;
+            }
+            if (write_file_over(card_root, rel, data, dlen) != 0) {
+                free(data);
+                err_msg = "could not store the package";
+                return -1;
+            }
+            free(data);
+            total += c.uncomp;
+        }
+
+        /* Record the top-level directory name for cleanup. */
+        {
+            int i, have = 0;
+            for (i = 0; i < ntop; i++) {
+                if (strcmp(top_names[i], top) == 0) {
+                    have = 1;
+                    break;
+                }
+            }
+            if (!have && ntop < 64) snprintf(top_names[ntop++], sizeof top_names[0], "%s", top);
+        }
+    }
+
+    if (ntop > 0) {
+        size_t used = 0;
+        int i;
+        for (i = 0; i < ntop; i++) {
+            int w = snprintf(dirs + used, dirs_n - used, "%s%s", i ? " " : "", top_names[i]);
+            if (w < 0 || (size_t)w >= dirs_n - used) {
+                err_msg = "could not store the package";
+                return -1;
+            }
+            used += (size_t)w;
+        }
+    }
+    return 0;
+}
+
+int unzip_sibling_dirs(const char *zip_path, const char *card_root,
+                       char *dirs, size_t dirs_n) {
+    FILE *f = NULL;
+    unsigned char *buf = NULL;
+    long sz = 0;
+    size_t n = 0;
+    const unsigned char *eocd, *cd, *cd_end, *p;
+    unsigned entries, seen;
+    char json_prefix[512], sh_prefix[512], prefix[512], wrapper[512];
+    int json_set = 0, sh_set = 0, sh_conflict = 0;
+    int rc = -1;
+    err_msg = "could not store the package";
+    if (dirs && dirs_n) dirs[0] = 0;
+    if (!zip_path || !card_root || !card_root[0] || !dirs || dirs_n == 0)
+        goto out;
+    f = fopen(zip_path, "rb");
+    if (!f) goto out;
+    if (fseek(f, 0, SEEK_END) != 0) goto out;
+    sz = ftell(f);
+    if (sz < 22 || (unsigned long)sz > ZIP_MAX_BYTES) {
+        err_msg = "zip is too large";
+        goto out;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) goto out;
+    n = (size_t)sz;
+    buf = malloc(n ? n : 1);
+    if (!buf || fread(buf, 1, n, f) != n) goto out;
+    fclose(f);
+    f = NULL;
+    eocd = find_eocd(buf, n);
+    if (!eocd) {
+        err_msg = "zip is truncated";
+        goto out;
+    }
+    if (ru16(eocd + 4) != 0 || ru16(eocd + 6) != 0) {
+        err_msg = "zip method is not supported";
+        goto out;
+    }
+    entries = ru16(eocd + 10);
+    if (entries == 0 || entries > ZIP_MAX_ENTRIES || ru16(eocd + 8) != entries) {
+        err_msg = "zip is not an autorun package";
+        goto out;
+    }
+    {
+        uint32_t cd_off = ru32(eocd + 16);
+        uint32_t cd_size = ru32(eocd + 12);
+        if (cd_off == 0xffffffffu || cd_size == 0xffffffffu || (size_t)cd_off + cd_size > n) {
+            err_msg = "zip is too large";
+            goto out;
+        }
+        cd = buf + cd_off;
+        cd_end = cd + cd_size;
+    }
+
+    p = cd;
+    seen = 0;
+    while (seen < entries) {
+        struct cent c;
+        char name[512], parent[512];
+        int cr = cent_next(cd_end, &p, &c);
+        if (cr != 0) {
+            err_msg = "zip is truncated";
+            goto out;
+        }
+        seen++;
+        if (c.disk != 0) {
+            err_msg = "zip method is not supported";
+            goto out;
+        }
+        if (copy_name(&c, name, sizeof name) != 0 || !name_ok(name)) {
+            err_msg = "zip path leaves the package";
+            goto out;
+        }
+        if (component_is(name, "__MACOSX")) continue;
+        if (parent_of(name, parent, sizeof parent) != 0) {
+            err_msg = "zip path leaves the package";
+            goto out;
+        }
+        if (base_is(name, "autorun.json")) {
+            if (note_marker(json_prefix, &json_set, parent) != 0) {
+                err_msg = "zip has more than one autorun package";
+                goto out;
+            }
+        } else if (base_is(name, "autorun.sh")) {
+            if (!sh_set) {
+                snprintf(sh_prefix, sizeof sh_prefix, "%s", parent);
+                sh_set = 1;
+            } else if (strcmp(sh_prefix, parent) != 0) {
+                sh_conflict = 1;
+            }
+        }
+    }
+    if (p != cd_end) {
+        err_msg = "zip is truncated";
+        goto out;
+    }
+    if (json_set) snprintf(prefix, sizeof prefix, "%s", json_prefix);
+    else if (sh_conflict) {
+        err_msg = "zip has more than one autorun package";
+        goto out;
+    } else if (sh_set) snprintf(prefix, sizeof prefix, "%s", sh_prefix);
+    else {
+        rc = 0;
+        goto out;
+    }
+    wrapper_of(prefix, wrapper, sizeof wrapper);
+
+    if (extract_sibling_dirs(buf, n, cd, cd_end, entries, wrapper, card_root, dirs, dirs_n, 0) != 0)
+        goto out;
+
+    rc = 0;
 out:
     if (f) fclose(f);
     free(buf);

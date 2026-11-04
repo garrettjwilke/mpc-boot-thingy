@@ -613,10 +613,12 @@ def plan_card(root, kind):
         return None
     return (name, wrapper, kind)
 
-def card_dirs_dir(wrapper, sd):
+def card_dirs_dir(wrapper, sd, allow_all=True):
     dirs = []
     for entry in sorted(os.listdir(wrapper)):
         if entry == "autorun" or entry == "__MACOSX":
+            continue
+        if not allow_all and entry.lower() != "beattrain":
             continue
         full = os.path.join(wrapper, entry)
         if os.path.islink(full):
@@ -626,7 +628,7 @@ def card_dirs_dir(wrapper, sd):
             dirs.append(entry)
     return dirs
 
-def card_dirs_zip(root, wrapper, sd):
+def card_dirs_zip(root, wrapper, sd, allow_all=True):
     dirs = []
     with zipfile.ZipFile(root) as z:
         plan = []
@@ -649,6 +651,9 @@ def card_dirs_zip(root, wrapper, sd):
             else:
                 is_dir = False
             if "/" not in rel and not is_dir:
+                continue
+            top = rel.split("/")[0]
+            if not allow_all and top.lower() != "beattrain":
                 continue
             mode = (info.external_attr >> 16) & 0xFFFF
             if stat.S_ISLNK(mode):
@@ -723,12 +728,20 @@ try:
     os.makedirs(pkg)
     if kind == "dir":
         copy_tree(root, pkg)
+        wrapper = os.path.dirname(root)
+        dirs = card_dirs_dir(wrapper, sd, allow_all=False)
     else:
         extract_zip(root, pkg)
+        with zipfile.ZipFile(root) as z:
+            wrapper = wrapper_of(zip_prefix(z))
+        dirs = card_dirs_zip(root, wrapper, sd, allow_all=False)
     rel = script_of(pkg)
     os.chmod(os.path.join(pkg, *rel.split("/")), 0o755)
     with open(os.path.join(stage, "boot.entry"), "w") as f:
-        f.write("title=%s\nrun=autorun/%s\n" % (title, rel))
+        if dirs:
+            f.write("title=%s\nrun=autorun/%s\ndirs=%s\n" % (title, rel, " ".join(dirs)))
+        else:
+            f.write("title=%s\nrun=autorun/%s\n" % (title, rel))
     remove_path(dest)
     os.rename(stage, dest)
     stage = None

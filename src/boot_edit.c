@@ -622,11 +622,12 @@ int boot_entry_update(const char *card, const char *id, const char *new_title, c
         int w = snprintf(body + n, sizeof body - (size_t)n, "card=1\n");
         if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
         n += w;
-        if (existing.dirs[0]) {
-            w = snprintf(body + n, sizeof body - (size_t)n, "dirs=%s\n", existing.dirs);
-            if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
-            n += w;
-        }
+    }
+
+    if (existing.dirs[0]) {
+        int w = snprintf(body + n, sizeof body - (size_t)n, "dirs=%s\n", existing.dirs);
+        if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
+        n += w;
     }
 
     return write_text(path, body, 0644);
@@ -643,6 +644,10 @@ int boot_entry_delete(const char *card, const char *id) {
         if (snprintf(app_dir, sizeof app_dir, "%s/autorun/apps/%s", card, name) >= (int)sizeof app_dir) return -1;
         struct stat st;
         if (lstat(app_dir, &st) != 0 || !S_ISDIR(st.st_mode)) return -1;
+        char entry_path[512];
+        if (snprintf(entry_path, sizeof entry_path, "%s/boot.entry", app_dir) < (int)sizeof entry_path) {
+            menu_card_dirs_remove(card, entry_path);
+        }
         if (rm_tree(app_dir, 0) != 0) return -1;
     } else if (strncmp(id, "entry:", 6) == 0) {
         const char *name = id + 6;
