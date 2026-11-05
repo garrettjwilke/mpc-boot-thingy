@@ -1209,50 +1209,19 @@ static void install_zip_package(int fd, const char *part, const char *dir,
     send_err(fd, 400, "Bad Request", unzip_error());
     return;
   }
-  {
-    char mod_launcher[PATH_MAX];
-    int takeover = 0;
-    if (snprintf(mod_launcher, sizeof mod_launcher, "%s/autorun/mod-launcher.sh", stage) < (int)sizeof mod_launcher &&
-        access(mod_launcher, F_OK) == 0) {
-      takeover = 1;
-    }
-    bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n", title, run);
-    if (bn < 0 || (size_t)bn >= sizeof body) {
-      rm_tree(stage, 0);
-      unlink(part);
-      send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-      return;
-    }
-    if (args[0]) {
-      int w = snprintf(body + bn, sizeof body - (size_t)bn, "args=%s\n", args);
-      if (w < 0 || (size_t)(bn + w) >= sizeof body) {
-        rm_tree(stage, 0);
-        unlink(part);
-        send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-        return;
-      }
-      bn += w;
-    }
-    if (dirs[0]) {
-      int w = snprintf(body + bn, sizeof body - (size_t)bn, "dirs=%s\n", dirs);
-      if (w < 0 || (size_t)(bn + w) >= sizeof body) {
-        rm_tree(stage, 0);
-        unlink(part);
-        send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-        return;
-      }
-      bn += w;
-    }
-    if (takeover) {
-      int w = snprintf(body + bn, sizeof body - (size_t)bn, "takeover=1\n");
-      if (w < 0 || (size_t)(bn + w) >= sizeof body) {
-        rm_tree(stage, 0);
-        unlink(part);
-        send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-        return;
-      }
-      bn += w;
-    }
+  if (dirs[0]) {
+    if (args[0])
+      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\nargs=%s\ndirs=%s\n",
+                    title, run, args, dirs);
+    else
+      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\ndirs=%s\n", title,
+                    run, dirs);
+  } else {
+    if (args[0])
+      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\nargs=%s\n", title, run,
+                    args);
+    else
+      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n", title, run);
   }
   if (bn < 0 || (size_t)bn >= sizeof body) {
     rm_tree(stage, 0);
