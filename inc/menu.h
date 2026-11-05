@@ -25,6 +25,7 @@ struct menu_entry {
     int stock;
     int boot_ac50; /* run is a Boot Edit script; launch hands off like Stock */
     int card_pkg;  /* run is a card-root script (e.g. WaveGrid/start.sh); launch hands off like Stock */
+    int takeover;  /* firmware/takeover package (e.g. AM Mod): requires stock running and card autorun */
 };
 
 struct menu {

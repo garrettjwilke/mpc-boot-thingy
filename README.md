@@ -14,6 +14,8 @@ there are other enhancements this provides, but ehh...they're there... :)
 - [http://mpc-sample.local:8080](http://mpc-sample.local:8080)
 - [http://192.168.155.1:8080](http://192.168.155.1:8080)
 
+* [AM Mod](https://github.com/AlekseyMalykh/am-mod)
+   - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
 * [SampQOL-OS](https://github.com/snarebes/SampQOL-OS.git)
    - many enhancements to the OS that improve overall functionality and UX.
 * [GRIDZILLA](https://www.thesoundfactorynj.com/gridzilla)
@@ -23,6 +25,9 @@ there are other enhancements this provides, but ehh...they're there... :)
    - octave shift by half the grid
    - HPSS - stem split drums and melody
    - spectral chop 
+* [am-mod](https://github.com/AlekseyMalykh/am-mod)
+   - lots of custom workflows and updated UI
+   - chord mode, key scale of sample, step sequencer update, search, resample fixes
 * [beat train](https://github.com/drose030/beat-train-mpc-sample)
    - drum/rhythm game for the mpc sample.
    - import your own music to play!

@@ -630,6 +630,12 @@ int boot_entry_update(const char *card, const char *id, const char *new_title, c
         n += w;
     }
 
+    if (existing.takeover) {
+        int w = snprintf(body + n, sizeof body - (size_t)n, "takeover=1\n");
+        if (w < 0 || (size_t)(n + w) >= sizeof body) return -1;
+        n += w;
+    }
+
     return write_text(path, body, 0644);
 }
 

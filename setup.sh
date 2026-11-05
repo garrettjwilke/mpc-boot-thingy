@@ -737,9 +737,14 @@ try:
         dirs = card_dirs_zip(root, wrapper, sd, allow_all=False)
     rel = script_of(pkg)
     os.chmod(os.path.join(pkg, *rel.split("/")), 0o755)
+    extra = []
+    if os.path.isfile(os.path.join(pkg, "mod-launcher.sh")):
+        extra.append("takeover=1")
+    if dirs:
+        extra.append("dirs=%s" % " ".join(dirs))
     with open(os.path.join(stage, "boot.entry"), "w") as f:
-        if dirs:
-            f.write("title=%s\nrun=autorun/%s\ndirs=%s\n" % (title, rel, " ".join(dirs)))
+        if extra:
+            f.write("title=%s\nrun=autorun/%s\n%s\n" % (title, rel, "\n".join(extra)))
         else:
             f.write("title=%s\nrun=autorun/%s\n" % (title, rel))
     remove_path(dest)
