@@ -684,6 +684,12 @@ if [ -f "ignore/beattrain-mpc-sample.zip" ]; then
   test -d "$empty/BeatTrain/Songs" || fail "real BeatTrain/Songs missing"
 fi
 
+if [ -f "ignore/am-mod-r26s.zip" ]; then
+  ./setup.sh --SD "$empty" --add "ignore/am-mod-r26s.zip" --title "AM Mod" >/tmp/mpc-boot-out
+  grep -q 'Installed AM Mod' /tmp/mpc-boot-out
+  grep -q 'takeover=1' "$empty/autorun/apps/am-mod/boot.entry" || fail "am-mod missing takeover=1"
+fi
+
 python3 - "$work/slip.zip" <<'PY'
 import sys, zipfile
 z = zipfile.ZipFile(sys.argv[1], "w")

@@ -41,6 +41,7 @@ int menu_parse_entry(const char *path, struct menu_entry *e) {
         else if (strcmp(key, "args") == 0) snprintf(e->args, sizeof e->args, "%s", val);
         else if (strcmp(key, "boot") == 0) e->boot_ac50 = strcmp(val, "ac50") == 0;
         else if (strcmp(key, "card") == 0) e->card_pkg = strcmp(val, "0") != 0;
+        else if (strcmp(key, "takeover") == 0) e->takeover = strcmp(val, "0") != 0;
         else if (strcmp(key, "dirs") == 0 && strlen(val) < sizeof e->dirs)
             snprintf(e->dirs, sizeof e->dirs, "%s", val);
         else if (strcmp(key, "patches") == 0 && strlen(val) < sizeof e->patches)
@@ -245,6 +246,16 @@ static int sh_replaces_stock(const char *dir, int depth) {
     return found;
 }
 
+static int is_takeover_package(const char *pkg) {
+    char p[512];
+    struct stat st;
+    if (join2(p, sizeof p, pkg, "mod-launcher.sh") == 0 &&
+        lstat(p, &st) == 0 && S_ISREG(st.st_mode)) {
+        return 1;
+    }
+    return 0;
+}
+
 int menu_autorun_kind(const char *script_path) {
     char pkg[512], rel[MENU_RUN], full[512];
     struct stat st;
@@ -253,6 +264,7 @@ int menu_autorun_kind(const char *script_path) {
     if (!is_package_entry(pkg, rel)) return -1;
     if (join2(full, sizeof full, pkg, rel) != 0) return -1;
     if (lstat(full, &st) == 0 && (S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode))) return -1;
+    if (is_takeover_package(pkg)) return 2;
     return sh_replaces_stock(pkg, 0) ? 1 : 0;
 }
 
@@ -335,6 +347,10 @@ int menu_load(struct menu *m, const char *card) {
         }
         snprintf(e.base, sizeof e.base, "%s", found[i].base);
         snprintf(e.id, sizeof e.id, "%s", found[i].id);
+        char script_path[512];
+        if (e.run[0] == '/') snprintf(script_path, sizeof script_path, "%s", e.run);
+        else join2(script_path, sizeof script_path, e.base[0] ? e.base : card, e.run);
+        if (menu_autorun_kind(script_path) == 2) e.takeover = 1;
         m->items[m->n++] = e;
     }
     return m->n;

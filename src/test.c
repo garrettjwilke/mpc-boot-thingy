@@ -980,6 +980,13 @@ int main(void) {
     assert(strcmp(body, "title=Hand Mod\nrun=autorun/start.sh\n") == 0);
     free(body);
   }
+  write_file(path, "title=Hand Mod\nrun=autorun/start.sh\ntakeover=1\n");
+  assert(boot_entry_update(dir, "app:hand-mod", "Hand Mod", NULL) == 0);
+  {
+    char *body = read_all(path);
+    assert(strcmp(body, "title=Hand Mod\nrun=autorun/start.sh\ntakeover=1\n") == 0);
+    free(body);
+  }
   assert(menu_load(&updated, dir) >= 4);
   {
     int hand = -1, i;
@@ -989,6 +996,7 @@ int main(void) {
     }
     assert(hand > 0);
     assert(strcmp(updated.items[hand].title, "Hand Mod") == 0);
+    assert(updated.items[hand].takeover == 1);
   }
 
   /* Nested autorun: SampQOL replaces stock. A sidecar does not.
@@ -1070,6 +1078,15 @@ int main(void) {
     snprintf(path, sizeof path, "%s/autorun/apps/sampqol/autorun/missing.sh",
              dir);
     assert(menu_autorun_kind(path) == -1);
+    snprintf(path, sizeof path, "%s/autorun/apps/am/autorun", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/apps/am/autorun/autorun.sh", dir);
+    write_file(path, "#!/bin/sh\n/bin/sh mod-launcher.sh\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/am/autorun/mod-launcher.sh",
+             dir);
+    write_file(path, "#!/bin/sh\nsystemctl stop ac50.service\n");
+    snprintf(path, sizeof path, "%s/autorun/apps/am/autorun/autorun.sh", dir);
+    assert(menu_autorun_kind(path) == 2);
   }
 
   /* Device unzip: a deflated archive, a root package, and a path that escapes.
