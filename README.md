@@ -18,6 +18,11 @@ there are other enhancements this provides, but ehh...they're there... :)
    - many enhancements to the OS that improve overall functionality and UX.
 * [GRIDZILLA](https://www.thesoundfactorynj.com/gridzilla)
    - modern daw-like sequencing UI/UX...super custom workflow.
+* [mpc-minimod](https://github.com/ioma8/mpc-minimod)
+   - autotrim samples
+   - octave shift by half the grid
+   - HPSS - stem split drums and melody
+   - spectral chop 
 * [beat train](https://github.com/drose030/beat-train-mpc-sample)
    - drum/rhythm game for the mpc sample.
    - import your own music to play!
