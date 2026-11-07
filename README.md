@@ -34,8 +34,6 @@ there are other enhancements this provides, but ehh...they're there... :)
 * [mpc-furnace](https://github.com/garrettjwilke/mpc-furnace)
    - furnace editor for MPC Sample.
    - create music for retro video game consoles.
-* [mpc-mdsdrv](https://github.com/garrettjwilke/mpc-mdsdrv)
-   - gui creation tool for [MDSDRV](https://github.com/superctr/MDSDRV) sound driver
 * [mpc-gen1recomp](https://github.com/garrettjwilke/mpc-gen1recomp)
    - run the original pokemans games on your MPC Sample.
 * [mpc-cavestory](https://github.com/garrettjwilke/mpc-cavestory)
