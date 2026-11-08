@@ -737,11 +737,14 @@ try:
         dirs = card_dirs_zip(root, wrapper, sd, allow_all=False)
     rel = script_of(pkg)
     os.chmod(os.path.join(pkg, *rel.split("/")), 0o755)
+    takeover = os.path.isfile(os.path.join(pkg, "mod-launcher.sh"))
     with open(os.path.join(stage, "boot.entry"), "w") as f:
         if dirs:
             f.write("title=%s\nrun=autorun/%s\ndirs=%s\n" % (title, rel, " ".join(dirs)))
         else:
             f.write("title=%s\nrun=autorun/%s\n" % (title, rel))
+        if takeover:
+            f.write("takeover=1\n")
     remove_path(dest)
     os.rename(stage, dest)
     stage = None
@@ -1039,6 +1042,11 @@ if mount -o remount,exec "$card"; then
 else
   echo "WARN: could not remount exec $card"
 fi
+# Stop the stock OS before it can paint the screen. ac50.service starts in
+# parallel with this autorun and would otherwise show the stock UI first.
+systemctl kill -s KILL ac50.service 2>/dev/null || true
+systemctl stop ac50.service 2>/dev/null || true
+killall -9 "MPC Sample" 2>/dev/null || true
 cp "$D/system/mpc-boot-thingy" /run/mpc-boot-thingy
 chmod 755 /run/mpc-boot-thingy
 printf '%s\n' "$D" > /run/mpc-boot-autorun
