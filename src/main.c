@@ -1253,7 +1253,17 @@ int main(int argc, char **argv) {
     return 1;
   }
   install_testapp_wrapper();
-  if (screen_open(&scr) != 0) {
+  /* ac50.service can still hold the DRM master after it is stopped. Retry a
+     few times so boot thingy claims the screen instead of giving up and
+     letting the stock OS keep running. */
+  for (int scr_try = 0; scr_try < 10 && scr.px == NULL && scr.fd < 0; scr_try++) {
+    if (screen_open(&scr) == 0)
+      break;
+    systemctl_ac50("stop");
+    stopped_ac50 = 1;
+    usleep(100 * 1000);
+  }
+  if (scr.px == NULL && scr.fd < 0) {
     release_devices(&midi, &scr);
     restore_stock_if_stopped(card);
     return 1;
