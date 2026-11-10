@@ -1209,19 +1209,21 @@ static void install_zip_package(int fd, const char *part, const char *dir,
     send_err(fd, 400, "Bad Request", unzip_error());
     return;
   }
-  if (dirs[0]) {
-    if (args[0])
-      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\nargs=%s\ndirs=%s\n",
-                    title, run, args, dirs);
-    else
-      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\ndirs=%s\n", title,
-                    run, dirs);
-  } else {
-    if (args[0])
-      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\nargs=%s\n", title, run,
-                    args);
-    else
-      bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n", title, run);
+  {
+    char mod_launcher[PATH_MAX];
+    int takeover = 0;
+    if (snprintf(mod_launcher, sizeof mod_launcher, "%s/autorun/mod-launcher.sh",
+                 stage) < (int)sizeof mod_launcher &&
+        access(mod_launcher, F_OK) == 0) {
+      takeover = 1;
+    }
+    bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n%s%s%s%s%s%s%s",
+                  title, run,
+                  args[0] ? "args=" : "", args[0] ? args : "",
+                  args[0] ? "\n" : "",
+                  dirs[0] ? "dirs=" : "", dirs[0] ? dirs : "",
+                  dirs[0] ? "\n" : "",
+                  takeover ? "takeover=1\n" : "");
   }
   if (bn < 0 || (size_t)bn >= sizeof body) {
     rm_tree(stage, 0);

@@ -701,13 +701,7 @@ static int wait_autorun_rc(void) {
   return -1;
 }
 
-/* Firmware-style handoff for a nested autorun package.
-   The script runs in its own unit, so exiting this menu does not kill the
-   process it backgrounds. $0 stays the package script. replaces leaves ac50
-   stopped. A sidecar mounts the Shift+Pad 16 loader and starts ac50.
-   1 leaves the menu. 0 asks the caller to reopen the panel. */
-static int launch_autorun(struct surface *midi, struct screen *scr,
-                          const char *card, const char *script, int replaces) {
+static int queue_handoff(const char *script) {
   char *argv[] = {
       "systemd-run",
       "--unit=mpc-boot-autorun",
@@ -720,35 +714,351 @@ static int launch_autorun(struct surface *midi, struct screen *scr,
       "sh",
       (char *)script,
       NULL};
+  char *stop_argv[] = {"systemctl", "stop", "mpc-boot-autorun.service", NULL};
+  char *reset_argv[] = {"systemctl", "reset-failed",
+                        "mpc-boot-autorun.service", NULL};
+  unlink(AUTORUN_RC);
+  run_cmd(stop_argv);
+  run_cmd(reset_argv);
+  return run_cmd(argv) == 0 ? 0 : -1;
+}
+
+static int read_autorun_status(int *code) {
+  FILE *f = fopen(AUTORUN_RC, "r");
+  int v;
+  if (!f)
+    return -1;
+  if (fscanf(f, "%d", &v) != 1)
+    v = -1;
+  fclose(f);
+  *code = v;
+  return 0;
+}
+
+static int wait_autorun_status(int *code, int timeout_ms) {
+  int i;
+  for (i = 0; i < timeout_ms / 100; i++) {
+    if (read_autorun_status(code) == 0)
+      return 0;
+    usleep(100 * 1000);
+  }
+  return -1;
+}
+
+static int card_mount_id(const char *path) {
+  FILE *f = fopen("/proc/self/mountinfo", "r");
+  char line[4096];
+  size_t n;
+  int id = -1;
+  if (!f || !path)
+    return -1;
+  n = strlen(path);
+  while (fgets(line, sizeof line, f)) {
+    char *p = line;
+    int i;
+    for (i = 0; i < 4; i++) {
+      while (*p && *p != ' ')
+        p++;
+      if (*p == ' ')
+        p++;
+    }
+    if (strncmp(p, path, n) == 0 &&
+        (p[n] == ' ' || p[n] == '\n' || p[n] == 0)) {
+      id = atoi(line);
+      break;
+    }
+  }
+  fclose(f);
+  return id;
+}
+
+static int wait_card_settled(const char *card, int stable_ms, int timeout_ms) {
+  int last = card_mount_id(card);
+  int stable = 0;
+  int waited = 0;
+  while (waited < timeout_ms) {
+    int id;
+    usleep(100 * 1000);
+    waited += 100;
+    id = card_mount_id(card);
+    if (id < 0) {
+      last = -1;
+      stable = 0;
+      continue;
+    }
+    if (id != last) {
+      last = id;
+      stable = 0;
+      continue;
+    }
+    stable += 100;
+    if (stable >= stable_ms)
+      return 1;
+  }
+  return 0;
+}
+
+static int card_autorun_path(const char *card, char *out, size_t n) {
+  int wr = snprintf(out, n, "%s/autorun", card);
+  return wr < 0 || (size_t)wr >= n ? -1 : 0;
+}
+
+static int card_autorun_umount(const char *card) {
+  char target[512];
+  if (card_autorun_path(card, target, sizeof target) != 0)
+    return -1;
+  if (umount(target) == 0)
+    return 0;
+  return umount2(target, MNT_DETACH) == 0 ? 0 : -1;
+}
+
+static int expose_package_autorun(const char *card, const char *script,
+                                  char *script_out, size_t script_out_n) {
+  char dir[512], target[512], name[256];
+  char *slash;
+  int wr;
+  if (!card || !card[0] || !script || !script[0])
+    return -1;
+  slash = strrchr(script, '/');
+  if (!slash || slash == script || strlen(slash + 1) >= sizeof name)
+    return -1;
+  snprintf(name, sizeof name, "%s", slash + 1);
+  wr = snprintf(dir, sizeof dir, "%s", script);
+  if (wr < 0 || (size_t)wr >= sizeof dir)
+    return -1;
+  slash = strrchr(dir, '/');
+  if (!slash)
+    return -1;
+  *slash = 0;
+  if (card_autorun_path(card, target, sizeof target) != 0)
+    return -1;
+  if (strcmp(dir, target) == 0) {
+    if (snprintf(script_out, script_out_n, "%s", script) >= (int)script_out_n)
+      return -1;
+    return 0;
+  }
+  if (mount(dir, target, "", MS_BIND, NULL) != 0) {
+    fprintf(stderr, "autorun: bind %s: %s\n", target, strerror(errno));
+    return -1;
+  }
+  if (snprintf(script_out, script_out_n, "%s/%s", target, name) >=
+      (int)script_out_n) {
+    card_autorun_umount(card);
+    return -1;
+  }
+  return 1;
+}
+
+static int ac50_is_active(void) {
+  char *argv[] = {"systemctl", "is-active", "--quiet", "ac50.service", NULL};
+  return run_cmd(argv) == 0;
+}
+
+static int ac50_main_pid(void) {
+  int pfd[2];
+  pid_t pid;
+  char buf[32];
+  ssize_t n;
+  int st;
+  if (pipe(pfd) != 0)
+    return 0;
+  pid = fork();
+  if (pid < 0) {
+    close(pfd[0]);
+    close(pfd[1]);
+    return 0;
+  }
+  if (pid == 0) {
+    char *argv[] = {"systemctl", "show", "ac50.service", "-p", "MainPID",
+                    "--value", NULL};
+    dup2(pfd[1], STDOUT_FILENO);
+    close(pfd[0]);
+    close(pfd[1]);
+    execvp(argv[0], argv);
+    _exit(127);
+  }
+  close(pfd[1]);
+  n = read(pfd[0], buf, sizeof buf - 1);
+  close(pfd[0]);
+  while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {
+  }
+  if (n <= 0)
+    return 0;
+  buf[n] = 0;
+  return atoi(buf);
+}
+
+static int stock_proc_ready(void) {
+  int pid = ac50_main_pid();
+  struct stat stock_st, proc_st;
+  char exe[64];
+  if (pid <= 1)
+    return 0;
+  if (stat("/usr/bin/MPC Sample", &stock_st) != 0)
+    return 0;
+  snprintf(exe, sizeof exe, "/proc/%d/exe", pid);
+  if (stat(exe, &proc_st) != 0)
+    return 0;
+  return proc_st.st_dev == stock_st.st_dev && proc_st.st_ino == stock_st.st_ino;
+}
+
+static int start_stock(const char *card) {
+  int i;
+  if (!ac50_is_active()) {
+    char *reset_argv[] = {"systemctl", "reset-failed", "ac50.service", NULL};
+    if (!stock_ready(card))
+      mount_patched_stock(card);
+    run_cmd(reset_argv);
+    systemctl_ac50("start");
+  }
+  for (i = 0; i < 150; i++) {
+    if (ac50_is_active() && stock_proc_ready())
+      return 0;
+    usleep(100 * 1000);
+  }
+  return -1;
+}
+
+static void restore_autorun_after_stock(const char *card) {
+  static const char script[] =
+      "n=0\n"
+      "while systemctl is-active --quiet ac50.service && [ \"$n\" -lt 120 ]; do\n"
+      "  sleep 0.5\n"
+      "  n=$((n + 1))\n"
+      "done\n"
+      "while ! systemctl is-active --quiet ac50.service; do sleep 0.5; done\n"
+      "u=\"$1/autorun\"\n"
+      "umount \"$u\" 2>/dev/null || umount -l \"$u\" 2>/dev/null || true\n";
+  char *argv[] = {"systemd-run", "--unit=mpc-boot-restore", "--collect",
+                  "/bin/sh", "-c", (char *)script, "sh", (char *)card, NULL};
+  run_cmd(argv);
+}
+
+static int run_replacement(const char *card, const char *script, int *code_out,
+                           int *mounted_out, int *changed_out) {
+  char root_script[512];
+  const char *run_script;
+  int before = card_mount_id(card);
+  int mounted;
+  int code = -1;
+  int failed;
+  int i;
+
+  *code_out = -1;
+  *mounted_out = 0;
+  *changed_out = 0;
+  mounted = expose_package_autorun(card, script, root_script,
+                                   sizeof root_script);
+  if (card_mount_id(card) != before)
+    *changed_out = 1;
+  if (mounted < 0)
+    return -1;
+  *mounted_out = mounted;
+  if (mounted == 0)
+    return queue_handoff(script) == 0 ? 1 : 0;
+  run_script = root_script;
+  if (queue_handoff(run_script) != 0)
+    return 0;
+  failed = wait_autorun_status(&code, 120000) != 0 || code != 0;
+  if (card_mount_id(card) != before)
+    *changed_out = 1;
+  *code_out = code;
+  if (!failed) {
+    for (i = 0; i < 200 && ac50_is_active(); i++) {
+      if (card_mount_id(card) != before)
+        *changed_out = 1;
+      usleep(100 * 1000);
+    }
+    failed = ac50_is_active();
+  }
+  if (failed) {
+    for (i = 0; i < 20 && !*changed_out; i++) {
+      if (card_mount_id(card) != before)
+        *changed_out = 1;
+      usleep(100 * 1000);
+    }
+  }
+  return failed ? 0 : 1;
+}
+
+/* Firmware-style handoff for a nested autorun package.
+   The script runs in its own unit, so exiting this menu does not kill the
+   process it backgrounds. $0 stays the package script.
+   kind 0 (sidecar) mounts the Shift+Pad 16 loader and starts ac50 after the script.
+   kind 1 (replacement) leaves ac50 stopped.
+   kind 2 (takeover, e.g. AM Mod) starts stock ac50, bind-mounts over card autorun,
+   hands off to the script, and restores autorun once stock returns.
+   1 leaves the menu. 0 asks the caller to reopen the panel. */
+static int launch_autorun(struct surface *midi, struct screen *scr,
+                          const char *card, const char *script, int kind) {
   show_loading(scr, midi, theme_load(card));
   flush_and_drop_caches(card);
   remount_exec(card);
   surface_all_off(midi);
   surface_close(midi);
   screen_close(scr);
-  unlink(AUTORUN_RC);
-  {
-    /* RemainAfterExit keeps the last handoff unit loaded. Drop it, or the
-       next systemd-run fails with "already loaded". */
-    char *stop_argv[] = {"systemctl", "stop", "mpc-boot-autorun.service",
-                         NULL};
-    char *reset_argv[] = {"systemctl", "reset-failed",
-                          "mpc-boot-autorun.service", NULL};
-    run_cmd(stop_argv);
-    run_cmd(reset_argv);
-  }
-  if (run_cmd(argv) != 0) {
-    fprintf(stderr, "autorun handoff failed\n");
-    return 0;
-  }
-  if (!replaces) {
+
+  if (kind == 0) {
+    if (queue_handoff(script) != 0) {
+      fprintf(stderr, "autorun handoff failed\n");
+      stopped_ac50 = 1;
+      return 0;
+    }
     if (wait_autorun_rc() != 0)
       fprintf(stderr, "autorun script did not finish\n");
     mount_patched_stock(card);
     systemctl_ac50("start");
     stopped_ac50 = 0;
+    return 1;
   }
-  return 1;
+
+  if (kind == 1) {
+    if (queue_handoff(script) != 0) {
+      fprintf(stderr, "autorun handoff failed\n");
+      stopped_ac50 = 1;
+      return 0;
+    }
+    return 1;
+  }
+
+  if (kind == 2) {
+    int code = -1;
+    int attempt;
+    if ((!ac50_is_active() || !stock_proc_ready()) && start_stock(card) != 0) {
+      fprintf(stderr, "autorun: stock did not start\n");
+      stopped_ac50 = 1;
+      return 0;
+    }
+    for (attempt = 0; attempt < 2; attempt++) {
+      int mounted = 0;
+      int changed = 0;
+      int ok;
+      if (attempt > 0) {
+        if (!wait_card_settled(card, 3000, 120000))
+          break;
+        if ((!ac50_is_active() || !stock_proc_ready()) &&
+            start_stock(card) != 0)
+          break;
+      }
+      ok = run_replacement(card, script, &code, &mounted, &changed);
+      if (ok > 0) {
+        if (mounted > 0)
+          restore_autorun_after_stock(card);
+        return 1;
+      }
+      if (mounted > 0)
+        card_autorun_umount(card);
+      if (!changed)
+        break;
+    }
+    fprintf(stderr, "autorun failed (%d), returning to the menu\n", code);
+    app_log("autorun failed (%d)\n", code);
+    systemctl_ac50("stop");
+    stopped_ac50 = 1;
+    return 0;
+  }
+
+  return 0;
 }
 
 /* Run one entry. Stock, Boot Edit, and a nested autorun package hand off and
@@ -787,6 +1097,8 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
   int kind;
   resolve_run(e->base[0] ? e->base : card, e->run, path, sizeof path);
   kind = menu_autorun_kind(path);
+  if (e->takeover && kind >= 0)
+    kind = 2;
   /* mpc-ui-toolkit packages run in the foreground when the menu is alive and
      expect the menu to take the screen back. Run them like any other app. */
   if (kind >= 0 && script_waits_for_menu(path))
@@ -797,7 +1109,7 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
       fprintf(stderr, "autorun script is missing\n");
       return 2;
     }
-    return launch_autorun(midi, scr, card, path, kind == 1);
+    return launch_autorun(midi, scr, card, path, kind);
   }
 
   if (!stopped_ac50 && systemctl_ac50("stop") == 0)

@@ -690,6 +690,12 @@ if [ -f "ignore/am-mod-r26s.zip" ]; then
   grep -q 'takeover=1' "$empty/autorun/apps/am-mod/boot.entry" || fail "am-mod missing takeover=1"
 fi
 
+if [ -f "ignore/am-mod-r27r.zip" ]; then
+  ./setup.sh --SD "$empty" --add "ignore/am-mod-r27r.zip" --title "AM Mod r27r" >/tmp/mpc-boot-out
+  grep -q 'Installed AM Mod r27r' /tmp/mpc-boot-out
+  grep -q 'takeover=1' "$empty/autorun/apps/am-mod-r27r/boot.entry" || fail "am-mod-r27r missing takeover=1"
+fi
+
 python3 - "$work/slip.zip" <<'PY'
 import sys, zipfile
 z = zipfile.ZipFile(sys.argv[1], "w")
