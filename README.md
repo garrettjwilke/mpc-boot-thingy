@@ -28,6 +28,9 @@ there are other enhancements this provides, but ehh...they're there... :)
 * [am-mod](https://github.com/AlekseyMalykh/am-mod)
    - lots of custom workflows and updated UI
    - chord mode, key scale of sample, step sequencer update, search, resample fixes
+* [Loop Pad](https://github.com/larsoholm/LoopPad)
+   - looper with synchronized tracks
+   - turn your MPC Sample into a loop track recorder!
 * [beat train](https://github.com/drose030/beat-train-mpc-sample)
    - drum/rhythm game for the mpc sample.
    - import your own music to play!
