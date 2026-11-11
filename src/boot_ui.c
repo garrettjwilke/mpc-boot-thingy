@@ -169,10 +169,20 @@ static int wrap(int v, int n) {
   return v;
 }
 
+static int clamp_index(int v, int n) {
+  if (n <= 0)
+    return 0;
+  if (v < 0)
+    return 0;
+  if (v >= n)
+    return n - 1;
+  return v;
+}
+
 static void move_cursor(struct ui_list_state *ls, int n, struct input *ev) {
   if (!ev || !ev->encoder || n <= 0)
     return;
-  ls->cursor = wrap(ls->cursor + ev->encoder, n);
+  ls->cursor = clamp_index(ls->cursor + ev->encoder, n);
   ev->encoder = 0;
 }
 
@@ -613,6 +623,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   int shown_n = n > MENU_MAX - 2 ? MENU_MAX - 2 : n;
   if (screen == BOOT_SCREEN_SETTINGS)
     move_cursor(&s->settings_ls, 6, &ev);
+  else if (screen == BOOT_SCREEN_APPS)
+    move_cursor(&s->apps_ls, 2 + shown_n, &ev);
   else if (screen == BOOT_SCREEN_DEFAULT)
     move_cursor(&s->default_ls, n, &ev);
   else if (screen == BOOT_SCREEN_THEME) {
