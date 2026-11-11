@@ -85,6 +85,7 @@ jobs:
               "autorun/system/ssh/ssh_host_ed25519_key",
               "autorun/autorun.check",
               "autorun/autorun.sh",
+              "autorun/apps/",
               "autorun/splash-screen.png",
               "autorun/os_tools/bin/bash",
           ]

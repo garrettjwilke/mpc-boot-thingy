@@ -176,6 +176,7 @@ test ! -e "$empty/toolkit"
 test ! -d "$empty/apps"
 test ! -d "$empty/os_tools"
 test -f "$empty/autorun/system/mpc-boot-thingy.mark"
+test -d "$empty/autorun/apps"
 test -d "$empty/autorun/boot-menu"
 test -d "$empty/autorun/patch-catalog"
 test -d "$empty/autorun/boot-edits"
@@ -735,6 +736,7 @@ need = [
     "usb_installer_testapp",
     "autorun/system/mpc-boot-thingy",
     "autorun/autorun.sh",
+    "autorun/apps/",
     "autorun/os_tools/bin/bash",
 ]
 banned = [

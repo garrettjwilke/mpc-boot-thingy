@@ -6,10 +6,10 @@
 #define _DARWIN_C_SOURCE
 #endif
 
+#include "app_install.h"
 #include "boot_edit.h"
 #include "file_ops.h"
 #include "menu.h"
-#include "unzip.h"
 #include "zip_writer.h"
 
 #include <arpa/inet.h>
@@ -827,33 +827,6 @@ static int safe_component(const char *s) {
   return 1;
 }
 
-static int slug_of(const char *title, char *out, size_t n) {
-  size_t j = 0;
-  int dash = 1;
-  for (const unsigned char *p = (const unsigned char *)title; *p; p++) {
-    unsigned char c = *p;
-    int alnum;
-    if (c >= 'A' && c <= 'Z')
-      c = (unsigned char)(c - 'A' + 'a');
-    alnum = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
-    if (alnum) {
-      if (j + 1 >= n)
-        return -1;
-      out[j++] = (char)c;
-      dash = 0;
-    } else if (!dash && j + 1 < n) {
-      out[j++] = '-';
-      dash = 1;
-    }
-  }
-  if (j && out[j - 1] == '-')
-    j--;
-  out[j] = 0;
-  if (!j || j > 64)
-    return -1;
-  return 0;
-}
-
 static int ensure_dir(const char *path) {
   struct stat st;
   if (lstat(path, &st) == 0) {
@@ -1170,143 +1143,6 @@ static int runnable_program(const unsigned char *buf, size_t n) {
   return aarch64_exec(buf, n) || shell_script(buf, n);
 }
 
-static void install_zip_package(int fd, const char *part, const char *dir,
-                                const char *slug, const char *title,
-                                const char *args) {
-  char stage[PATH_MAX], backup[PATH_MAX], entry[PATH_MAX], run[MENU_RUN],
-      dirs[MENU_RUN], body[1024], resp[160];
-  int bn, entryfd = -1;
-  if (snprintf(stage, sizeof stage, "%s/autorun/apps/.%s.incoming", g_card,
-               slug) >= (int)sizeof stage ||
-      snprintf(backup, sizeof backup, "%s/autorun/apps/.%s.bak", g_card,
-               slug) >= (int)sizeof backup ||
-      snprintf(entry, sizeof entry, "%s/boot.entry", stage) >=
-          (int)sizeof entry) {
-    unlink(part);
-    send_err(fd, 400, "Bad Request", "path is too long");
-    return;
-  }
-  rm_tree(stage, 0);
-  rm_tree(backup, 0);
-  if (mkdir(stage, 0755) != 0) {
-    unlink(part);
-    send_err(fd, 500, "Internal Server Error",
-             "could not create the app folder");
-    return;
-  }
-  if (unzip_autorun(part, stage, run, sizeof run) != 0) {
-    rm_tree(stage, 0);
-    unlink(part);
-    rmdir(dir);
-    send_err(fd, 400, "Bad Request", unzip_error());
-    return;
-  }
-  dirs[0] = 0;
-  if (unzip_sibling_dirs(part, g_card, dirs, sizeof dirs) != 0) {
-    rm_tree(stage, 0);
-    unlink(part);
-    rmdir(dir);
-    send_err(fd, 400, "Bad Request", unzip_error());
-    return;
-  }
-  {
-    char mod_launcher[PATH_MAX];
-    int takeover = 0;
-    if (snprintf(mod_launcher, sizeof mod_launcher, "%s/autorun/mod-launcher.sh",
-                 stage) < (int)sizeof mod_launcher &&
-        access(mod_launcher, F_OK) == 0) {
-      takeover = 1;
-    }
-    bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n%s%s%s%s%s%s%s",
-                  title, run,
-                  args[0] ? "args=" : "", args[0] ? args : "",
-                  args[0] ? "\n" : "",
-                  dirs[0] ? "dirs=" : "", dirs[0] ? dirs : "",
-                  dirs[0] ? "\n" : "",
-                  takeover ? "takeover=1\n" : "");
-  }
-  if (bn < 0 || (size_t)bn >= sizeof body) {
-    rm_tree(stage, 0);
-    unlink(part);
-    send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-    return;
-  }
-  entryfd = open(entry, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-  if (entryfd < 0 || write_full(entryfd, body, (size_t)bn) != 0 ||
-      close(entryfd) != 0) {
-    if (entryfd >= 0)
-      close(entryfd);
-    rm_tree(stage, 0);
-    unlink(part);
-    send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-    return;
-  }
-  if (rename(dir, backup) != 0) {
-    rm_tree(stage, 0);
-    unlink(part);
-    send_err(fd, 500, "Internal Server Error", "could not store the program");
-    return;
-  }
-  if (rename(stage, dir) != 0) {
-    rename(backup, dir);
-    rm_tree(stage, 0);
-    unlink(part);
-    send_err(fd, 500, "Internal Server Error", "could not store the program");
-    return;
-  }
-  rm_tree(backup, 0);
-  reload_boot_thingy();
-  snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"app:%s\"}\n", slug);
-  send_json(fd, 200, "OK", resp);
-}
-
-/* A card package was already extracted to the card root by
-   unzip_card_package(). Register it as a boot-menu entry that runs the
-   launcher and remembers the card-root directories for later removal. */
-static void install_card_package(int fd, const char *slug, const char *title,
-                                 const char *args, const char *launcher,
-                                 const char *dirs) {
-  char menudir[PATH_MAX], entry[PATH_MAX], body[1024], resp[160];
-  int bn, entryfd = -1;
-  if (snprintf(menudir, sizeof menudir, "%s/autorun/boot-menu", g_card) >=
-          (int)sizeof menudir ||
-      snprintf(entry, sizeof entry, "%s/autorun/boot-menu/%s.entry", g_card,
-               slug) >= (int)sizeof entry) {
-    send_err(fd, 400, "Bad Request", "path is too long");
-    return;
-  }
-  if (ensure_dir(menudir) != 0) {
-    send_err(fd, 500, "Internal Server Error", "could not create boot menu");
-    return;
-  }
-  bn = snprintf(body, sizeof body, "title=%s\nrun=%s\ncard=1\ndirs=%s\n",
-                title, launcher, dirs);
-  if (bn < 0 || (size_t)bn >= sizeof body) {
-    send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-    return;
-  }
-  if (args[0]) {
-    int w = snprintf(body + bn, sizeof body - (size_t)bn, "args=%s\n", args);
-    if (w < 0 || (size_t)(bn + w) >= sizeof body) {
-      send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-      return;
-    }
-    bn += w;
-  }
-  entryfd = open(entry, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-  if (entryfd < 0 || write_full(entryfd, body, (size_t)bn) != 0 ||
-      close(entryfd) != 0) {
-    if (entryfd >= 0)
-      close(entryfd);
-    send_err(fd, 500, "Internal Server Error", "could not write boot.entry");
-    return;
-  }
-  reload_boot_thingy();
-  snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"entry:%s.entry\"}\n",
-           slug);
-  send_json(fd, 200, "OK", resp);
-}
-
 static void handle_upload(int fd, struct io *io, int has_len,
                           size_t content_len, const char *query) {
   char title[512], args[512], name[256], slug[80];
@@ -1333,7 +1169,7 @@ static void handle_upload(int fd, struct io *io, int has_len,
     send_err(fd, 400, "Bad Request", "args must be one short line");
     return;
   }
-  if (slug_of(title, slug, sizeof slug) != 0) {
+  if (app_install_slug(title, slug, sizeof slug) != 0) {
     send_err(fd, 400, "Bad Request", "could not name the app folder");
     return;
   }
@@ -1348,7 +1184,7 @@ static void handle_upload(int fd, struct io *io, int has_len,
           (int)sizeof apps ||
       snprintf(dir, sizeof dir, "%s/autorun/apps/%s", g_card, slug) >=
           (int)sizeof dir ||
-      snprintf(part, sizeof part, "%s/autorun/apps/%s/.upload", g_card, slug) >=
+      snprintf(part, sizeof part, "%s/autorun/apps/.%s.upload", g_card, slug) >=
           (int)sizeof part ||
       snprintf(dest, sizeof dest, "%s/autorun/apps/%s/%s", g_card, slug,
                name) >= (int)sizeof dest ||
@@ -1357,7 +1193,7 @@ static void handle_upload(int fd, struct io *io, int has_len,
     send_err(fd, 400, "Bad Request", "path is too long");
     return;
   }
-  if (ensure_dir(apps) != 0 || ensure_dir(dir) != 0) {
+  if (ensure_dir(apps) != 0) {
     send_err(fd, 500, "Internal Server Error",
              "could not create the app folder");
     return;
@@ -1408,32 +1244,28 @@ static void handle_upload(int fd, struct io *io, int has_len,
     }
     if (got >= 4 && magic[0] == 'P' && magic[1] == 'K' && magic[2] == 3 &&
         magic[3] == 4) {
+      char out_id[MENU_ID], err[128];
+      int irc;
       if (close(partfd) != 0) {
         unlink(part);
         send_err(fd, 500, "Internal Server Error",
                  "could not store the program");
         return;
       }
-      {
-        char launcher[MENU_RUN], dirs[MENU_RUN];
-        int kind = unzip_card_package(part, g_card, launcher, sizeof launcher,
-                                      dirs, sizeof dirs);
-        if (kind < 0) {
-          unlink(part);
-          rmdir(dir);
-          send_err(fd, 400, "Bad Request", unzip_error());
-          return;
-        }
-        if (kind == 1) {
-          unlink(part);
-          /* A previous plain-autorun install of the same name lives in
-             apps/<slug>. The card package replaces it. */
-          rm_tree(dir, 0);
-          install_card_package(fd, slug, title, args, launcher, dirs);
-          return;
-        }
+      irc = app_install_zip(g_card, part, slug, title, args, out_id,
+                            sizeof out_id, err, sizeof err);
+      unlink(part);
+      if (irc == APP_INSTALL_ERR_BAD) {
+        send_err(fd, 400, "Bad Request", err);
+        return;
       }
-      install_zip_package(fd, part, dir, slug, title, args);
+      if (irc != APP_INSTALL_OK) {
+        send_err(fd, 500, "Internal Server Error", err);
+        return;
+      }
+      reload_boot_thingy();
+      snprintf(resp, sizeof resp, "{\"ok\":true,\"id\":\"%s\"}\n", out_id);
+      send_json(fd, 200, "OK", resp);
       return;
     }
     if (got < 0 || !runnable_program(magic, (size_t)got)) {
@@ -1444,6 +1276,13 @@ static void handle_upload(int fd, struct io *io, int has_len,
           "program must be an aarch64 Linux executable or a sh/bash script");
       return;
     }
+  }
+  if (ensure_dir(dir) != 0) {
+    close(partfd);
+    unlink(part);
+    send_err(fd, 500, "Internal Server Error",
+             "could not create the app folder");
+    return;
   }
   if (fchmod(partfd, 0755) != 0) {
     close(partfd);

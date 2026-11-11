@@ -356,6 +356,13 @@ static int perform_install(const char *card, const char *staged,
     }
   }
 
+  if (!failed) {
+    char apps_dir[512];
+    snprintf(apps_dir, sizeof apps_dir, "%s/autorun/apps", card);
+    char *mk_apps[] = {"mkdir", "-p", apps_dir, NULL};
+    run_cmd(mk_apps);
+  }
+
   sync();
   remount_card_exec(card);
   if (failed) {

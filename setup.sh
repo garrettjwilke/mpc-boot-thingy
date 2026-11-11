@@ -80,9 +80,11 @@ The backup question appears only when the card has a different autorun,
 such as the USB SSH kit. Answering y copies that folder aside, then
 installs. Any other answer leaves the card unchanged.
 
-Add a program by dragging a folder into autorun/apps/ on the card. The
-folder name sets the menu order (10-game comes before 20-tool). Stock
-stays first. No rebuild and no new check. The folder looks like this:
+Add a program by dragging an app .zip (or app folder) into autorun/apps/ on
+the card. Dropped .zip files are installed automatically when boot thingy
+boots (or when exiting USB storage mode or reloading the menu). The folder
+name sets the menu order (10-game comes before 20-tool). Stock stays first.
+No rebuild and no new check. A manual app folder looks like this:
 
   autorun/apps/lab-firmware/boot.entry
   autorun/apps/lab-firmware/mpcfw
@@ -1012,7 +1014,7 @@ build_web() {
 write_autorun() {
   sd=$1
   A=$sd/autorun
-  mkdir -p "$A/boot-menu"
+  mkdir -p "$A/boot-menu" "$A/apps"
   cat > "$A/autorun.json" <<'EOF'
 {
   "value0": {
@@ -1425,6 +1427,15 @@ import os, sys, zipfile
 pkg_dir, out_zip = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED) as z:
     for root, dirs, files in os.walk(pkg_dir):
+        dirs.sort()
+        files.sort()
+        for d in dirs:
+            full_d = os.path.join(root, d)
+            rel_d = os.path.relpath(full_d, pkg_dir).replace(os.sep, "/") + "/"
+            zinfo = zipfile.ZipInfo(rel_d)
+            zinfo.create_system = 3
+            zinfo.external_attr = (0o40755 << 16) | 0x10
+            z.writestr(zinfo, b"")
         for f in files:
             full = os.path.join(root, f)
             rel = os.path.relpath(full, pkg_dir)

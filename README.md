@@ -10,9 +10,16 @@ there are other enhancements this provides, but ehh...they're there... :)
 ## apps you can try now
 
 **how to install apps:**
-> make sure boot thingy is installed, plug in your MPC Sample to your computer via USB. install your app from the boot thingy web tool: 
-- [http://mpc-sample.local:8080](http://mpc-sample.local:8080)
-- [http://192.168.155.1:8080](http://192.168.155.1:8080)
+> make sure boot thingy is installed. You can install apps in two ways:
+>
+> **Option 1: SD card drag-and-drop (no web server needed)**
+> 1. copy your app `.zip` file(s) directly into `autorun/apps/` on the SD card (using an SD card reader or Boot Thingy's `USB storage (SD card)` mode).
+> 2. boot up your MPC (or exit USB storage / reload the menu) — Boot Thingy installs the `.zip` files automatically and removes them once installed.
+>
+> **Option 2: Web tool (over USB)**
+> plug in your MPC Sample to your computer via USB and install your app from the boot thingy web tool:
+> - [http://mpc-sample.local:8080](http://mpc-sample.local:8080)
+> - [http://192.168.155.1:8080](http://192.168.155.1:8080)
 
 * [AM Mod](https://github.com/AlekseyMalykh/am-mod)
    - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
@@ -66,3 +73,18 @@ there are other enhancements this provides, but ehh...they're there... :)
    > if there is an existing `autoboot` folder, you need to either back it up or delete it first...
 4. boot mpc sample with sd card instered
 
+## install apps
+
+### usb install (recommended)
+
+1. download the app/mod you want..do not extract the zip
+2. plug in your MPC sample and navigate to: [mpc-sample.local/testapp](http://mpc-sample.local/testapp) or [192.168.155.1/testapp](http://192.168.155.1/testapp)
+3. click the "install app" button
+4. choose your app zip
+
+### manual app install via SD card
+
+1. download the app/mod you want...do no extract the zip
+2. mount your SD card to your computer
+3. put your app zip in the SD card folder: `autorun/apps/ZIP_FILE_HERE.zip`
+4. power on MPC Sample with SD card inserted and it will display that it is installing your app.
