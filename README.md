@@ -25,6 +25,8 @@ there are other enhancements this provides, but ehh...they're there... :)
    - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
 * [SampQOL-OS](https://github.com/snarebes/SampQOL-OS.git)
    - many enhancements to the OS that improve overall functionality and UX.
+* [sample-base](https://github.com/keremimo/sample-base)
+   - from scratch custom JUCE 9 application starter
 * [GRIDZILLA](https://www.thesoundfactorynj.com/gridzilla)
    - modern daw-like sequencing UI/UX...super custom workflow.
 * [mpc-minimod](https://github.com/ioma8/mpc-minimod)
