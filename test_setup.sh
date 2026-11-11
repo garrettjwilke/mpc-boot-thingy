@@ -772,4 +772,17 @@ with zipfile.ZipFile(zpath) as zf:
             sys.exit("%s mode is %o, expected 755" % (name, mode))
 PY
 
+# When PACK_VERSION is unset, --pack uses VERSION (with a v prefix).
+expected_ver="v$(sed -e 's/[[:space:]]//g' -e 's/^v//' VERSION)"
+./setup.sh --pack "$work/mpc-boot-thingy-default.zip" >/tmp/mpc-boot-out
+python3 - "$work/mpc-boot-thingy-default.zip" "$expected_ver" <<'PY'
+import sys, zipfile
+zpath, expected = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(zpath) as zf:
+    manifest = zf.read("manifest.yaml").decode()
+    want = f'version: "{expected}"'
+    if want not in manifest:
+        sys.exit(f"manifest missing {want}; got:\n{manifest}")
+PY
+
 echo "setup fixtures ok"

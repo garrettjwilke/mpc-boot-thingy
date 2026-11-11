@@ -16,6 +16,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef APP_VERSION
+#define APP_VERSION "0.0.0"
+#endif
+
 static int64_t mono_now_ms(void) {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
@@ -764,7 +768,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   ui_soft_keys(u, 8, 4, 304, 28, labels, &s->soft_active, soft, widget_in,
                &s->soft_ks);
 
-  const char *title = "mpc-boot-thingy";
+  const char *title = "mpc-boot-thingy  |  v" APP_VERSION;
   const char *hint = "";
   char title_buf[48];
   if (s->screen == BOOT_SCREEN_SETTINGS)

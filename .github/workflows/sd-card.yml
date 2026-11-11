@@ -1,12 +1,12 @@
 name: Release
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'VERSION'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag (for example v1.0.0)
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -37,19 +37,23 @@ jobs:
           fi
           ln -sfn "$node_bin" /usr/bin/node
 
-      - name: Check the tag
-        env:
-          TAG: ${{ inputs.tag }}
+      - name: Read and check VERSION
+        id: version
         run: |
-          if ! printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.].+)?$'; then
-            echo "Tag must look like v1.2.3 or v1.2.3-beta" >&2
+          raw=$(tr -d '[:space:]' < VERSION)
+          raw=${raw#v}
+          if ! printf '%s\n' "$raw" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+            echo "VERSION must look like 1.2.3 or 1.2.3-beta (got: '$raw')" >&2
             exit 1
           fi
+          tag="v$raw"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Read release tag $tag from VERSION"
 
       - name: Stop if this release already exists
         if: github.actor != 'nektos/act'
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -59,12 +63,12 @@ jobs:
 
       - name: Build
         env:
-          PACK_VERSION: ${{ inputs.tag }}
+          PACK_VERSION: ${{ steps.version.outputs.tag }}
         run: make
 
       - name: Check the testapp package
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           python3 - <<'PY'
           import os
@@ -143,7 +147,7 @@ jobs:
       - name: Publish the release
         if: github.actor != 'nektos/act'
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" dist/mpc-boot-thingy.zip \
