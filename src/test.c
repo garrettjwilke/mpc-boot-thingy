@@ -233,6 +233,20 @@ int main(void) {
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_APPS);
 
+  /* Main screen header shows "mpc-boot-thingy  |  v" APP_VERSION at (12, 40) */
+  {
+    static uint32_t ref_px[UI_W * UI_H];
+    struct ui ref = {.px = ref_px};
+    ui_clear(&ref, theme_at(0)->bg);
+    ui_text(&ref, 12, 40, "mpc-boot-thingy  |  v" APP_VERSION,
+            theme_at(0)->text, 1);
+    for (int y = 40; y < 52; y++) {
+      for (int x = 0; x < UI_W; x++) {
+        assert(px[y * UI_W + x] == ref_px[y * UI_W + x]);
+      }
+    }
+  }
+
   /* Test scrolling up to row 0 (USB storage) */
   input_begin(&in, 0);
   in.encoder = -1;

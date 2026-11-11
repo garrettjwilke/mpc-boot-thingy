@@ -1,6 +1,7 @@
 # mpc-boot-thingy. `make` cross-builds the device binaries into build/
 # and writes the testapp zip to dist/mpc-boot-thingy.zip.
 WARN = -Wall -Wextra
+APP_VERSION := $(shell sed -e 's/[[:space:]]//g' -e 's/^v//' VERSION)
 UI = mpc-ui-toolkit/src
 INC = -Iinc -Iwebserver -I$(UI)
 DEV_SRC = src/main.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c src/format_sd.c src/testapp.c src/app_install.c webserver/unzip.c \
@@ -19,10 +20,10 @@ package: build/mpc-boot-thingy build/mpc-boot-web build/loader.so build/usb_inst
 	mkdir -p dist
 	./setup.sh --pack dist/mpc-boot-thingy.zip
 
-build/mpc-boot-thingy: $(DEV_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h inc/sd_check.h inc/format_sd.h inc/testapp.h inc/app_install.h inc/unzip.h $(UI)/usb_sd.h
+build/mpc-boot-thingy: $(DEV_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h inc/sd_check.h inc/format_sd.h inc/testapp.h inc/app_install.h inc/unzip.h $(UI)/usb_sd.h VERSION
 	mkdir -p build
 	zig cc -target aarch64-linux-musl -static -O2 -s -D_DEFAULT_SOURCE -std=c11 $(WARN) $(INC) \
-	  -o $@ $(DEV_SRC)
+	  -DAPP_VERSION=\"$(APP_VERSION)\" -o $@ $(DEV_SRC)
 
 build/usb_installer: $(INSTALLER_SRC) inc/theme.h inc/sd_check.h inc/format_sd.h
 	mkdir -p build
@@ -53,9 +54,9 @@ build/mpc-boot-web-host: webserver/server.c webserver/unzip.c webserver/file_ops
 
 web-host: build/mpc-boot-web-host
 
-build/menu-test: $(HOST_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h inc/sd_check.h inc/format_sd.h inc/testapp.h inc/app_install.h inc/unzip.h $(UI)/usb_sd.h
+build/menu-test: $(HOST_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_edit.h inc/sd_check.h inc/format_sd.h inc/testapp.h inc/app_install.h inc/unzip.h $(UI)/usb_sd.h VERSION
 	mkdir -p build
-	cc -std=c11 -D_DEFAULT_SOURCE -g $(WARN) $(INC) -o $@ $(HOST_SRC)
+	cc -std=c11 -D_DEFAULT_SOURCE -g $(WARN) $(INC) -DAPP_VERSION=\"$(APP_VERSION)\" -o $@ $(HOST_SRC)
 
 test: build/menu-test build/loader-test
 	./build/menu-test

@@ -1422,10 +1422,18 @@ ensure_device_binaries() {
 }
 
 # Same zip --usb uploads. make calls this through --pack. It does not
-# contact the MPC. PACK_VERSION sets the manifest version.
+# contact the MPC. PACK_VERSION sets the manifest version (defaults to VERSION).
 build_testapp_zip() {
   out_zip=$1
-  version=${PACK_VERSION:-1.0.0}
+  if [ -n "${PACK_VERSION+x}" ]; then
+    version=$PACK_VERSION
+  elif [ -f "$ROOT/VERSION" ]; then
+    raw_version=$(tr -d '[:space:]' < "$ROOT/VERSION")
+    raw_version=${raw_version#v}
+    version="v$raw_version"
+  else
+    version=1.0.0
+  fi
   case "$version" in
     ''|*[!A-Za-z0-9._+-]*)
       echo "ERROR: PACK_VERSION must be a plain version" >&2
