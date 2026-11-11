@@ -228,7 +228,7 @@ int main(void) {
   struct ui view = {.px = px};
   struct boot_ui boot;
   boot_ui_init(&boot, &m, 0, 0);
-  assert(boot.apps_ls.cursor == 1);
+  assert(boot.apps_ls.cursor == 0);
   struct input in;
   input_begin(&in, 0);
   boot_frame(&view, &in, &boot);
@@ -248,21 +248,45 @@ int main(void) {
     }
   }
 
-  /* Test scrolling up to row 0 (USB storage) */
+  /* Scrolling up at the top row clamps instead of wrapping. */
   input_begin(&in, 0);
   in.encoder = -1;
   boot_frame(&view, &in, &boot);
   assert(boot.apps_ls.cursor == 0);
 
-  /* Holding shift on row 0 (USB storage) should not trigger Set Default on B1
-   */
+  /* Scrolling down reaches Lab (row 1) then Snake (row 2), and clamps at the
+   * bottom. */
   input_begin(&in, 0);
-  in.shift = 1;
-  in.held = 1u << IN_SHIFT;
+  in.encoder = 1;
   boot_frame(&view, &in, &boot);
-  assert(boot.action == BOOT_ACT_NONE);
+  assert(boot.apps_ls.cursor == 1);
+  input_begin(&in, 0);
+  in.encoder = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.apps_ls.cursor == 2);
+  input_begin(&in, 0);
+  in.encoder = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.apps_ls.cursor == 2);
 
-  /* Pressing encoder on row 0 opens USB storage. Start waits for the next
+  /* B1 opens the dedicated USB screen. */
+  input_begin(&in, 0);
+  in.down = 1u << IN_B1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.screen == BOOT_SCREEN_USB);
+  assert(boot.usb_ls.cursor == 0);
+
+  /* The USB screen lists Install App (row 0) and USB storage (row 1). */
+  input_begin(&in, 0);
+  in.encoder = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.usb_ls.cursor == 1);
+  input_begin(&in, 0);
+  in.encoder = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.usb_ls.cursor == 1);
+
+  /* Selecting USB storage opens the storage screen. Start waits for the next
    * frame. */
   input_begin(&in, 0);
   in.encoder_press = 1;
@@ -274,17 +298,16 @@ int main(void) {
   /* Return to apps screen. The card is not bound yet. */
   boot.screen = BOOT_SCREEN_APPS;
   boot.action = BOOT_ACT_NONE;
-  boot.apps_ls.cursor = 1;
+  boot.apps_ls.cursor = 0;
 
   in.down = 1u << IN_B3;
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
-  /* Test shift + top buttons (Set Default, Edit Entry) on an app row (cursor >
-   * 0) */
+  /* Test shift + top buttons (Set Default, Edit Entry) on an app row. */
   boot_ui_init(&boot, &m, 0, 0);
-  assert(boot.apps_ls.cursor == 1);
-  /* On Stock (cursor == 1), Shift + B2 (Edit Entry) shows notice and stays on
+  assert(boot.apps_ls.cursor == 0);
+  /* On Stock (cursor == 0), Shift + B2 (Edit Entry) shows notice and stays on
    * apps screen */
   input_begin(&in, 0);
   in.shift = 1;
@@ -294,11 +317,11 @@ int main(void) {
   assert(boot.screen == BOOT_SCREEN_APPS);
   assert(strcmp(boot.notice, "Stock cannot be edited") == 0);
 
-  /* Scroll to app:20-lab (cursor == 2) */
+  /* Scroll to app:20-lab (cursor == 1) */
   input_begin(&in, 0);
   in.encoder = 1;
   boot_frame(&view, &in, &boot);
-  assert(boot.apps_ls.cursor == 2);
+  assert(boot.apps_ls.cursor == 1);
   assert(boot.action == BOOT_ACT_NONE);
 
   /* Holding shift does NOT draw a popup over the center of the screen */
@@ -335,10 +358,10 @@ int main(void) {
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_APPS);
 
-  /* Test that default_index = 1 initializes cursor to 2 (pointing to
+  /* Test that default_index = 1 initializes cursor to 1 (pointing to
    * app:20-lab) */
   boot_ui_init(&boot, &m, 0, 1);
-  assert(boot.apps_ls.cursor == 2);
+  assert(boot.apps_ls.cursor == 1);
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
@@ -410,13 +433,22 @@ int main(void) {
   assert(strcmp(boot.action_id, "entry:30-snake.entry") == 0);
   assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
-  /* Test USB storage from settings menu (index 2) */
+  /* Test USB storage from the dedicated USB screen. */
   ui_usb_sd_set_mock(1, 0);
   boot.action = BOOT_ACT_NONE;
   input_begin(&in, 0);
-  in.encoder = 2;
+  in.down = 1u << IN_B1;
   boot_frame(&view, &in, &boot);
-  assert(boot.settings_ls.cursor == 2);
+  assert(boot.screen == BOOT_SCREEN_APPS);
+  input_begin(&in, 0);
+  in.down = 1u << IN_B1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.screen == BOOT_SCREEN_USB);
+  assert(boot.usb_ls.cursor == 0);
+  input_begin(&in, 0);
+  in.encoder = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.usb_ls.cursor == 1);
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
@@ -456,10 +488,10 @@ int main(void) {
   /* Main reloads the card and returns to the apps list. Stay here to re-enter.
    */
   boot.action = BOOT_ACT_NONE;
-  boot.screen = BOOT_SCREEN_SETTINGS;
+  boot.screen = BOOT_SCREEN_USB;
+  boot.usb_ls.cursor = 1;
 
   /* Exit via encoder press. */
-  boot.settings_ls.cursor = 2;
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
@@ -478,11 +510,11 @@ int main(void) {
   boot_frame(&view, &in, &boot);
   assert(boot.action == BOOT_ACT_USB_SD_DONE);
   boot.action = BOOT_ACT_NONE;
-  boot.screen = BOOT_SCREEN_SETTINGS;
+  boot.screen = BOOT_SCREEN_USB;
+  boot.usb_ls.cursor = 1;
 
-  /* A failed start returns to Settings from the error screen. */
+  /* A failed start returns to the USB screen from the error screen. */
   ui_usb_sd_set_mock(1, 1);
-  boot.settings_ls.cursor = 2;
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
@@ -496,15 +528,23 @@ int main(void) {
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
-  assert(boot.screen == BOOT_SCREEN_SETTINGS);
+  assert(boot.screen == BOOT_SCREEN_USB);
   ui_usb_sd_set_mock(1, 0);
 
-  /* Test reload from settings menu (now index 3) */
+  /* Test reload from settings menu (index 2). */
   boot.action = BOOT_ACT_NONE;
   input_begin(&in, 0);
-  in.encoder = 1;
+  in.down = 1u << IN_B1;
   boot_frame(&view, &in, &boot);
-  assert(boot.settings_ls.cursor == 3);
+  assert(boot.screen == BOOT_SCREEN_APPS);
+  input_begin(&in, 0);
+  in.down = 1u << IN_B3;
+  boot_frame(&view, &in, &boot);
+  assert(boot.screen == BOOT_SCREEN_SETTINGS);
+  input_begin(&in, 0);
+  in.encoder = 2;
+  boot_frame(&view, &in, &boot);
+  assert(boot.settings_ls.cursor == 2);
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
@@ -669,7 +709,12 @@ int main(void) {
   boot_ui_init(&boot, &again, 0, 0);
   boot_ui_set_catalog(&boot, catalog, nc);
 
-  /* Pressing B1 without shift is a no-op on BOOT_SCREEN_APPS */
+  /* Pressing B1 without shift opens the USB screen. */
+  input_begin(&in, 0);
+  in.down = 1u << IN_B1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.screen == BOOT_SCREEN_USB);
+  /* Back returns to the apps screen. */
   input_begin(&in, 0);
   in.down = 1u << IN_B1;
   boot_frame(&view, &in, &boot);
@@ -728,9 +773,9 @@ int main(void) {
   assert(boot.action == BOOT_ACT_NONE);
   assert(!boot_ui_dirty(&boot));
 
-  /* Hover Lab mix (menu index `found` -> apps_ls.cursor = 1 + found) and Shift
-   * + B2 -> Edit Entry */
-  boot.apps_ls.cursor = 1 + found;
+  /* Hover Lab mix (menu index `found` -> apps_ls.cursor = found) and Shift + B2
+   * -> Edit Entry */
+  boot.apps_ls.cursor = found;
   input_begin(&in, 0);
   in.shift = 1;
   in.held = 1u << IN_SHIFT;
@@ -761,11 +806,11 @@ int main(void) {
   boot_ui_saved(&boot);
   assert(boot.screen == BOOT_SCREEN_APPS);
 
-  /* Test editing an installed app via Shift + B2 on main menu (cursor 2: Lab
+  /* Test editing an installed app via Shift + B2 on main menu (cursor 1: Lab
    * firmware) */
   boot_ui_init(&boot, &again, 0, 0);
   boot_ui_set_catalog(&boot, catalog, nc);
-  boot.apps_ls.cursor = 2;
+  boot.apps_ls.cursor = 1;
   input_begin(&in, 0);
   in.shift = 1;
   in.held = 1u << IN_SHIFT;
@@ -1294,7 +1339,7 @@ int main(void) {
 
   /* Navigate Settings -> Format SD Card */
   ui_fmt.screen = BOOT_SCREEN_SETTINGS;
-  ui_fmt.settings_ls.cursor = 4;
+  ui_fmt.settings_ls.cursor = 3;
   struct input in_press = {.encoder_press = 1};
   struct ui ui_test = {.px = px};
   boot_frame(&ui_test, &in_press, &ui_fmt);
@@ -1702,14 +1747,12 @@ int main(void) {
       boot_ui_set_card(&uax, card_zip);
       ui_usb_apps_set_mock(1, 0);
 
-      /* Scroll to the Install App (USB) row at bottom of Apps list (1 + zm.n) */
-      uax.apps_ls.cursor = 1 + zm.n;
+      /* B1 opens the dedicated USB screen; Install App is row 0. */
       input_begin(&uin, 0);
-      uin.shift = 1;
-      uin.held = 1u << IN_SHIFT;
       uin.down = 1u << IN_B1;
       boot_frame(&uax_view, &uin, &uax);
-      assert(uax.action == BOOT_ACT_NONE);
+      assert(uax.screen == BOOT_SCREEN_USB);
+      assert(uax.usb_ls.cursor == 0);
 
       input_begin(&uin, 0);
       uin.encoder_press = 1;
@@ -1733,11 +1776,11 @@ int main(void) {
       assert(uax.action == BOOT_ACT_USB_APPS_DONE);
       assert(!ui_usb_apps_is_active(&uax.usb_apps));
 
-      /* Failed start from Settings returns to Settings */
+      /* Failed start returns to the USB screen. */
       ui_usb_apps_set_mock(1, 1);
       uax.action = BOOT_ACT_NONE;
-      uax.screen = BOOT_SCREEN_SETTINGS;
-      uax.settings_ls.cursor = 5;
+      uax.screen = BOOT_SCREEN_USB;
+      uax.usb_ls.cursor = 0;
       input_begin(&uin, 0);
       uin.encoder_press = 1;
       boot_frame(&uax_view, &uin, &uax);
@@ -1749,11 +1792,11 @@ int main(void) {
       input_begin(&uin, 0);
       uin.encoder_press = 1;
       boot_frame(&uax_view, &uin, &uax);
-      assert(uax.screen == BOOT_SCREEN_SETTINGS);
+      assert(uax.screen == BOOT_SCREEN_USB);
 
       /* Emergency stop clears active binding */
       ui_usb_apps_set_mock(1, 0);
-      uax.settings_ls.cursor = 5;
+      uax.usb_ls.cursor = 0;
       input_begin(&uin, 0);
       uin.encoder_press = 1;
       boot_frame(&uax_view, &uin, &uax);

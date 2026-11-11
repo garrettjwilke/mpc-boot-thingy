@@ -20,7 +20,8 @@ enum {
   BOOT_SCREEN_UNSAVED,
   BOOT_SCREEN_TEXT_EDIT,
   BOOT_SCREEN_FORMAT_CONFIRM,
-  BOOT_SCREEN_FORMAT_PROGRESS
+  BOOT_SCREEN_FORMAT_PROGRESS,
+  BOOT_SCREEN_USB
 };
 
 enum {
@@ -60,6 +61,7 @@ struct boot_ui {
   struct ui_list_state format_confirm_ls;
   struct ui_list_state entry_ls;
   struct ui_list_state unsaved_ls;
+  struct ui_list_state usb_ls;
   int soft_active;
   struct ui_soft_state soft_ks;
   struct boot_patch catalog[BOOT_PATCH_MAX];
