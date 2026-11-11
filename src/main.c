@@ -1317,9 +1317,8 @@ static int reopen_after_app(struct surface *midi, struct screen *scr) {
 
 static void print_menu(const struct menu *m, int sel) {
   printf("menu:\n");
-  printf("%c %s\n", sel == 0 ? '>' : ' ', "USB storage (SD card)");
   for (int i = 0; i < m->n; i++)
-    printf("%c %s\n", (1 + i) == sel ? '>' : ' ', m->items[i].title);
+    printf("%c %s\n", i == sel ? '>' : ' ', m->items[i].title);
   fflush(stdout);
 }
 
@@ -1895,7 +1894,7 @@ int main(int argc, char **argv) {
           int dsel = (ui.default_index >= 0 && ui.default_index < menu.n)
                          ? ui.default_index
                          : 0;
-          ui.apps_ls.cursor = 1 + dsel;
+          ui.apps_ls.cursor = dsel;
 
           input_begin(&quiet, &dev);
           started = mono_ms();
@@ -1956,7 +1955,7 @@ int main(int argc, char **argv) {
       int dsel = (ui.default_index >= 0 && ui.default_index < menu.n)
                      ? ui.default_index
                      : 0;
-      ui.apps_ls.cursor = 1 + dsel;
+      ui.apps_ls.cursor = dsel;
 
       input_begin(&quiet, &dev);
       started = mono_ms();
@@ -1992,7 +1991,7 @@ int main(int argc, char **argv) {
         boot_ui_saved(&ui);
         for (int j = 0; j < menu.n; j++) {
           if (strcmp(menu.items[j].id, out_id) == 0) {
-            ui.apps_ls.cursor = 1 + j;
+            ui.apps_ls.cursor = j;
             break;
           }
         }
@@ -2041,7 +2040,7 @@ int main(int argc, char **argv) {
         int dsel = (ui.default_index >= 0 && ui.default_index < menu.n)
                        ? ui.default_index
                        : 0;
-        ui.apps_ls.cursor = 1 + dsel;
+        ui.apps_ls.cursor = dsel;
         boot_ui_notice(&ui, "Deleted");
       } else {
         boot_ui_notice(&ui, "Could not delete");
@@ -2087,7 +2086,7 @@ int main(int argc, char **argv) {
       int dsel = (ui.default_index >= 0 && ui.default_index < menu.n)
                      ? ui.default_index
                      : 0;
-      ui.apps_ls.cursor = 1 + dsel;
+      ui.apps_ls.cursor = dsel;
       ui.screen = BOOT_SCREEN_APPS;
       if (install_notice[0])
         boot_ui_notice(&ui, install_notice);

@@ -80,7 +80,7 @@ there are other enhancements this provides, but ehh...they're there... :)
 ### usb install on device method
 
 1. download the app/mod you want..do not extract the zip
-2. on the mpc boot thingy screen, press B3 for settings, then select "Install App (USB)"
+2. on the mpc boot thingy screen, press B1 for USB, then select "Install App (USB)"
 3. a new usb flash drive will mount to your computer.
 4. drag and drop the app zip file you downloaded to this directory
 4. click B1 (exit) and boot thingy will install the app
