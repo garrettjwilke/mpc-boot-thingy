@@ -27,6 +27,10 @@ export function bindFiles({ toast }) {
   const reconnectBtn = document.getElementById("fb-reconnect");
   const btnZipAll = document.getElementById("fb-btn-zip-all");
   const showDotfilesInput = document.getElementById("fb-show-dotfiles");
+  const zipModal = document.getElementById("zip-name-modal");
+  const zipInput = document.getElementById("zip-name");
+  const zipCancelBtn = document.getElementById("zip-name-cancel");
+  const zipConfirmBtn = document.getElementById("zip-name-confirm");
 
   let feInstance = null;
   let showDotfiles = false;
@@ -324,6 +328,57 @@ export function bindFiles({ toast }) {
     }
   }
 
+  let zipResolver = null;
+  let zipDefault = "mpc-usercontent-backup.zip";
+
+  function resolveZip(name) {
+    if (zipModal) zipModal.hidden = true;
+    const resolve = zipResolver;
+    zipResolver = null;
+    if (resolve) resolve(name);
+  }
+
+  function askZipName(defaultName) {
+    return new Promise((resolve) => {
+      zipDefault = defaultName || "mpc-usercontent-backup.zip";
+      zipResolver = resolve;
+      if (zipInput) zipInput.value = zipDefault;
+      if (zipModal) zipModal.hidden = false;
+      if (zipInput) {
+        zipInput.focus();
+        zipInput.setSelectionRange(0, zipInput.value.length);
+      }
+    });
+  }
+
+  function bindZipDialog() {
+    if (!zipModal || !zipInput || !zipConfirmBtn || !zipCancelBtn) return;
+    const confirm = () => {
+      let name = zipInput.value.trim().replace(/[\\/]/g, "_");
+      if (!name) name = zipDefault;
+      if (!/\.zip$/i.test(name)) name += ".zip";
+      resolveZip(name);
+    };
+    const cancel = () => resolveZip(null);
+    zipConfirmBtn.addEventListener("click", confirm);
+    zipCancelBtn.addEventListener("click", cancel);
+    zipModal.addEventListener("click", (e) => {
+      if (e.target === zipModal) cancel();
+    });
+    zipInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirm();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancel();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && zipModal && !zipModal.hidden) cancel();
+    });
+  }
+
   async function downloadEntries(folder, ids, entries) {
     const rel = getFolderRelPath(folder);
     if (ids.length === 1 && entries.length === 1 && entries[0].type === "file") {
@@ -337,9 +392,14 @@ export function bindFiles({ toast }) {
       return;
     }
     const items = ids.map((id) => (rel ? rel + "/" + id : id));
-    const zipName = ids.length === 1
+    const defaultName = ids.length === 1
       ? `${entries[0].name}.zip`
       : `mpc-usercontent-export-${new Date().toISOString().slice(0, 10)}.zip`;
+    const zipName = await askZipName(defaultName);
+    if (!zipName) {
+      toast("Download cancelled");
+      return;
+    }
     toast("Preparing ZIP export...");
     await exportZip(items, zipName);
     toast("ZIP export complete");
@@ -349,13 +409,23 @@ export function bindFiles({ toast }) {
     const folder = feInstance.GetCurrentFolder();
     const rel = getFolderRelPath(folder);
     if (!rel) {
+      const zipName = await askZipName(`mpc-usercontent-backup-${new Date().toISOString().slice(0, 10)}.zip`);
+      if (!zipName) {
+        toast("Download cancelled");
+        return;
+      }
       toast("Preparing full /data/UserContent backup as ZIP...");
-      await exportZip([], `mpc-usercontent-backup-${new Date().toISOString().slice(0, 10)}.zip`);
+      await exportZip([], zipName);
       toast("Full backup download started!");
       return;
     }
+    const zipName = await askZipName(`${destinationName(folder)}.zip`);
+    if (!zipName) {
+      toast("Download cancelled");
+      return;
+    }
     toast("Preparing ZIP export...");
-    await exportZip([rel], `${destinationName(folder)}.zip`);
+    await exportZip([rel], zipName);
     toast("ZIP export complete");
   }
 
@@ -1192,8 +1262,13 @@ export function bindFiles({ toast }) {
   if (btnZipAll) {
     btnZipAll.addEventListener("click", async () => {
       try {
+        const zipName = await askZipName(`mpc-usercontent-backup-${new Date().toISOString().slice(0, 10)}.zip`);
+        if (!zipName) {
+          toast("Backup cancelled");
+          return;
+        }
         toast("Preparing full /data/UserContent backup as ZIP...");
-        await exportZip([], `mpc-usercontent-backup-${new Date().toISOString().slice(0, 10)}.zip`);
+        await exportZip([], zipName);
         toast("Full backup download started!");
       } catch (err) {
         toast(err.message || "Backup failed");
@@ -1236,6 +1311,7 @@ export function bindFiles({ toast }) {
   }
 
   // Load explorer
+  bindZipDialog();
   initExplorer();
   updateDiskStats();
 

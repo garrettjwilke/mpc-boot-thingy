@@ -221,6 +221,9 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
 .boot-new { margin-bottom: 4px; }
 .boot-dialog { max-width: 460px; }
 #boot-form .field { margin-bottom: 8px; }
+.zip-dialog { max-width: 480px; }
+.zip-dialog .field { margin-bottom: 4px; }
+.zip-dialog .field input { width: 100%; }
 #unsaved { z-index: 7; }
 .modal {
   position: fixed;
