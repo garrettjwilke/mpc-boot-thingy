@@ -12,6 +12,7 @@
 #include "theme.h"
 #include "ui.h"
 #include "unzip.h"
+#include "usb_apps.h"
 #include "usb_sd.h"
 #include "zip_writer.h"
 
@@ -1690,6 +1691,108 @@ int main(void) {
     assert(sum.installed == 1 && sum.failed == 0);
     assert(access(zpath, F_OK) != 0);
     assert(menu_load(&zm, card_zip) == 4);
+
+    /* USB App Drop UI flow & zip collection tests */
+    {
+      static uint32_t uax_px[UI_W * UI_H];
+      struct ui uax_view = {.px = uax_px};
+      struct boot_ui uax;
+      struct input uin;
+      boot_ui_init(&uax, &zm, 0, 0);
+      boot_ui_set_card(&uax, card_zip);
+      ui_usb_apps_set_mock(1, 0);
+
+      /* Scroll to the Install App (USB) row at bottom of Apps list (1 + zm.n) */
+      uax.apps_ls.cursor = 1 + zm.n;
+      input_begin(&uin, 0);
+      uin.shift = 1;
+      uin.held = 1u << IN_SHIFT;
+      uin.down = 1u << IN_B1;
+      boot_frame(&uax_view, &uin, &uax);
+      assert(uax.action == BOOT_ACT_NONE);
+
+      input_begin(&uin, 0);
+      uin.encoder_press = 1;
+      boot_frame(&uax_view, &uin, &uax);
+      assert(uax.screen == BOOT_SCREEN_USB_APPS);
+      assert(uax.usb_apps.phase == UI_USB_APPS_PHASE_PREPARING);
+      assert(strcmp(uax.usb_apps.card, card_zip) == 0);
+
+      input_begin(&uin, 0);
+      boot_frame(&uax_view, &uin, &uax);
+      assert(uax.usb_apps.phase == UI_USB_APPS_PHASE_ACTIVE);
+      assert(ui_usb_apps_is_active(&uax.usb_apps));
+
+      input_begin(&uin, 0);
+      uin.down = 1u << IN_B1;
+      boot_frame(&uax_view, &uin, &uax);
+      assert(uax.usb_apps.phase == UI_USB_APPS_PHASE_EXITING);
+
+      input_begin(&uin, 0);
+      boot_frame(&uax_view, &uin, &uax);
+      assert(uax.action == BOOT_ACT_USB_APPS_DONE);
+      assert(!ui_usb_apps_is_active(&uax.usb_apps));
+
+      /* Failed start from Settings returns to Settings */
+      ui_usb_apps_set_mock(1, 1);
+      uax.action = BOOT_ACT_NONE;
+      uax.screen = BOOT_SCREEN_SETTINGS;
+      uax.settings_ls.cursor = 5;
+      input_begin(&uin, 0);
+      uin.encoder_press = 1;
+      boot_frame(&uax_view, &uin, &uax);
+      assert(uax.screen == BOOT_SCREEN_USB_APPS);
+      input_begin(&uin, 0);
+      boot_frame(&uax_view, &uin, &uax);
+      assert(uax.usb_apps.phase == UI_USB_APPS_PHASE_ERROR);
+      assert(!ui_usb_apps_is_active(&uax.usb_apps));
+      input_begin(&uin, 0);
+      uin.encoder_press = 1;
+      boot_frame(&uax_view, &uin, &uax);
+      assert(uax.screen == BOOT_SCREEN_SETTINGS);
+
+      /* Emergency stop clears active binding */
+      ui_usb_apps_set_mock(1, 0);
+      uax.settings_ls.cursor = 5;
+      input_begin(&uin, 0);
+      uin.encoder_press = 1;
+      boot_frame(&uax_view, &uin, &uax);
+      input_begin(&uin, 0);
+      boot_frame(&uax_view, &uin, &uax);
+      assert(ui_usb_apps_is_active(&uax.usb_apps));
+      assert(ui_usb_apps_stop(&uax.usb_apps) == 0);
+      assert(!ui_usb_apps_is_active(&uax.usb_apps));
+
+      /* Collect .zip packages from mock USB drop directory */
+      char drop_dir[512];
+      snprintf(drop_dir, sizeof drop_dir, "%s/drop_mnt", dir);
+      mkdir(drop_dir, 0755);
+      snprintf(path, sizeof path, "%s/sub.dir", drop_dir);
+      mkdir(path, 0755);
+      snprintf(path, sizeof path, "%s/Drop .zip apps here.txt", drop_dir);
+      write_file(path, "readme\n");
+      snprintf(path, sizeof path, "%s/._USB Dropped.zip", drop_dir);
+      write_file(path, "appledouble\n");
+      snprintf(path, sizeof path, "%s/USB Dropped.zip", drop_dir);
+      snprintf(cmd, sizeof cmd, "python3 '%s/mkdrop.py' bt '%s'", dir, path);
+      assert(system(cmd) == 0);
+
+      ui_usb_apps_set_mock_dir(drop_dir);
+      int copied = 0;
+      char uerr[128] = {0};
+      assert(usb_apps_collect_zips(card_zip, &copied, uerr, sizeof uerr) == 0);
+      assert(copied == 1);
+      ui_usb_apps_set_mock_dir(NULL);
+
+      snprintf(path, sizeof path, "%s/._USB Dropped.zip", apps_dir);
+      assert(access(path, F_OK) != 0);
+      snprintf(path, sizeof path, "%s/USB Dropped.zip", apps_dir);
+      assert(access(path, F_OK) == 0);
+
+      assert(app_install_pending_zips(card_zip, NULL, NULL, &sum) == 0);
+      assert(sum.installed == 1 && sum.failed == 0);
+      assert(menu_load(&zm, card_zip) == 5);
+    }
   }
 
   puts("selftest ok");

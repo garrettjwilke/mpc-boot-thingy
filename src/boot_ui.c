@@ -243,6 +243,20 @@ static struct ui_usb_sd_style usb_style(const struct boot_theme *th) {
   return st;
 }
 
+static struct ui_usb_apps_style usb_apps_style(const struct boot_theme *th) {
+  struct ui_usb_apps_style st = {
+      .bg = th->bg,
+      .text = th->text,
+      .dim = th->dim,
+      .hl = th->hl,
+      .box = th->box,
+      .border = th->border,
+      .bar = th->bar,
+      .active_text = th->active_text,
+  };
+  return st;
+}
+
 /* 1 when this frame belongs to the USB screen. 0 when the caller should draw
    the screen underneath, which is Settings after a failed start. */
 static int run_usb_sd(struct ui *u, struct boot_ui *s, const struct input *in) {
@@ -253,6 +267,20 @@ static int run_usb_sd(struct ui *u, struct boot_ui *s, const struct input *in) {
   }
   if (rc == UI_USB_SD_FAILED) {
     s->screen = BOOT_SCREEN_SETTINGS;
+    return 0;
+  }
+  return 1;
+}
+
+static int run_usb_apps(struct ui *u, struct boot_ui *s,
+                        const struct input *in) {
+  int rc = ui_usb_apps(u, &s->usb_apps, usb_apps_style(theme_at(s->theme)), in);
+  if (rc == UI_USB_APPS_DONE) {
+    s->action = BOOT_ACT_USB_APPS_DONE;
+    return 1;
+  }
+  if (rc == UI_USB_APPS_FAILED) {
+    s->screen = s->usb_apps_return_screen;
     return 0;
   }
   return 1;
@@ -383,6 +411,15 @@ void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme,
   int n = menu ? menu->n : 0;
   int sel = (default_index >= 0 && default_index < n) ? default_index : 0;
   ui->apps_ls.cursor = 1 + sel;
+}
+
+void boot_ui_set_card(struct boot_ui *ui, const char *card) {
+  if (!ui)
+    return;
+  if (card && card[0])
+    snprintf(ui->card, sizeof ui->card, "%s", card);
+  else
+    ui->card[0] = 0;
 }
 
 void boot_ui_set_catalog(struct boot_ui *ui, const struct boot_patch *patches,
@@ -573,8 +610,9 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
 
   int screen = s->screen;
   int n = s->menu ? s->menu->n : 0;
+  int shown_n = n > MENU_MAX - 2 ? MENU_MAX - 2 : n;
   if (screen == BOOT_SCREEN_SETTINGS)
-    move_cursor(&s->settings_ls, 5, &ev);
+    move_cursor(&s->settings_ls, 6, &ev);
   else if (screen == BOOT_SCREEN_DEFAULT)
     move_cursor(&s->default_ls, n, &ev);
   else if (screen == BOOT_SCREEN_THEME) {
@@ -595,7 +633,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
 
   int left = 0;
   int shift_apps = (screen == BOOT_SCREEN_APPS && shift_held);
-  int shift_boot = (shift_apps && s->apps_ls.cursor > 0);
+  int shift_boot = (shift_apps && s->apps_ls.cursor > 0 &&
+                    s->apps_ls.cursor <= shown_n);
   if (shift_apps && input_down(&ev, IN_B1)) {
     if (shift_boot) {
       int sel = s->apps_ls.cursor - 1;
@@ -638,7 +677,7 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     queue_save(s);
     left = 1;
   } else if (screen != BOOT_SCREEN_APPS && screen != BOOT_SCREEN_STORAGE &&
-             input_down(&ev, IN_B1)) {
+             screen != BOOT_SCREEN_USB_APPS && input_down(&ev, IN_B1)) {
     if (screen == BOOT_SCREEN_THEME) {
       s->theme = s->saved_theme;
       s->theme_ls.cursor = s->saved_theme;
@@ -687,6 +726,10 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       } else if (s->settings_ls.cursor == 4) {
         s->screen = BOOT_SCREEN_FORMAT_CONFIRM;
         s->format_confirm_ls.cursor = 0;
+      } else if (s->settings_ls.cursor == 5) {
+        s->usb_apps_return_screen = BOOT_SCREEN_SETTINGS;
+        s->screen = BOOT_SCREEN_USB_APPS;
+        ui_usb_apps_init(&s->usb_apps, s->card);
       }
       ev.encoder_press = 0;
     } else if (screen == BOOT_SCREEN_FORMAT_CONFIRM) {
@@ -721,12 +764,16 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     if (run_usb_sd(u, s, &ev))
       return 0;
     input_begin(&ev, 0);
+  } else if (s->screen == BOOT_SCREEN_USB_APPS) {
+    if (run_usb_apps(u, s, &ev))
+      return 0;
+    input_begin(&ev, 0);
   }
 
   const struct boot_theme *th = theme_at(s->theme);
   ui_clear(u, th->bg);
 
-  int apps_count = 1 + (n > MENU_MAX - 1 ? MENU_MAX - 1 : n);
+  int apps_count = 2 + shown_n;
   int next_apps_cursor = s->apps_ls.cursor;
   if (s->screen == BOOT_SCREEN_APPS && apps_count > 0) {
     if (ev.encoder)
@@ -738,8 +785,9 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   const char *labels[3];
   if (s->screen == BOOT_SCREEN_APPS) {
     if (shift_held) {
-      labels[0] = next_apps_cursor > 0 ? "Set Default" : "";
-      labels[1] = next_apps_cursor > 0 ? "Edit Entry" : "";
+      int on_entry = (next_apps_cursor > 0 && next_apps_cursor <= shown_n);
+      labels[0] = on_entry ? "Set Default" : "";
+      labels[1] = on_entry ? "Edit Entry" : "";
       labels[2] = "New Entry";
     } else {
       labels[0] = "";
@@ -821,6 +869,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     hint = "this entry has changes";
   } else if (next_apps_cursor == 0)
     hint = UI_USB_SD_HINT;
+  else if (next_apps_cursor == 1 + shown_n)
+    hint = UI_USB_APPS_HINT;
   else
     hint = "hold shift for options";
   int is_apps = (s->screen == BOOT_SCREEN_APPS);
@@ -849,11 +899,13 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     const char *rows[MENU_MAX];
     int count = 0;
     rows[count++] = UI_USB_SD_LABEL;
-    for (int i = 0; i < n && count < MENU_MAX; i++) {
+    for (int i = 0; i < shown_n && count < MENU_MAX - 1; i++) {
       row_label(text[i], sizeof text[i], s->menu->items[i].title,
                 i == s->default_index);
       rows[count++] = text[i];
     }
+    int install_row = count;
+    rows[count++] = UI_USB_APPS_LABEL;
     int hit = ui_list(u, 8, list_y, 304, list_h, rows, count, rows_st,
                       widget_in, &s->apps_ls);
     if (hit == 0) {
@@ -861,7 +913,13 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       ui_usb_sd_init(&s->usb);
       run_usb_sd(u, s, &ev);
       return 0;
-    } else if (hit > 0) {
+    } else if (hit == install_row) {
+      s->usb_apps_return_screen = BOOT_SCREEN_APPS;
+      s->screen = BOOT_SCREEN_USB_APPS;
+      ui_usb_apps_init(&s->usb_apps, s->card);
+      run_usb_apps(u, s, &ev);
+      return 0;
+    } else if (hit > 0 && hit < install_row) {
       int sel = hit - 1;
       s->action = BOOT_ACT_LAUNCH;
       s->action_index = sel;
@@ -879,8 +937,9 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       s->screen = BOOT_SCREEN_APPS;
   } else if (s->screen == BOOT_SCREEN_SETTINGS) {
     const char *rows[] = {"Set default app", "Set theme", UI_USB_SD_LABEL,
-                          "Reload menu & SD", "Format SD Card"};
-    ui_list(u, 8, list_y, 304, list_h, rows, 5, rows_st, widget_in,
+                          "Reload menu & SD", "Format SD Card",
+                          UI_USB_APPS_LABEL};
+    ui_list(u, 8, list_y, 304, list_h, rows, 6, rows_st, widget_in,
             &s->settings_ls);
   } else if (s->screen == BOOT_SCREEN_FORMAT_CONFIRM) {
     const char *rows[] = {"No, cancel", "Yes, erase and format"};

@@ -1,6 +1,7 @@
 #pragma once
 #include "boot_edit.h"
 #include "menu.h"
+#include "usb_apps.h"
 #include "widgets.h"
 
 struct input;
@@ -11,6 +12,7 @@ enum {
   BOOT_SCREEN_DEFAULT,
   BOOT_SCREEN_THEME,
   BOOT_SCREEN_STORAGE,
+  BOOT_SCREEN_USB_APPS,
   BOOT_SCREEN_POWER,
   BOOT_SCREEN_ITEM_EDIT,
   BOOT_SCREEN_DELETE_CONFIRM,
@@ -29,6 +31,7 @@ enum {
   BOOT_ACT_SAVE_BOOT,
   BOOT_ACT_RELOAD,
   BOOT_ACT_USB_SD_DONE,
+  BOOT_ACT_USB_APPS_DONE,
   BOOT_ACT_UPDATE_ENTRY,
   BOOT_ACT_DELETE_ENTRY,
   BOOT_ACT_REBOOT,
@@ -82,11 +85,15 @@ struct boot_ui {
   int64_t notice_until_ms;
   char format_label[32];
   char format_status[128];
+  char card[256];
+  int usb_apps_return_screen;
   struct ui_usb_sd usb;
+  struct ui_usb_apps usb_apps;
 };
 
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme,
                   int default_index);
+void boot_ui_set_card(struct boot_ui *ui, const char *card);
 void boot_ui_set_catalog(struct boot_ui *ui, const struct boot_patch *patches,
                          int n);
 int boot_ui_dirty(const struct boot_ui *ui);

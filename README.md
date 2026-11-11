@@ -75,7 +75,15 @@ there are other enhancements this provides, but ehh...they're there... :)
 
 ## install apps
 
-### usb install (recommended)
+### usb install on device method
+
+1. download the app/mod you want..do not extract the zip
+2. on the mpc boot thingy screen, press B3 for settings, then select "Install App (USB)"
+3. a new usb flash drive will mount to your computer.
+4. drag and drop the app zip file you downloaded to this directory
+4. click B1 (exit) and boot thingy will install the app
+
+### usb install webserver method (recommended)
 
 1. download the app/mod you want..do not extract the zip
 2. plug in your MPC sample and navigate to: [mpc-sample.local/testapp](http://mpc-sample.local/testapp) or [192.168.155.1/testapp](http://192.168.155.1/testapp)
