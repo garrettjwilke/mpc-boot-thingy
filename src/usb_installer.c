@@ -33,6 +33,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef APP_VERSION
+#define APP_VERSION "0.0.0"
+#endif
+
 static void log_msg(const char *fmt, ...) {
   FILE *f = fopen("/tmp/usb_installer.log", "a");
   if (!f)
@@ -403,7 +407,7 @@ static void draw_status_screen(struct screen *scr, uint32_t *back,
   /* Top bar */
   struct ui_paint top_bar = {.fill_set = 1, .fill = 0x22262c};
   ui_box(&u, 0, 0, UI_W, 28, top_bar);
-  ui_text(&u, 14, 8, "USB INSTALLER", 0xffb000, 1);
+  ui_text(&u, 14, 8, "USB INSTALLER  |  v" APP_VERSION, 0xffb000, 1);
 
   /* Center box */
   struct ui_paint box = {.fill_set = 1,
@@ -459,7 +463,7 @@ static void wait_for_reboot(struct screen *scr, uint32_t *back, uint32_t *front,
 
     struct ui_paint top_bar = {.fill_set = 1, .fill = 0x22262c};
     ui_box(&u, 0, 0, UI_W, 28, top_bar);
-    ui_text(&u, 14, 8, "USB INSTALLER", 0xffb000, 1);
+    ui_text(&u, 14, 8, "USB INSTALLER  |  v" APP_VERSION, 0xffb000, 1);
 
     struct ui_paint box = {.fill_set = 1,
                            .fill = 0x1b1f24,
@@ -681,7 +685,8 @@ int main(int argc, char **argv) {
   int choice = -1; /* -1 pending, 0 = cancel, 1 = install, 2 = reformat then install */
 
   const char *question =
-      (mode == MODE_UPDATE) ? "Update boot thingy?" : "Install boot thingy?";
+      (mode == MODE_UPDATE) ? "Update boot thingy to v" APP_VERSION "?"
+                            : "Install boot thingy v" APP_VERSION "?";
 
   log_msg("Entering UI loop: mode=%d question='%s'", mode, question);
   if (mode == MODE_MIGRATE)
@@ -760,7 +765,7 @@ int main(int argc, char **argv) {
                              .border = 0x333a44,
                              .border_px = 1};
       ui_box(&u, 8, 36, 304, 196, box);
-      ui_text(&u, 20, 48, "USB INSTALLER", 0xffb000, 1);
+      ui_text(&u, 20, 48, "USB INSTALLER  |  v" APP_VERSION, 0xffb000, 1);
 
       int button_y = 134;
       int offer_format = step != STEP_FORMAT_WARN && step != STEP_WARN_AUTORUN;
@@ -772,7 +777,8 @@ int main(int argc, char **argv) {
         ui_text(&u, 16, 66, "An existing autorun is on this SD card.", 0xffffff,
                 1);
         ui_text(&u, 16, 88, "Continuing erases it and installs", 0xffb000, 1);
-        ui_text(&u, 16, 104, "boot thingy in its place.", 0xffb000, 1);
+        ui_text(&u, 16, 104, "boot thingy v" APP_VERSION " in its place.",
+                0xffb000, 1);
         ui_text(&u, 16, 128, "Continue or cancel?", 0xffffff, 1);
         button_y = 156;
         footer = "Top: Cancel / Continue      Wheel: Select";
@@ -782,15 +788,17 @@ int main(int argc, char **argv) {
         ui_text(&u, 20, 64, "Reformat SD card?", 0xffffff, 1);
         ui_text(&u, 20, 92, "ALL data on the SD card will be", 0xffb000, 1);
         ui_text(&u, 20, 108, "erased. This cannot be undone.", 0xffb000, 1);
-        ui_text(&u, 20, 132, "Boot thingy is installed after.", 0x9aa4b0, 1);
+        ui_text(&u, 20, 132, "Boot thingy v" APP_VERSION " is installed after.",
+                0x9aa4b0, 1);
         button_y = 156;
         footer = "Top: Cancel / Reformat      Wheel: Select";
         left = "Cancel";
         right = "Reformat";
       } else {
-        const char *subtitle = (mode == MODE_UPDATE)
-                                   ? "Update boot thingy files on SD card"
-                                   : "Install boot thingy to SD card";
+        const char *subtitle =
+            (mode == MODE_UPDATE)
+                ? "Update boot thingy v" APP_VERSION " on SD card"
+                : "Install boot thingy v" APP_VERSION " to SD card";
         ui_text(&u, 20, 72, question, 0xffffff, 1);
         ui_text(&u, 20, 104, subtitle, 0x9aa4b0, 1);
       }
@@ -864,13 +872,13 @@ int main(int argc, char **argv) {
       install_mode = MODE_INSTALL;
     }
     draw_status_screen(&scr, back, front, &midi, "Installing...",
-                       "Copying boot thingy to SD card...");
+                       "Copying boot thingy v" APP_VERSION " to SD...");
     log_msg("Calling perform_install");
     if (perform_install(card, staged, install_mode) == 0) {
       log_msg("Install succeeded");
       wait_for_reboot(&scr, back, front, &midi, "Complete!",
-                      formatted ? "Reformatted. Boot thingy is installed."
-                                : "Boot thingy is installed.");
+                      formatted ? "Reformatted. v" APP_VERSION " is installed."
+                                : "Boot thingy v" APP_VERSION " is installed.");
     } else {
       log_msg("Install failed");
       wait_for_reboot(
