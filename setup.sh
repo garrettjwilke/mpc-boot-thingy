@@ -1428,7 +1428,7 @@ build_testapp_zip() {
   if [ -n "${PACK_VERSION+x}" ]; then
     version=$PACK_VERSION
   elif [ -f "$ROOT/VERSION" ]; then
-    raw_version=$(tr -d '[:space:]' < "$ROOT/VERSION")
+    raw_version=$(head -n 1 "$ROOT/VERSION" | tr -d '[:space:]')
     raw_version=${raw_version#v}
     version="v$raw_version"
   else

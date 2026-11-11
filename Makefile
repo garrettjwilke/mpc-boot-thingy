@@ -1,7 +1,7 @@
 # mpc-boot-thingy. `make` cross-builds the device binaries into build/
 # and writes the testapp zip to dist/mpc-boot-thingy.zip.
 WARN = -Wall -Wextra
-APP_VERSION := $(shell sed -e 's/[[:space:]]//g' -e 's/^v//' VERSION)
+APP_VERSION := $(shell head -n 1 VERSION | sed -e 's/[[:space:]]//g' -e 's/^v//')
 UI = mpc-ui-toolkit/src
 INC = -Iinc -Iwebserver -I$(UI)
 DEV_SRC = src/main.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c src/format_sd.c src/testapp.c src/app_install.c webserver/unzip.c \
