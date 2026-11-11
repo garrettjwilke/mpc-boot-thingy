@@ -35,6 +35,8 @@ there are other enhancements this provides, but ehh...they're there... :)
 * [am-mod](https://github.com/AlekseyMalykh/am-mod)
    - lots of custom workflows and updated UI
    - chord mode, key scale of sample, step sequencer update, search, resample fixes
+*  [KAOSAMPLE public beta](https://github.com/omarhuertasllc-ops/kaosample-beta)
+   - stems, looper, auto-kit, scales/chords/arp, sidechain duck + lots more
 * [Loop Pad](https://github.com/larsoholm/LoopPad)
    - looper with synchronized tracks
    - turn your MPC Sample into a loop track recorder!
