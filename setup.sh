@@ -1072,6 +1072,7 @@ umask 077
 D=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 A=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
 RAM=/run/mpc-boot-ssh
+OS_RAM=/run/mpc-boot-os-tools
 mkdir -p "$RAM" /run/sshd
 chmod 700 "$RAM"
 chmod 755 /run/sshd
@@ -1081,6 +1082,16 @@ log_to_card() { mkdir -p "$D/ssh"; cp "$RAM/ssh.log" "$D/ssh/ssh.log" 2>/dev/nul
 trap log_to_card EXIT
 echo 'MPC_BOOT_SSH_START'
 date -u || true
+if [ ! -x "$OS_RAM/bin/bash" ] && [ -d "$A/os_tools" ]; then
+  rm -rf "$OS_RAM.ssh.tmp"
+  if cp -a "$A/os_tools" "$OS_RAM.ssh.tmp" 2>/dev/null; then
+    chmod 755 "$OS_RAM.ssh.tmp" 2>/dev/null || true
+    if [ ! -x "$OS_RAM/bin/bash" ]; then
+      mv "$OS_RAM.ssh.tmp" "$OS_RAM" 2>/dev/null || true
+    fi
+  fi
+  rm -rf "$OS_RAM.ssh.tmp"
+fi
 if [ "$(id -u)" != 0 ]; then
   echo 'ERROR: not root'
   exit 1
@@ -1136,36 +1147,49 @@ while ! grep -q '192.168.155.1' /proc/net/fib_trie 2>/dev/null; do
 done
 echo "USB_IP_READY waited_seconds=$usb_wait"
 card=$(CDPATH= cd -- "$(dirname -- "$A")" && pwd)
+OS_DIR=$A/os_tools
+if [ -x "$OS_RAM/bin/bash" ]; then
+  OS_DIR=$OS_RAM
+fi
 mkdir -p /root
-if [ -f "$A/os_tools/.bashrc" ]; then
+if [ -f "$OS_RAM/.bashrc" ]; then
+  ln -sfn "$OS_RAM/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
+elif [ -f "$A/os_tools/.bashrc" ]; then
   ln -sfn "$A/os_tools/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
 else
   echo 'WARN: os_tools/.bashrc is missing'
 fi
-if [ -f "$A/os_tools/.bash_profile" ]; then
-  ln -sfn "$A/os_tools/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
+if [ -f "$OS_DIR/.bash_profile" ]; then
+  ln -sfn "$OS_DIR/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
 fi
-if [ -x "$A/os_tools/bin/bash" ] && [ -r /etc/passwd ]; then
-  awk -F: -v shell="$A/os_tools/bin/bash" 'BEGIN{OFS=":"} $1=="root" {$7=shell} {print}' /etc/passwd > "$RAM/passwd"
+if [ -x "$OS_RAM/bin/bash" ] && [ -r /etc/passwd ]; then
+  BASH_BIN=$OS_RAM/bin/bash
+elif [ -x "$A/os_tools/bin/bash" ] && [ -r /etc/passwd ]; then
+  BASH_BIN=$A/os_tools/bin/bash
+else
+  BASH_BIN=
+fi
+if [ -n "$BASH_BIN" ]; then
+  awk -F: -v shell="$BASH_BIN" 'BEGIN{OFS=":"} $1=="root" {$7=shell} {print}' /etc/passwd > "$RAM/passwd"
   chmod 644 "$RAM/passwd"
   if mount --bind "$RAM/passwd" /etc/passwd; then
-    echo "SHELL_BASH $A/os_tools/bin/bash"
+    echo "SHELL_BASH $BASH_BIN"
   else
     echo 'WARN: could not make bash the login shell'
   fi
 else
   echo 'WARN: bash is missing; login shell was not changed'
 fi
-if [ ! -d "$A/os_tools/bin" ]; then
+if [ ! -d "$OS_DIR/bin" ]; then
   echo 'WARN: os_tools/bin is missing; tools were not added to PATH'
 elif [ ! -r /etc/profile ]; then
   echo 'WARN: /etc/profile is not readable; tools were not added to PATH'
 elif ! cp /etc/profile "$RAM/profile"; then
   echo 'WARN: could not add os_tools to PATH'
 else
-  printf '\nexport PATH="%s:$PATH"\n' "$A/os_tools/bin" >> "$RAM/profile"
+  printf '\nexport PATH="%s:$PATH"\n' "$OS_DIR/bin" >> "$RAM/profile"
   if mount --bind "$RAM/profile" /etc/profile; then
-    echo "PATH_TOOLS $A/os_tools/bin"
+    echo "PATH_TOOLS $OS_DIR/bin"
   else
     echo 'WARN: could not add os_tools to PATH'
   fi
@@ -1201,6 +1225,16 @@ bin=$RAM/mpc-boot-web
 if ! "$bin" --check >/dev/null 2>&1; then
   bin=$D/mpc-boot-web
 fi
+if [ ! -f "$RAM/web/index.html" ] && [ -d "$D/web" ]; then
+  rm -rf "$RAM/web.tmp"
+  if cp -a "$D/web" "$RAM/web.tmp" 2>/dev/null; then
+    chmod 755 "$RAM/web.tmp" 2>/dev/null || true
+    if [ ! -f "$RAM/web/index.html" ]; then
+      mv "$RAM/web.tmp" "$RAM/web" 2>/dev/null || true
+    fi
+  fi
+  rm -rf "$RAM/web.tmp"
+fi
 usb_wait=0
 while ! grep -q '192.168.155.1' /proc/net/fib_trie 2>/dev/null; do
   if [ "$usb_wait" -ge 45 ]; then
@@ -1212,12 +1246,18 @@ while ! grep -q '192.168.155.1' /proc/net/fib_trie 2>/dev/null; do
 done
 echo "USB_IP_READY waited_seconds=$usb_wait"
 remount_card
+OS_DIR=$A/os_tools
+if [ -x /run/mpc-boot-os-tools/bin/bash ]; then
+  OS_DIR=/run/mpc-boot-os-tools
+fi
 mkdir -p /root
-if [ -f "$A/os_tools/.bashrc" ]; then
+if [ -f /run/mpc-boot-os-tools/.bashrc ]; then
+  ln -sfn /run/mpc-boot-os-tools/.bashrc /root/.bashrc || echo 'WARN: could not link .bashrc'
+elif [ -f "$A/os_tools/.bashrc" ]; then
   ln -sfn "$A/os_tools/.bashrc" /root/.bashrc || echo 'WARN: could not link .bashrc'
 fi
-if [ -f "$A/os_tools/.bash_profile" ]; then
-  ln -sfn "$A/os_tools/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
+if [ -f "$OS_DIR/.bash_profile" ]; then
+  ln -sfn "$OS_DIR/.bash_profile" /root/.bash_profile || echo 'WARN: could not link .bash_profile'
 fi
 exec "$bin" "$A" 8080 192.168.155.1
 EOF

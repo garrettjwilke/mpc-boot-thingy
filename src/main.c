@@ -804,13 +804,72 @@ static int card_autorun_path(const char *card, char *out, size_t n) {
   return wr < 0 || (size_t)wr >= n ? -1 : 0;
 }
 
+#define RAM_CARD_RO "/run/mpc-boot-card"
+
+static void unmount_point(const char *target) {
+  if (!target || !target[0] || !mount_point_is(target))
+    return;
+  if (umount(target) != 0)
+    umount2(target, MNT_DETACH);
+}
+
+static void stage_dir_if_missing(const char *src, const char *dst,
+                                 const char *marker_rel) {
+  char marker[512], tmp[512];
+  struct stat st;
+  if (snprintf(marker, sizeof marker, "%s/%s", dst, marker_rel) >=
+          (int)sizeof marker ||
+      access(marker, F_OK) == 0)
+    return;
+  if (stat(src, &st) != 0 || !S_ISDIR(st.st_mode))
+    return;
+  if (snprintf(tmp, sizeof tmp, "%s.main.tmp", dst) >= (int)sizeof tmp)
+    return;
+  {
+    char *rm_argv[] = {"rm", "-rf", tmp, NULL};
+    char *cp_argv[] = {"cp", "-a", (char *)src, tmp, NULL};
+    run_cmd(rm_argv);
+    if (run_cmd(cp_argv) == 0) {
+      if (access(marker, F_OK) == 0 || rename(tmp, dst) != 0)
+        run_cmd(rm_argv);
+    } else {
+      run_cmd(rm_argv);
+    }
+  }
+}
+
+static void stage_ram_services(const char *card) {
+  char web_src[512], tools_src[512];
+  mkdir("/run/mpc-boot-web", 0755);
+  if (snprintf(web_src, sizeof web_src, "%s/autorun/system/web", card) <
+      (int)sizeof web_src) {
+    stage_dir_if_missing(web_src, "/run/mpc-boot-web/web", "index.html");
+  }
+  if (snprintf(tools_src, sizeof tools_src, "%s/autorun/os_tools", card) <
+      (int)sizeof tools_src) {
+    stage_dir_if_missing(tools_src, "/run/mpc-boot-os-tools", "bin/bash");
+  }
+}
+
+static void mount_card_ro_mirror(const char *card) {
+  unmount_point(RAM_CARD_RO);
+  mkdir(RAM_CARD_RO, 0755);
+  if (mount(card, RAM_CARD_RO, "", MS_BIND, NULL) != 0)
+    return;
+  mount("", RAM_CARD_RO, "", MS_PRIVATE, NULL);
+  if (mount("", RAM_CARD_RO, "", MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) != 0)
+    unmount_point(RAM_CARD_RO);
+}
+
 static int card_autorun_umount(const char *card) {
   char target[512];
+  int rc = 0;
   if (card_autorun_path(card, target, sizeof target) != 0)
     return -1;
-  if (umount(target) == 0)
-    return 0;
-  return umount2(target, MNT_DETACH) == 0 ? 0 : -1;
+  if (umount(target) != 0 && umount2(target, MNT_DETACH) != 0)
+    rc = -1;
+  unmount_point(RAM_CARD_RO);
+  return rc;
 }
 
 static int expose_package_autorun(const char *card, const char *script,
@@ -838,7 +897,10 @@ static int expose_package_autorun(const char *card, const char *script,
       return -1;
     return 0;
   }
+  stage_ram_services(card);
+  mount_card_ro_mirror(card);
   if (mount(dir, target, "", MS_BIND, NULL) != 0) {
+    unmount_point(RAM_CARD_RO);
     fprintf(stderr, "autorun: bind %s: %s\n", target, strerror(errno));
     return -1;
   }
@@ -929,7 +991,8 @@ static void restore_autorun_after_stock(const char *card) {
       "done\n"
       "while ! systemctl is-active --quiet ac50.service; do sleep 0.5; done\n"
       "u=\"$1/autorun\"\n"
-      "umount \"$u\" 2>/dev/null || umount -l \"$u\" 2>/dev/null || true\n";
+      "umount \"$u\" 2>/dev/null || umount -l \"$u\" 2>/dev/null || true\n"
+      "umount /run/mpc-boot-card 2>/dev/null || umount -l /run/mpc-boot-card 2>/dev/null || true\n";
   char *argv[] = {"systemd-run", "--unit=mpc-boot-restore", "--collect",
                   "/bin/sh", "-c", (char *)script, "sh", (char *)card, NULL};
   run_cmd(argv);

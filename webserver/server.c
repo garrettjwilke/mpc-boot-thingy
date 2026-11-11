@@ -921,25 +921,52 @@ static int web_rel(const char *url_path, char *rel, size_t n) {
   return 0;
 }
 
-static int serve_web(int client, const char *url_path) {
-  char rel[1024];
-  char root[PATH_MAX], full[PATH_MAX], root_real[PATH_MAX], resolved[PATH_MAX];
+static int autorun_covered(void) {
+  char mark[PATH_MAX];
+  if (snprintf(mark, sizeof mark, "%s/autorun/system/mpc-boot-thingy.mark",
+               g_card) < (int)sizeof mark &&
+      access(mark, F_OK) == 0)
+    return 0;
+  return access("/run/mpc-boot-card/autorun/system/mpc-boot-thingy.mark",
+                F_OK) == 0;
+}
+
+static const char *menu_card_dir(void) {
+  return autorun_covered() ? "/run/mpc-boot-card" : g_card;
+}
+
+static int reject_if_autorun_covered(int fd) {
+  if (!autorun_covered())
+    return 0;
+  send_err(fd, 409, "Conflict",
+           "AM Mod is running; exit to Stock or Boot Thingy first");
+  return 1;
+}
+
+static int serve_web_from(int client, const char *base, const char *rel) {
+  char full[PATH_MAX], root_real[PATH_MAX], resolved[PATH_MAX];
   struct stat st;
-  if (web_rel(url_path, rel, sizeof rel) != 0)
+  if (snprintf(full, sizeof full, "%s/%s", base, rel) >= (int)sizeof full)
     return -1;
-  if (snprintf(root, sizeof root, "%s/system/web", g_autorun) >=
-          (int)sizeof root ||
-      snprintf(full, sizeof full, "%s/system/web/%s", g_autorun, rel) >=
-          (int)sizeof full) {
-    return -1;
-  }
-  if (!realpath(root, root_real))
+  if (!realpath(base, root_real))
     return -1;
   if (lstat(full, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode))
     return -1;
   if (!realpath(full, resolved) || !path_inside(root_real, resolved))
     return -1;
   return serve_file(client, resolved, web_type(rel));
+}
+
+static int serve_web(int client, const char *url_path) {
+  char rel[1024], root[PATH_MAX];
+  if (web_rel(url_path, rel, sizeof rel) != 0)
+    return -1;
+  if (snprintf(root, sizeof root, "%s/system/web", g_autorun) <
+          (int)sizeof root &&
+      serve_web_from(client, root, rel) == 0) {
+    return 0;
+  }
+  return serve_web_from(client, "/run/mpc-boot-web/web", rel);
 }
 
 static int is_one_child(const char *root_real, const char *resolved) {
@@ -1014,8 +1041,9 @@ static void handle_status(int fd) {
   char *buf = NULL;
   size_t sz = 0;
   FILE *fp;
-  menu_load(&menu, g_card);
-  def = menu_default_index(&menu, g_card);
+  const char *mc = menu_card_dir();
+  menu_load(&menu, mc);
+  def = menu_default_index(&menu, mc);
   uname_s = run_capture(uarg);
   uptime_s = run_capture(aarg);
   mem_s = run_capture(marg);
@@ -1151,6 +1179,8 @@ static void handle_upload(int fd, struct io *io, int has_len,
   char old[MENU_RUN], body[640], resp[160];
   int partfd = -1, entryfd = -1;
   int bn;
+  if (reject_if_autorun_covered(fd))
+    return;
   if (!has_len || content_len == 0) {
     send_err(fd, 400, "Bad Request", "program body is empty");
     return;
@@ -1336,6 +1366,8 @@ static void handle_delete(int fd, const char *query) {
   struct stat st;
   const char *name;
   int app;
+  if (reject_if_autorun_covered(fd))
+    return;
   query_param(query, "id", id, sizeof id);
   if (strncmp(id, "app:", 4) == 0) {
     app = 1;
@@ -1468,6 +1500,8 @@ static void handle_default(int fd, struct io *io, int has_len,
   struct menu menu;
   char resp[MENU_ID + 32];
   int found = 0;
+  if (reject_if_autorun_covered(fd))
+    return;
   if (!has_len || content_len == 0 || content_len >= sizeof raw) {
     send_err(fd, 400, "Bad Request", "missing default id");
     return;
@@ -1606,6 +1640,8 @@ static void handle_boot_now(int fd, struct io *io, int has_len,
   struct menu menu;
   char resp[MENU_ID + 32];
   int found = 0;
+  if (reject_if_autorun_covered(fd))
+    return;
   if (!has_len || content_len == 0 || content_len >= sizeof raw) {
     send_err(fd, 400, "Bad Request", "missing app id");
     return;
@@ -1620,7 +1656,7 @@ static void handle_boot_now(int fd, struct io *io, int has_len,
     return;
   }
   if (strcmp(id, MENU_BOOT_THINGY_ID) != 0) {
-    menu_load(&menu, g_card);
+    menu_load(&menu, menu_card_dir());
     for (int i = 0; i < menu.n; i++) {
       if (strcmp(menu.items[i].id, id) == 0)
         found = 1;
@@ -1856,6 +1892,11 @@ static int start_shell(int *ptm_out, pid_t *pid_out) {
     if (sn > 0 && (size_t)sn < sizeof shell && access(shell, X_OK) == 0) {
       setenv("SHELL", shell, 1);
       execl(shell, shell, "-l", "-i", (char *)NULL);
+    }
+    if (access("/run/mpc-boot-os-tools/bin/bash", X_OK) == 0) {
+      setenv("SHELL", "/run/mpc-boot-os-tools/bin/bash", 1);
+      execl("/run/mpc-boot-os-tools/bin/bash",
+            "/run/mpc-boot-os-tools/bin/bash", "-l", "-i", (char *)NULL);
     }
     setenv("SHELL", "/bin/sh", 1);
     execl("/bin/sh", "/bin/sh", "-i", (char *)NULL);
@@ -2150,7 +2191,7 @@ static void handle_patches(int fd) {
   char *buf = NULL;
   size_t sz = 0;
   FILE *fp;
-  int n = boot_edit_list(g_card, patches, BOOT_PATCH_MAX);
+  int n = boot_edit_list(menu_card_dir(), patches, BOOT_PATCH_MAX);
   int i;
   fp = open_memstream(&buf, &sz);
   if (!fp) {
@@ -2181,6 +2222,8 @@ static void handle_boot_edit(int fd, struct io *io, int has_len,
   const char *title_at, *id_at, *patches_at, *p;
   int npatches = 0, i, rc;
   char resp[MENU_ID + 32];
+  if (reject_if_autorun_covered(fd))
+    return;
   if (!has_len || content_len == 0 || content_len >= sizeof raw) {
     send_err(fd, 400, "Bad Request", "missing boot entry");
     return;
