@@ -40,15 +40,40 @@ jobs:
       - name: Read and check VERSION
         id: version
         run: |
-          raw=$(tr -d '[:space:]' < VERSION)
-          raw=${raw#v}
-          if ! printf '%s\n' "$raw" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
-            echo "VERSION must look like 1.2.3 or 1.2.3-beta (got: '$raw')" >&2
-            exit 1
-          fi
-          tag="v$raw"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Read release tag $tag from VERSION"
+          python3 - <<'PY'
+          import os, re, sys
+
+          with open("VERSION", "r", encoding="utf-8") as fp:
+              lines = fp.read().splitlines()
+
+          if not lines:
+              sys.exit("VERSION is empty")
+
+          raw = lines[0].strip()
+          if raw.startswith("v"):
+              raw = raw[1:]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?", raw):
+              sys.exit(f"VERSION line 1 must look like 1.2.3 or 1.2.3-beta (got: {lines[0]!r})")
+
+          tag = f"v{raw}"
+          notes_lines = lines[1:]
+          while notes_lines and not notes_lines[0].strip():
+              notes_lines.pop(0)
+          while notes_lines and not notes_lines[-1].strip():
+              notes_lines.pop()
+          notes = "\n".join(notes_lines) if notes_lines else "see the readme for install instructions."
+
+          notes_path = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "release-notes.md")
+          with open(notes_path, "w", encoding="utf-8") as fp:
+              fp.write(notes + "\n")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fp:
+              fp.write(f"tag={tag}\n")
+              fp.write(f"notes_file={notes_path}\n")
+
+          print(f"Read release tag {tag} from VERSION")
+          print("Release notes:\n" + notes)
+          PY
 
       - name: Stop if this release already exists
         if: github.actor != 'nektos/act'
@@ -148,12 +173,10 @@ jobs:
         if: github.actor != 'nektos/act'
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          NOTES_FILE: ${{ steps.version.outputs.notes_file }}
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" dist/mpc-boot-thingy.zip \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --notes "$(cat <<'EOF'
-          see the readme for install instructions.
-          EOF
-          )"
+            --notes-file "$NOTES_FILE"

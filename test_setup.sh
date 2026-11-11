@@ -772,8 +772,8 @@ with zipfile.ZipFile(zpath) as zf:
             sys.exit("%s mode is %o, expected 755" % (name, mode))
 PY
 
-# When PACK_VERSION is unset, --pack uses VERSION (with a v prefix).
-expected_ver="v$(sed -e 's/[[:space:]]//g' -e 's/^v//' VERSION)"
+# When PACK_VERSION is unset, --pack uses line 1 of VERSION (with a v prefix).
+expected_ver="v$(head -n 1 VERSION | sed -e 's/[[:space:]]//g' -e 's/^v//')"
 ./setup.sh --pack "$work/mpc-boot-thingy-default.zip" >/tmp/mpc-boot-out
 python3 - "$work/mpc-boot-thingy-default.zip" "$expected_ver" <<'PY'
 import sys, zipfile

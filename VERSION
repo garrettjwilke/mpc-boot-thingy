@@ -1,2 +1,3 @@
-1.0.7
+1.0.8
 
+apps can be installed to the sd card by dragging and dropping zip to `SDCARD/autorun/apps/`
