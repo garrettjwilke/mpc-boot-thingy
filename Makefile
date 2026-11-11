@@ -25,10 +25,10 @@ build/mpc-boot-thingy: $(DEV_SRC) inc/menu.h inc/theme.h inc/boot_ui.h inc/boot_
 	zig cc -target aarch64-linux-musl -static -O2 -s -D_DEFAULT_SOURCE -std=c11 $(WARN) $(INC) \
 	  -DAPP_VERSION=\"$(APP_VERSION)\" -o $@ $(DEV_SRC)
 
-build/usb_installer: $(INSTALLER_SRC) inc/theme.h inc/sd_check.h inc/format_sd.h
+build/usb_installer: $(INSTALLER_SRC) inc/theme.h inc/sd_check.h inc/format_sd.h VERSION
 	mkdir -p build
 	zig cc -target aarch64-linux-musl -static -O2 -s -D_DEFAULT_SOURCE -std=c11 $(WARN) $(INC) \
-	  -o $@ $(INSTALLER_SRC)
+	  -DAPP_VERSION=\"$(APP_VERSION)\" -o $@ $(INSTALLER_SRC)
 
 build/poke: menu-patch/poke.c
 	mkdir -p build
