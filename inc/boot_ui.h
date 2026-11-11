@@ -96,3 +96,5 @@ void boot_ui_set_web_connected(int connected);
 int boot_frame(struct ui *u, const struct input *in, void *state);
 void boot_draw_prompt(struct ui *u, int theme);
 void boot_draw_loading(struct ui *u, int theme);
+void boot_draw_status(struct ui *u, int theme, const char *title,
+                      const char *subtitle);

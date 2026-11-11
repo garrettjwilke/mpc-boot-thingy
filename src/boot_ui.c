@@ -445,15 +445,34 @@ void boot_draw_prompt(struct ui *u, int theme) {
   ui_text(u, (UI_W - (int)strlen(b) * gw) / 2, y + gh + 12, b, th->text, scale);
 }
 
-void boot_draw_loading(struct ui *u, int theme) {
+void boot_draw_status(struct ui *u, int theme, const char *title,
+                      const char *subtitle) {
   const struct boot_theme *th = theme_at(theme);
   ui_clear(u, th->bg);
-  const char *a = "Loading Patches...";
+  const char *a = (title && title[0]) ? title : "Loading...";
   int scale = 2;
   int gw = FONT_L_W * scale;
   int gh = FONT_L_H * scale;
-  ui_text(u, (UI_W - (int)strlen(a) * gw) / 2, (UI_H - gh) / 2, a, th->hl,
-          scale);
+  int tw = (int)strlen(a) * gw;
+  int tx = (UI_W - tw) / 2;
+  if (tx < 8)
+    tx = 8;
+  int has_sub = subtitle && subtitle[0];
+  int ty = has_sub ? (UI_H - gh) / 2 - 12 : (UI_H - gh) / 2;
+  ui_text(u, tx, ty, a, th->hl, scale);
+  if (has_sub) {
+    char sub[48];
+    fit_text(sub, sizeof sub, subtitle);
+    int sw = (int)strlen(sub) * FONT_S_W;
+    int sx = (UI_W - sw) / 2;
+    if (sx < 12)
+      sx = 12;
+    ui_text(u, sx, ty + gh + 10, sub, th->dim, 1);
+  }
+}
+
+void boot_draw_loading(struct ui *u, int theme) {
+  boot_draw_status(u, theme, "Loading Patches...", NULL);
 }
 
 int boot_frame(struct ui *u, const struct input *in, void *state) {

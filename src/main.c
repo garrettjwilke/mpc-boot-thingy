@@ -2,6 +2,7 @@
    Waiting starts the saved default, or Stock when none is saved.
    --menu skips the splash and opens the menu. The stock Shift+Pad 16 row uses
    that. */
+#include "app_install.h"
 #include "boot_edit.h"
 #include "boot_ui.h"
 #include "format_sd.h"
@@ -1372,9 +1373,61 @@ static void update_run_binary(const char *card) {
   }
 }
 
+struct install_ui_ctx {
+  struct screen *scr;
+  uint32_t *back;
+  uint32_t *front;
+  struct surface *midi;
+  int theme;
+};
+
+static void on_app_install_progress(const char *filename, void *userdata) {
+  struct install_ui_ctx *ctx = userdata;
+  if (!ctx || !ctx->scr || !ctx->back || !ctx->front)
+    return;
+  if (ctx->midi && ctx->midi->fd >= 0)
+    surface_all_off(ctx->midi);
+  struct ui u = {.px = ctx->back};
+  boot_draw_status(&u, ctx->theme, "Installing Apps...", filename);
+  draw_pixels(ctx->scr, ctx->back, ctx->front, ctx->midi, &u);
+}
+
+static void install_pending_apps(const char *card, struct screen *scr,
+                                 uint32_t *back, uint32_t *front,
+                                 struct surface *midi, int theme,
+                                 char *notice_out, size_t notice_n) {
+  struct install_ui_ctx ctx = {
+      .scr = scr,
+      .back = back,
+      .front = front,
+      .midi = midi,
+      .theme = theme,
+  };
+  struct app_install_summary sum;
+  if (notice_out && notice_n > 0)
+    notice_out[0] = 0;
+  if (!card || !card[0] || !has_autorun_dir(card))
+    return;
+  app_install_pending_zips(card, on_app_install_progress, &ctx, &sum);
+  if (sum.installed > 0 || sum.failed > 0)
+    flush_and_drop_caches(card);
+  if (notice_out && notice_n > 0) {
+    if (sum.failed > 0) {
+      snprintf(notice_out, notice_n, "Install failed: %s",
+               sum.last_failed_name);
+    } else if (sum.installed == 1) {
+      snprintf(notice_out, notice_n, "Installed %s", sum.last_title);
+    } else if (sum.installed > 1) {
+      snprintf(notice_out, notice_n, "Installed %d apps", sum.installed);
+    }
+  }
+}
+
 static void reload_menu_state(char *card, size_t card_n, struct menu *menu,
                               struct boot_ui *ui, struct boot_patch *catalog,
-                              int *npatches_out, int *theme_out, int *def_out) {
+                              int *npatches_out, int *theme_out, int *def_out,
+                              struct screen *scr, uint32_t *back,
+                              uint32_t *front, struct surface *midi) {
   if (!has_autorun_dir(card)) {
     card_root_of(card, card, card_n);
   } else {
@@ -1382,8 +1435,11 @@ static void reload_menu_state(char *card, size_t card_n, struct menu *menu,
   }
   flush_and_drop_caches(card);
   update_run_binary(card);
-  menu_load(menu, card);
   int theme = theme_load(card);
+  char install_notice[96] = {0};
+  install_pending_apps(card, scr, back, front, midi, theme, install_notice,
+                       sizeof install_notice);
+  menu_load(menu, card);
   int def = menu_default_index(menu, card);
   if (theme_out)
     *theme_out = theme;
@@ -1394,7 +1450,7 @@ static void reload_menu_state(char *card, size_t card_n, struct menu *menu,
   if (npatches_out)
     *npatches_out = npatches;
   boot_ui_set_catalog(ui, catalog, npatches);
-  boot_ui_notice(ui, "Reloaded menu");
+  boot_ui_notice(ui, install_notice[0] ? install_notice : "Reloaded menu");
 }
 
 static int wants_menu(int argc, char **argv) {
@@ -1581,10 +1637,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  struct menu menu;
-  menu_load(&menu, card);
   int theme = theme_load(card);
-  int def = menu_default_index(&menu, card);
 
   uint32_t *back = calloc((size_t)UI_W * UI_H, sizeof(uint32_t));
   uint32_t *front = calloc((size_t)UI_W * UI_H, sizeof(uint32_t));
@@ -1595,6 +1648,14 @@ int main(int argc, char **argv) {
     restore_stock_if_stopped(card);
     return 1;
   }
+
+  char boot_install_notice[96] = {0};
+  install_pending_apps(card, &scr, back, front, &midi, theme,
+                       boot_install_notice, sizeof boot_install_notice);
+
+  struct menu menu;
+  menu_load(&menu, card);
+  int def = menu_default_index(&menu, card);
 
   struct parser parser = {0};
   struct input_dev dev = {0};
@@ -1687,6 +1748,8 @@ int main(int argc, char **argv) {
   int npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
   boot_ui_init(&ui, &menu, theme, def);
   boot_ui_set_catalog(&ui, catalog, npatches);
+  if (boot_install_notice[0])
+    boot_ui_notice(&ui, boot_install_notice);
   struct input quiet;
   input_begin(&quiet, &dev);
   double started = mono_ms();
@@ -1712,7 +1775,7 @@ int main(int argc, char **argv) {
     if (g_reload_requested) {
       g_reload_requested = 0;
       reload_menu_state(card, sizeof card, &menu, &ui, catalog, &npatches,
-                        &theme, &def);
+                        &theme, &def, &scr, back, front, &midi);
       memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
       input_begin(&quiet, &dev);
       started = mono_ms();
@@ -1725,8 +1788,9 @@ int main(int argc, char **argv) {
       if (check_boot_now_target(b_id, sizeof b_id)) {
         if (strcmp(b_id, MENU_BOOT_THINGY_ID) == 0) {
           reload_menu_state(card, sizeof card, &menu, &ui, catalog, &npatches,
-                            &theme, &def);
-          ui.notice[0] = 0;
+                            &theme, &def, &scr, back, front, &midi);
+          if (strcmp(ui.notice, "Reloaded menu") == 0)
+            ui.notice[0] = 0;
           memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
           input_begin(&quiet, &dev);
           started = mono_ms();
@@ -1836,7 +1900,7 @@ int main(int argc, char **argv) {
     if (ui.action == BOOT_ACT_RELOAD) {
       ui.action = BOOT_ACT_NONE;
       reload_menu_state(card, sizeof card, &menu, &ui, catalog, &npatches,
-                        &theme, &def);
+                        &theme, &def, &scr, back, front, &midi);
       memset(front, 0, (size_t)UI_W * UI_H * sizeof(uint32_t));
       input_begin(&quiet, &dev);
       started = mono_ms();
@@ -1928,6 +1992,9 @@ int main(int argc, char **argv) {
       else
         write_autorun_stamp(card);
       flush_and_drop_caches(card);
+      char install_notice[96] = {0};
+      install_pending_apps(card, &scr, back, front, &midi, theme,
+                           install_notice, sizeof install_notice);
       menu_load(&menu, card);
       npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
       boot_ui_set_catalog(&ui, catalog, npatches);
@@ -1937,6 +2004,8 @@ int main(int argc, char **argv) {
                      : 0;
       ui.apps_ls.cursor = 1 + dsel;
       ui.screen = BOOT_SCREEN_APPS;
+      if (install_notice[0])
+        boot_ui_notice(&ui, install_notice);
 
       input_begin(&quiet, &dev);
       started = mono_ms();

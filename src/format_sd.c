@@ -197,6 +197,9 @@ int format_sd_card(const char *card, const char *label,
   char *chmod_bin[] = {"chmod", "755",
                        "/run/mnt_sd/autorun/system/mpc-boot-thingy", NULL};
   run_cmd_quiet(chmod_bin);
+  char *mk_apps[] = {"mkdir", "-p", "/run/mnt_sd/autorun/apps",
+                     "/run/mnt_sd/autorun/boot-edits", NULL};
+  run_cmd_quiet(mk_apps);
 
   report_progress(progress, userdata, "Synchronizing flash storage...");
   sync();

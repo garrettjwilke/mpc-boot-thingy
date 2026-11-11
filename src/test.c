@@ -1,5 +1,6 @@
 /* Host self-test: Stock first, drop-in apps and older boot-menu files, bad
  * files skipped. */
+#include "app_install.h"
 #include "boot_ui.h"
 #include "file_ops.h"
 #include "format_sd.h"
@@ -1551,6 +1552,130 @@ int main(void) {
     assert(unlink(path) == 0);
     assert(!testapp_proc_has_launcher(proc));
     assert(!testapp_proc_has_launcher(NULL));
+  }
+
+  /* Dropped .zip auto-install into autorun/apps */
+  {
+    char card_zip[512], apps_dir[512], zpath[512], script[2048], cmd[640];
+    char slug[80];
+    assert(app_install_slug("My Cool App", slug, sizeof slug) == 0);
+    assert(strcmp(slug, "my-cool-app") == 0);
+    assert(app_install_slug("am-mod-r27r", slug, sizeof slug) == 0);
+    assert(strcmp(slug, "am-mod-r27r") == 0);
+    assert(app_install_slug("---", slug, sizeof slug) != 0);
+
+    snprintf(card_zip, sizeof card_zip, "%s/card-zip-drop", dir);
+    snprintf(path, sizeof path, "%s/autorun", card_zip);
+    mkdir_p(path);
+
+    struct app_install_summary sum;
+    assert(app_install_pending_zips(card_zip, NULL, NULL, &sum) == 0);
+    assert(sum.installed == 0 && sum.failed == 0);
+    snprintf(apps_dir, sizeof apps_dir, "%s/autorun/apps", card_zip);
+    struct stat st;
+    assert(stat(apps_dir, &st) == 0 && S_ISDIR(st.st_mode));
+
+    snprintf(path, sizeof path, "%s/mkdrop.py", dir);
+    snprintf(
+        script, sizeof script,
+        "import zipfile, sys\n"
+        "kind, dest = sys.argv[1], sys.argv[2]\n"
+        "z = zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_DEFLATED)\n"
+        "if kind == 'takeover':\n"
+        "    z.writestr('autorun/autorun.json', "
+        "'{\"value0\":{\"scripts\":[{\"path\":\"autorun.sh\"}]}}')\n"
+        "    z.writestr('autorun/autorun.sh', '#!/bin/sh\\n/bin/sh mod-launcher.sh\\n')\n"
+        "    z.writestr('autorun/mod-launcher.sh', '#!/bin/sh\\necho mod\\n')\n"
+        "elif kind == 'card':\n"
+        "    z.writestr('Gridzilla - V1/README.txt', 'ignore\\n')\n"
+        "    z.writestr('Gridzilla - V1/WaveGrid/start.sh', '#!/bin/sh\\necho wg\\n')\n"
+        "    z.writestr('Gridzilla - V1/autorun/autorun.json', "
+        "'{\"value0\":{\"scripts\":[{\"path\":\"autorun.sh\"}]}}')\n"
+        "    z.writestr('Gridzilla - V1/autorun/autorun.sh', "
+        "'#!/bin/sh\\nsh ../WaveGrid/start.sh\\n')\n"
+        "elif kind == 'bt':\n"
+        "    z.writestr('BeatTrain/Songs/song1.txt', 'song\\n')\n"
+        "    z.writestr('autorun/autorun.json', "
+        "'{\"value0\":{\"scripts\":[{\"path\":\"autorun.sh\"}]}}')\n"
+        "    z.writestr('autorun/autorun.sh', '#!/bin/sh\\necho bt\\n')\n"
+        "z.close()\n");
+    write_file(path, script);
+
+    snprintf(zpath, sizeof zpath, "%s/My Cool App.zip", apps_dir);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkdrop.py' takeover '%s'", dir, zpath);
+    assert(system(cmd) == 0);
+
+    snprintf(zpath, sizeof zpath, "%s/Gridzilla - V1.zip", apps_dir);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkdrop.py' card '%s'", dir, zpath);
+    assert(system(cmd) == 0);
+
+    snprintf(zpath, sizeof zpath, "%s/bt.zip", apps_dir);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkdrop.py' bt '%s'", dir, zpath);
+    assert(system(cmd) == 0);
+
+    snprintf(zpath, sizeof zpath, "%s/._My Cool App.zip", apps_dir);
+    write_file(zpath, "appledouble");
+    snprintf(zpath, sizeof zpath, "%s/broken.zip", apps_dir);
+    write_file(zpath, "not a zip file");
+    snprintf(zpath, sizeof zpath, "%s/already.zip.failed", apps_dir);
+    write_file(zpath, "old failure");
+
+    assert(app_install_pending_zips(card_zip, NULL, NULL, &sum) == 0);
+    assert(sum.installed == 3);
+    assert(sum.failed == 1);
+    assert(strcmp(sum.last_failed_name, "broken.zip") == 0);
+
+    snprintf(path, sizeof path, "%s/My Cool App.zip", apps_dir);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/Gridzilla - V1.zip", apps_dir);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/bt.zip", apps_dir);
+    assert(access(path, F_OK) != 0);
+
+    snprintf(path, sizeof path, "%s/._My Cool App.zip", apps_dir);
+    assert(access(path, F_OK) == 0);
+    snprintf(path, sizeof path, "%s/already.zip.failed", apps_dir);
+    assert(access(path, F_OK) == 0);
+    snprintf(path, sizeof path, "%s/broken.zip", apps_dir);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/broken.zip.failed", apps_dir);
+    assert(access(path, F_OK) == 0);
+    snprintf(path, sizeof path, "%s/broken.zip.error.txt", apps_dir);
+    assert(access(path, F_OK) == 0);
+
+    snprintf(path, sizeof path, "%s/my-cool-app/boot.entry", apps_dir);
+    {
+      char *body = read_all(path);
+      assert(strstr(body, "title=My Cool App\n") != NULL);
+      assert(strstr(body, "takeover=1\n") != NULL);
+      free(body);
+    }
+    snprintf(path, sizeof path, "%s/BeatTrain/Songs/song1.txt", card_zip);
+    assert(access(path, F_OK) == 0);
+    snprintf(path, sizeof path, "%s/WaveGrid/start.sh", card_zip);
+    assert(access(path, F_OK) == 0);
+    snprintf(path, sizeof path, "%s/autorun/boot-menu/gridzilla-v1.entry",
+             card_zip);
+    {
+      char *body = read_all(path);
+      assert(strstr(body, "title=Gridzilla - V1\n") != NULL);
+      assert(strstr(body, "run=WaveGrid/start.sh\n") != NULL);
+      assert(strstr(body, "card=1\n") != NULL);
+      assert(strstr(body, "dirs=WaveGrid\n") != NULL);
+      free(body);
+    }
+
+    struct menu zm;
+    assert(menu_load(&zm, card_zip) == 4);
+
+    /* Dropping the same zip again updates in place cleanly */
+    snprintf(zpath, sizeof zpath, "%s/My Cool App.zip", apps_dir);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkdrop.py' takeover '%s'", dir, zpath);
+    assert(system(cmd) == 0);
+    assert(app_install_pending_zips(card_zip, NULL, NULL, &sum) == 0);
+    assert(sum.installed == 1 && sum.failed == 0);
+    assert(access(zpath, F_OK) != 0);
+    assert(menu_load(&zm, card_zip) == 4);
   }
 
   puts("selftest ok");
