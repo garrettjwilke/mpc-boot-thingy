@@ -15,6 +15,7 @@
 #include "testapp.h"
 #include "theme.h"
 #include "ui.h"
+#include "usb_apps.h"
 #include "usb_sd.h"
 
 #include <sys/mount.h>
@@ -1509,6 +1510,7 @@ static void reload_menu_state(char *card, size_t card_n, struct menu *menu,
   if (def_out)
     *def_out = def;
   boot_ui_init(ui, menu, theme, def);
+  boot_ui_set_card(ui, card);
   int npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
   if (npatches_out)
     *npatches_out = npatches;
@@ -1810,6 +1812,7 @@ int main(int argc, char **argv) {
   struct boot_patch catalog[BOOT_PATCH_MAX];
   int npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
   boot_ui_init(&ui, &menu, theme, def);
+  boot_ui_set_card(&ui, card);
   boot_ui_set_catalog(&ui, catalog, npatches);
   if (boot_install_notice[0])
     boot_ui_notice(&ui, boot_install_notice);
@@ -2048,16 +2051,35 @@ int main(int argc, char **argv) {
       wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
       continue;
     }
-    if (ui.action == BOOT_ACT_USB_SD_DONE) {
+    if (ui.action == BOOT_ACT_USB_SD_DONE ||
+        ui.action == BOOT_ACT_USB_APPS_DONE) {
+      int is_usb_apps = (ui.action == BOOT_ACT_USB_APPS_DONE);
       ui.action = BOOT_ACT_NONE;
-      if (!has_autorun_dir(card))
-        card_root_of(card, card, sizeof card);
-      else
-        write_autorun_stamp(card);
-      flush_and_drop_caches(card);
       char install_notice[96] = {0};
-      install_pending_apps(card, &scr, back, front, &midi, theme,
-                           install_notice, sizeof install_notice);
+      if (is_usb_apps) {
+        int copied = 0;
+        char collect_err[96] = {0};
+        if (usb_apps_collect_zips(card, &copied, collect_err,
+                                  sizeof collect_err) != 0) {
+          snprintf(install_notice, sizeof install_notice, "%s",
+                   collect_err[0] ? collect_err : "USB app import failed");
+        } else {
+          flush_and_drop_caches(card);
+          install_pending_apps(card, &scr, back, front, &midi, theme,
+                               install_notice, sizeof install_notice);
+          if (!install_notice[0] && copied == 0)
+            snprintf(install_notice, sizeof install_notice,
+                     "No .zip apps found");
+        }
+      } else {
+        if (!has_autorun_dir(card))
+          card_root_of(card, card, sizeof card);
+        else
+          write_autorun_stamp(card);
+        flush_and_drop_caches(card);
+        install_pending_apps(card, &scr, back, front, &midi, theme,
+                             install_notice, sizeof install_notice);
+      }
       menu_load(&menu, card);
       npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
       boot_ui_set_catalog(&ui, catalog, npatches);
@@ -2115,6 +2137,8 @@ int main(int argc, char **argv) {
       int shutdown = (ui.action == BOOT_ACT_SHUTDOWN);
       if (ui_usb_sd_is_active(&ui.usb))
         ui_usb_sd_stop(&ui.usb);
+      if (ui_usb_apps_is_active(&ui.usb_apps))
+        ui_usb_apps_stop(&ui.usb_apps);
       remove_pid_file();
       power_action(shutdown, &midi, &scr, back, front);
       release_devices(&midi, &scr);
@@ -2125,6 +2149,8 @@ int main(int argc, char **argv) {
 
   if (ui_usb_sd_is_active(&ui.usb))
     ui_usb_sd_stop(&ui.usb);
+  if (ui_usb_apps_is_active(&ui.usb_apps))
+    ui_usb_apps_stop(&ui.usb_apps);
 
   remove_pid_file();
   if (rc != 0) {
