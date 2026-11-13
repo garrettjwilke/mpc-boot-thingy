@@ -42,6 +42,10 @@ there are other enhancements this provides, but ehh...they're there... :)
 * [Loop Pad](https://github.com/larsoholm/LoopPad)
    - looper with synchronized tracks
    - turn your MPC Sample into a loop track recorder!
+* [MaiaOS](https://github.com/rosen-wav/MaiaOS---Mpc-Sample-CFW)
+   - synth engines
+   - multisamples
+   - dj mode, fx sends, bounce in place, chord mode, mastering console, etc
 * [beat train](https://github.com/drose030/beat-train-mpc-sample)
    - drum/rhythm game for the mpc sample.
    - import your own music to play!

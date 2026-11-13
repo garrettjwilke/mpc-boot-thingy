@@ -873,6 +873,23 @@ static int card_autorun_umount(const char *card) {
   return rc;
 }
 
+static int is_maiaos_package(const char *script) {
+  char dir[512], p[512];
+  const char *slash;
+  if (!script || !script[0])
+    return 0;
+  slash = strrchr(script, '/');
+  if (!slash || slash == script)
+    return 0;
+  if ((size_t)(slash - script) >= sizeof dir)
+    return 0;
+  memcpy(dir, script, (size_t)(slash - script));
+  dir[slash - script] = 0;
+  if (snprintf(p, sizeof p, "%s/maia-start.sh", dir) >= (int)sizeof p)
+    return 0;
+  return access(p, F_OK) == 0;
+}
+
 static int expose_package_autorun(const char *card, const char *script,
                                   char *script_out, size_t script_out_n) {
   char dir[512], target[512], name[256];
@@ -891,8 +908,16 @@ static int expose_package_autorun(const char *card, const char *script,
   if (!slash)
     return -1;
   *slash = 0;
-  if (card_autorun_path(card, target, sizeof target) != 0)
-    return -1;
+  if (is_maiaos_package(script)) {
+    mkdir("/media/MPCSSH", 0755);
+    mkdir("/media/MPCSSH/autorun", 0755);
+    if (snprintf(target, sizeof target, "/media/MPCSSH/autorun") >=
+        (int)sizeof target)
+      return -1;
+  } else {
+    if (card_autorun_path(card, target, sizeof target) != 0)
+      return -1;
+  }
   if (strcmp(dir, target) == 0) {
     if (snprintf(script_out, script_out_n, "%s", script) >= (int)script_out_n)
       return -1;
@@ -907,7 +932,10 @@ static int expose_package_autorun(const char *card, const char *script,
   }
   if (snprintf(script_out, script_out_n, "%s/%s", target, name) >=
       (int)script_out_n) {
-    card_autorun_umount(card);
+    if (is_maiaos_package(script))
+      unmount_point("/media/MPCSSH/autorun");
+    else
+      card_autorun_umount(card);
     return -1;
   }
   return 1;
@@ -1107,12 +1135,16 @@ static int launch_autorun(struct surface *midi, struct screen *scr,
       }
       ok = run_replacement(card, script, &code, &mounted, &changed);
       if (ok > 0) {
-        if (mounted > 0)
+        if (mounted > 0 && !is_maiaos_package(script))
           restore_autorun_after_stock(card);
         return 1;
       }
-      if (mounted > 0)
-        card_autorun_umount(card);
+      if (mounted > 0) {
+        if (is_maiaos_package(script))
+          unmount_point("/media/MPCSSH/autorun");
+        else
+          card_autorun_umount(card);
+      }
       if (!changed)
         break;
     }
