@@ -45,6 +45,8 @@ there are other enhancements this provides, but ehh...they're there... :)
 * [beat train](https://github.com/drose030/beat-train-mpc-sample)
    - drum/rhythm game for the mpc sample.
    - import your own music to play!
+* [mpc-sample-tracker](https://github.com/jeffwebb-to/mpc-sample-tracker)
+   - MOD/XM/IT tracker app for MPC Sample.
 * [mpc-furnace](https://github.com/garrettjwilke/mpc-furnace)
    - furnace editor for MPC Sample.
    - create music for retro video game consoles.
