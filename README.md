@@ -24,8 +24,6 @@ there are other enhancements this provides, but ehh...they're there... :)
 * [melodee-sample](https://github.com/keremimo/melodee-sample)
    - 16 track groovebox
    - pads are tracks. tracks can be: drumkit/sample, VST, or MIDI track out.
-* [AM Mod](https://github.com/AlekseyMalykh/am-mod)
-   - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
 * [SampQOL-OS](https://github.com/snarebes/SampQOL-OS.git)
    - many enhancements to the OS that improve overall functionality and UX.
 * [sample-base](https://github.com/keremimo/sample-base)
@@ -38,8 +36,9 @@ there are other enhancements this provides, but ehh...they're there... :)
    - HPSS - stem split drums and melody
    - spectral chop 
 * [am-mod](https://github.com/AlekseyMalykh/am-mod)
-   - lots of custom workflows and updated UI
-   - chord mode, key scale of sample, step sequencer update, search, resample fixes
+   - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
+   - lots of custom workflows and updated UI.
+   - chord mode, key scale of sample, step sequencer update, search, resample fixes.
 *  [KAOSAMPLE public beta](https://github.com/omarhuertasllc-ops/kaosample-beta)
    - stems, looper, auto-kit, scales/chords/arp, sidechain duck + lots more
 * [Loop Pad](https://github.com/larsoholm/LoopPad)
