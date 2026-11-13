@@ -26,8 +26,10 @@ there are other enhancements this provides, but ehh...they're there... :)
    - pads are tracks. tracks can be: drumkit/sample, VST, or MIDI track out.
 * [SampQOL-OS](https://github.com/snarebes/SampQOL-OS.git)
    - many enhancements to the OS that improve overall functionality and UX.
-* [sample-base](https://github.com/keremimo/sample-base)
-   - from scratch custom JUCE 9 application starter
+* [am-mod](https://github.com/AlekseyMalykh/am-mod)
+   - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
+   - lots of custom workflows and updated UI.
+   - chord mode, key scale of sample, step sequencer update, search, resample fixes.
 * [GRIDZILLA](https://www.thesoundfactorynj.com/gridzilla)
    - modern daw-like sequencing UI/UX...super custom workflow.
 * [mpc-minimod](https://github.com/ioma8/mpc-minimod)
@@ -35,10 +37,6 @@ there are other enhancements this provides, but ehh...they're there... :)
    - octave shift by half the grid
    - HPSS - stem split drums and melody
    - spectral chop 
-* [am-mod](https://github.com/AlekseyMalykh/am-mod)
-   - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
-   - lots of custom workflows and updated UI.
-   - chord mode, key scale of sample, step sequencer update, search, resample fixes.
 *  [KAOSAMPLE public beta](https://github.com/omarhuertasllc-ops/kaosample-beta)
    - stems, looper, auto-kit, scales/chords/arp, sidechain duck + lots more
 * [Loop Pad](https://github.com/larsoholm/LoopPad)
