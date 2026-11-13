@@ -253,6 +253,12 @@ static int is_takeover_package(const char *pkg) {
         lstat(p, &st) == 0 && S_ISREG(st.st_mode)) {
         return 1;
     }
+    /* MaiaOS ships maia-start.sh instead of mod-launcher.sh but performs the
+       same stock-replacement takeover (stop stock, mount rebuilt app, restart). */
+    if (join2(p, sizeof p, pkg, "maia-start.sh") == 0 &&
+        lstat(p, &st) == 0 && S_ISREG(st.st_mode)) {
+        return 1;
+    }
     return 0;
 }
 
