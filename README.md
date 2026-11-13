@@ -21,6 +21,9 @@ there are other enhancements this provides, but ehh...they're there... :)
 > - [http://mpc-sample.local:8080](http://mpc-sample.local:8080)
 > - [http://192.168.155.1:8080](http://192.168.155.1:8080)
 
+* [melodee-sample](https://github.com/keremimo/melodee-sample)
+   - 16 track groovebox
+   - pads are tracks. tracks can be: drumkit/sample, VST, or MIDI track out.
 * [AM Mod](https://github.com/AlekseyMalykh/am-mod)
    - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
 * [SampQOL-OS](https://github.com/snarebes/SampQOL-OS.git)
