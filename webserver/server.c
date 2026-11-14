@@ -3014,6 +3014,11 @@ static void handle_screen_ws(int fd, struct io *io, const char *headers) {
       }
       if (op == 1 && data) {
         if (strstr((char *)data, "refresh")) {
+          struct screen_capturer *ncap = screen_capturer_open();
+          if (ncap) {
+            screen_capturer_close(cap);
+            cap = ncap;
+          }
           force_send = 1;
         } else if (strstr((char *)data, "pause")) {
           paused = 1;
