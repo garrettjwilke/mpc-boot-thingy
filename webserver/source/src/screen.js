@@ -1,5 +1,6 @@
 export function bindScreen({ toast, useWs = true }) {
   const statusEl = document.getElementById("screen-status");
+  const refreshBtn = document.getElementById("screen-refresh");
   const fullscreenBtn = document.getElementById("screen-fullscreen");
   const floatingFsBtn = document.getElementById("screen-floating-fs");
   const popupBtn = document.getElementById("screen-popup");
@@ -270,6 +271,16 @@ export function bindScreen({ toast, useWs = true }) {
     };
   }
 
+  function doRefresh() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send("refresh");
+    } else if (active) {
+      connectStream();
+    }
+  }
+
+  if (refreshBtn) refreshBtn.addEventListener("click", doRefresh);
+
   document.addEventListener("visibilitychange", () => {
     if (!active) return;
     if (document.hidden) {
@@ -293,11 +304,7 @@ export function bindScreen({ toast, useWs = true }) {
     },
     refresh() {
       if (!active) return;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send("refresh");
-      } else {
-        fetchSingleFrame().catch((e) => toast(e.message));
-      }
+      doRefresh();
     },
   };
 
