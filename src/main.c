@@ -1368,6 +1368,11 @@ static int persist(struct boot_ui *ui, const char *card) {
       ui->theme_ls.cursor = t;
       return -1;
     }
+  } else if (ui->action == BOOT_ACT_SAVE_VIEW) {
+    if (menu_view_save(card, ui->action_index) != 0) {
+      boot_ui_set_view(ui, menu_view_load(card));
+      return -1;
+    }
   }
   return 0;
 }
@@ -1542,6 +1547,7 @@ static void reload_menu_state(char *card, size_t card_n, struct menu *menu,
     *def_out = def;
   boot_ui_init(ui, menu, theme, def);
   boot_ui_set_card(ui, card);
+  boot_ui_set_view(ui, menu_view_load(card));
   int npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
   if (npatches_out)
     *npatches_out = npatches;
@@ -1761,6 +1767,12 @@ int main(int argc, char **argv) {
     has_boot_now = 0;
     open_menu = 1;
   }
+  /* The menu itself is the saved default: no splash wait, straight in. */
+  if (def == MENU_DEFAULT_BOOT_THINGY && !has_boot_now) {
+    open_menu = 1;
+    printf("default: boot thingy menu\n");
+    fflush(stdout);
+  }
   int held = 1;
   if (!open_menu && !has_boot_now) {
     if (draw_prompt(&scr, back, front, &midi, card, theme))
@@ -1805,7 +1817,8 @@ int main(int argc, char **argv) {
         dev = (struct input_dev){0};
       }
     }
-  } else if (!held && !g_reload_requested && !g_boot_now_requested) {
+  } else if (!held && def != MENU_DEFAULT_BOOT_THINGY && !g_reload_requested &&
+             !g_boot_now_requested) {
     if (def <= 0) {
       if (!stock_ready(card))
         show_loading(&scr, &midi, theme);
@@ -1844,6 +1857,7 @@ int main(int argc, char **argv) {
   int npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
   boot_ui_init(&ui, &menu, theme, def);
   boot_ui_set_card(&ui, card);
+  boot_ui_set_view(&ui, menu_view_load(card));
   boot_ui_set_catalog(&ui, catalog, npatches);
   if (boot_install_notice[0])
     boot_ui_notice(&ui, boot_install_notice);
@@ -2128,9 +2142,10 @@ int main(int argc, char **argv) {
       wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
       continue;
     }
-    if (ui.action == BOOT_ACT_SET_DEFAULT || ui.action == BOOT_ACT_SAVE_THEME) {
+    if (ui.action == BOOT_ACT_SET_DEFAULT || ui.action == BOOT_ACT_SAVE_THEME ||
+        ui.action == BOOT_ACT_SAVE_VIEW) {
       int failed = persist(&ui, card) != 0;
-      if (failed || ui.action == BOOT_ACT_SET_DEFAULT) {
+      if (failed || ui.action != BOOT_ACT_SAVE_THEME) {
         input_begin(&quiet, &dev);
         started = mono_ms();
         wake = draw_menu_frame(&scr, back, front, &midi, &quiet, &ui);
