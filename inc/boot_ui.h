@@ -6,6 +6,17 @@
 
 struct input;
 
+/* Side of one app tile picture on the apps screen. */
+#define BOOT_ICON_PX 48
+
+/* A decoded tile picture. path is the PNG it came from, so a row whose icon
+   path changes is decoded again. ok is 0 when that PNG could not be read. */
+struct boot_icon {
+  char path[MENU_PATH];
+  int ok;
+  uint32_t px[BOOT_ICON_PX * BOOT_ICON_PX]; /* 0xAARRGGBB */
+};
+
 enum {
   BOOT_SCREEN_APPS = 0,
   BOOT_SCREEN_SETTINGS,
@@ -37,7 +48,8 @@ enum {
   BOOT_ACT_DELETE_ENTRY,
   BOOT_ACT_REBOOT,
   BOOT_ACT_SHUTDOWN,
-  BOOT_ACT_FORMAT_SD
+  BOOT_ACT_FORMAT_SD,
+  BOOT_ACT_SAVE_VIEW /* action_index is the MENU_VIEW_* to save */
 };
 
 enum { BOOT_TEXT_RENAME = 0, BOOT_TEXT_ARGS = 1, BOOT_TEXT_FORMAT_LABEL = 2 };
@@ -48,6 +60,7 @@ struct boot_ui {
   int theme;
   int saved_theme;
   int default_index;
+  int view; /* MENU_VIEW_LIST or MENU_VIEW_GRID for the apps screen */
   int action;
   int action_index;
   char action_id[MENU_ID];
@@ -91,11 +104,14 @@ struct boot_ui {
   int usb_apps_return_screen;
   struct ui_usb_sd usb;
   struct ui_usb_apps usb_apps;
+  struct boot_icon icons[MENU_MAX];
 };
 
 void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme,
                   int default_index);
 void boot_ui_set_card(struct boot_ui *ui, const char *card);
+/* Apps screen layout. Anything but MENU_VIEW_GRID is the list. */
+void boot_ui_set_view(struct boot_ui *ui, int view);
 void boot_ui_set_catalog(struct boot_ui *ui, const struct boot_patch *patches,
                          int n);
 int boot_ui_dirty(const struct boot_ui *ui);

@@ -128,6 +128,19 @@ root, and a boot-menu entry runs its start.sh with stock started first so
 the package can take over. The package's own autorun folder and loose
 top-level files (manuals, checksums) stay on your computer.
 
+Settings > Apps view switches the menu between a list of names (the
+default) and a grid of tiles, saved in autorun/system/boot-view. In the
+grid each app is drawn with a picture. Optional icon= in boot.entry
+names a PNG relative to the app folder. Without it, icon.png in the app
+folder or in its autorun/ package is used, or <name>.png beside a
+boot-menu <name>.entry. An app with no icon shows its launch screen,
+shrunk to fit: up to three folders deep, splash-screen.png, then a
+.png/.ppm/.pgm named *splash*, then a *splash*.raw holding one 320x240
+framebuffer dump. A card package is searched in the folders its dirs=
+names. Any size is scaled to fit 48 by 48 and alpha is kept. An app with
+no picture at all gets a colored tile with its initials.
+autorun/system/stock.png replaces the built-in Stock tile.
+
 Older autorun/boot-menu/*.entry files still load. run in those files
 is relative to the card root, so a program in autorun/apps is
 run=autorun/apps/name/program. A boot.entry inside an app folder is
@@ -138,6 +151,9 @@ The screen shows autorun/splash-screen.png. That file is a PNG, 320 by
 wrong size, shows the words "Hold SHIFT for boot thingy" instead.
 The SHIFT button lights. Press SHIFT while the picture is up to open the menu.
 The encoder moves the line. The encoder press confirms it.
+Settings > Set default app picks what starts when SHIFT is not held:
+Stock, an app, or "Boot thingy menu", which opens this menu at power-on
+with no splash wait. The web page offers the same choice.
 Waiting without pressing SHIFT starts the stock app.
 
 SSH starts with the card, on the USB link only. There is no client key.

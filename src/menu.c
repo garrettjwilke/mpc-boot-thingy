@@ -1,5 +1,6 @@
 #include "menu.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -22,6 +23,8 @@ static int ends_with(const char *s, const char *suf) {
     return n >= m && memcmp(s + n - m, suf, m) == 0;
 }
 
+static int dirs_name_ok(const char *s);
+
 int menu_parse_entry(const char *path, struct menu_entry *e) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
@@ -39,6 +42,7 @@ int menu_parse_entry(const char *path, struct menu_entry *e) {
         if (strcmp(key, "title") == 0) snprintf(e->title, sizeof e->title, "%s", val);
         else if (strcmp(key, "run") == 0) snprintf(e->run, sizeof e->run, "%s", val);
         else if (strcmp(key, "args") == 0) snprintf(e->args, sizeof e->args, "%s", val);
+        else if (strcmp(key, "icon") == 0) snprintf(e->icon, sizeof e->icon, "%s", val);
         else if (strcmp(key, "boot") == 0) e->boot_ac50 = strcmp(val, "ac50") == 0;
         else if (strcmp(key, "card") == 0) e->card_pkg = strcmp(val, "0") != 0;
         else if (strcmp(key, "takeover") == 0) e->takeover = strcmp(val, "0") != 0;
@@ -323,6 +327,145 @@ static int collect_apps(struct found *f, int n, int max, const char *apps) {
     return n;
 }
 
+static int is_regular(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static int lower_has(const char *s, const char *needle) {
+    size_t n = strlen(needle);
+    for (; *s; s++) {
+        size_t i = 0;
+        while (i < n && s[i] && tolower((unsigned char)s[i]) == needle[i]) i++;
+        if (i == n) return 1;
+    }
+    return 0;
+}
+
+static int ends_with_nocase(const char *s, const char *suf) {
+    size_t n = strlen(s), m = strlen(suf);
+    if (n < m) return 0;
+    for (size_t i = 0; i < m; i++)
+        if (tolower((unsigned char)s[n - m + i]) != suf[i]) return 0;
+    return 1;
+}
+
+/* A file an app would show at launch: a .png/.ppm/.pgm with "splash" in its
+   name, or a .raw of exactly one 320x240 screen (4, 3 or 2 bytes a pixel). */
+static int is_launch_picture(const char *name, const char *path) {
+    if (!lower_has(name, "splash")) return 0;
+    if (ends_with_nocase(name, ".png") || ends_with_nocase(name, ".ppm") || ends_with_nocase(name, ".pgm"))
+        return 1;
+    if (ends_with_nocase(name, ".raw")) {
+        struct stat st;
+        if (stat(path, &st) != 0) return 0;
+        return st.st_size == 320L * 240 * 4 || st.st_size == 320L * 240 * 3 || st.st_size == 320L * 240 * 2;
+    }
+    return 0;
+}
+
+enum { LAUNCH_SCAN_DEPTH = 3, LAUNCH_SCAN_ENTRIES = 2000 };
+
+/* First launch picture at exactly `depth` directories below dir, scanning
+   names in sorted order so splash1 beats splash2. splash-screen.png wins
+   its directory. *budget caps the directory entries read. 1 when found. */
+static int find_launch_picture_at(const char *dir, int depth, int *budget, char *out, size_t n) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    char names[64][256];
+    int count = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && count < 64 && *budget > 0) {
+        (*budget)--;
+        if (de->d_name[0] == '.') continue;
+        snprintf(names[count++], sizeof names[0], "%s", de->d_name);
+    }
+    closedir(d);
+    qsort(names, (size_t)count, sizeof names[0], (int (*)(const void *, const void *))strcmp);
+    char path[MENU_PATH];
+    struct stat st;
+    if (depth == 0) {
+        if (join2(path, sizeof path, dir, "splash-screen.png") == 0 && stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+            snprintf(out, n, "%s", path);
+            return 1;
+        }
+        for (int i = 0; i < count; i++) {
+            if (join2(path, sizeof path, dir, names[i]) != 0) continue;
+            if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            if (!is_launch_picture(names[i], path)) continue;
+            snprintf(out, n, "%s", path);
+            return 1;
+        }
+        return 0;
+    }
+    for (int i = 0; i < count; i++) {
+        if (join2(path, sizeof path, dir, names[i]) != 0) continue;
+        if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        if (find_launch_picture_at(path, depth - 1, budget, out, n)) return 1;
+    }
+    return 0;
+}
+
+/* Shallowest launch picture under dir, at most LAUNCH_SCAN_DEPTH deep. */
+static int find_launch_picture(const char *dir, char *out, size_t n) {
+    int budget = LAUNCH_SCAN_ENTRIES;
+    for (int depth = 0; depth <= LAUNCH_SCAN_DEPTH; depth++)
+        if (find_launch_picture_at(dir, depth, &budget, out, n)) return 1;
+    return 0;
+}
+
+/* Settle e->icon on an existing picture, or clear it. An icon= key is joined
+   to base unless absolute. Without one, an app row looks for icon.png in its
+   folder and then in its autorun folder, then for the shallowest launch
+   picture in its folder (see is_launch_picture). An entry row looks for
+   <name>.png beside <name>.entry, then for a launch picture in each card-root
+   directory its dirs= key names. */
+static void resolve_icon(struct menu_entry *e, const char *entry_path, int is_app) {
+    char buf[MENU_PATH];
+    if (e->icon[0]) {
+        if (e->icon[0] == '/') snprintf(buf, sizeof buf, "%s", e->icon);
+        else if (join2(buf, sizeof buf, e->base, e->icon) != 0) buf[0] = 0;
+        if (buf[0] && is_regular(buf)) {
+            snprintf(e->icon, sizeof e->icon, "%s", buf);
+            return;
+        }
+        e->icon[0] = 0;
+    }
+    if (is_app) {
+        if (join2(buf, sizeof buf, e->base, "icon.png") == 0 && is_regular(buf)) {
+            snprintf(e->icon, sizeof e->icon, "%s", buf);
+            return;
+        }
+        if (join2(buf, sizeof buf, e->base, "autorun/icon.png") == 0 && is_regular(buf)) {
+            snprintf(e->icon, sizeof e->icon, "%s", buf);
+            return;
+        }
+        /* No icon: the package's launch screen, fitted into the tile. */
+        if (find_launch_picture(e->base, e->icon, sizeof e->icon)) return;
+    } else {
+        if (entry_path && ends_with(entry_path, ".entry")) {
+            size_t stem = strlen(entry_path) - strlen(".entry");
+            if (stem + strlen(".png") < sizeof buf) {
+                memcpy(buf, entry_path, stem);
+                memcpy(buf + stem, ".png", 5);
+                if (is_regular(buf)) {
+                    snprintf(e->icon, sizeof e->icon, "%s", buf);
+                    return;
+                }
+            }
+        }
+        /* A card package keeps its files in card-root directories. */
+        char dirs[MENU_PATCHES];
+        snprintf(dirs, sizeof dirs, "%s", e->dirs);
+        for (char *tok = strtok(dirs, " "); tok; tok = strtok(NULL, " ")) {
+            if (!dirs_name_ok(tok)) continue;
+            if (join2(buf, sizeof buf, e->base, tok) != 0) continue;
+            if (find_launch_picture(buf, e->icon, sizeof e->icon)) return;
+        }
+    }
+    e->icon[0] = 0;
+}
+
 int menu_load(struct menu *m, const char *card) {
     memset(m, 0, sizeof *m);
     snprintf(m->items[0].title, sizeof m->items[0].title, "Stock");
@@ -330,6 +473,11 @@ int menu_load(struct menu *m, const char *card) {
     m->items[0].stock = 1;
     m->n = 1;
     if (!card || !card[0]) return m->n;
+    {
+        char stock_icon[MENU_PATH];
+        if (join2(stock_icon, sizeof stock_icon, card, "autorun/system/stock.png") == 0 && is_regular(stock_icon))
+            snprintf(m->items[0].icon, sizeof m->items[0].icon, "%s", stock_icon);
+    }
 
     enum { MAX_FILES = 64 };
     struct found found[MAX_FILES];
@@ -353,6 +501,7 @@ int menu_load(struct menu *m, const char *card) {
         }
         snprintf(e.base, sizeof e.base, "%s", found[i].base);
         snprintf(e.id, sizeof e.id, "%s", found[i].id);
+        resolve_icon(&e, found[i].synthetic ? NULL : found[i].path, strncmp(e.id, "app:", 4) == 0);
         char script_path[512];
         if (e.run[0] == '/') snprintf(script_path, sizeof script_path, "%s", e.run);
         else join2(script_path, sizeof script_path, e.base[0] ? e.base : card, e.run);
@@ -379,6 +528,7 @@ int menu_default_index(const struct menu *m, const char *card) {
     if (truncated) return 0;
     trim(line);
     if (!line[0] || strcmp(line, "stock") == 0) return 0;
+    if (strcmp(line, MENU_BOOT_THINGY_ID) == 0) return MENU_DEFAULT_BOOT_THINGY;
     for (int i = 0; i < m->n; i++) {
         if (strcmp(m->items[i].id, line) == 0) return i;
     }
@@ -411,6 +561,45 @@ int menu_set_default(const char *card, const char *id) {
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
     if (fd < 0) return -1;
     int rc = write_all(fd, line, (size_t)n);
+    if (close(fd) != 0) rc = -1;
+    if (rc != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    if (rename(tmp, path) != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+int menu_view_load(const char *card) {
+    if (!card || !card[0]) return MENU_VIEW_LIST;
+    char path[512];
+    int wr = snprintf(path, sizeof path, "%s/autorun/system/boot-view", card);
+    if (wr < 0 || (size_t)wr >= sizeof path) return MENU_VIEW_LIST;
+    FILE *f = fopen(path, "r");
+    if (!f) return MENU_VIEW_LIST;
+    char line[32];
+    if (!fgets(line, sizeof line, f)) {
+        fclose(f);
+        return MENU_VIEW_LIST;
+    }
+    fclose(f);
+    trim(line);
+    return strcmp(line, "grid") == 0 ? MENU_VIEW_GRID : MENU_VIEW_LIST;
+}
+
+int menu_view_save(const char *card, int view) {
+    char path[512], tmp[512];
+    if (!card || !card[0] || (view != MENU_VIEW_LIST && view != MENU_VIEW_GRID)) return -1;
+    int pw = snprintf(path, sizeof path, "%s/autorun/system/boot-view", card);
+    int tw = snprintf(tmp, sizeof tmp, "%s/autorun/system/boot-view.tmp", card);
+    if (pw < 0 || (size_t)pw >= sizeof path || tw < 0 || (size_t)tw >= sizeof tmp) return -1;
+    const char *line = view == MENU_VIEW_GRID ? "grid\n" : "list\n";
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (fd < 0) return -1;
+    int rc = write_all(fd, line, strlen(line));
     if (close(fd) != 0) rc = -1;
     if (rc != 0) {
         unlink(tmp);
