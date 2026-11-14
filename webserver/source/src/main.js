@@ -71,8 +71,10 @@ document.querySelectorAll("nav button").forEach((btn) => {
   });
 });
 
-refreshStatus().catch((e) => {
-  hdrDefault.textContent = "Offline";
-  hdrDefault.className = "badge warn";
-  toast(e.message);
-});
+if (document.documentElement.dataset.popup !== "screen") {
+  refreshStatus().catch((e) => {
+    hdrDefault.textContent = "Offline";
+    hdrDefault.className = "badge warn";
+    toast(e.message);
+  });
+}

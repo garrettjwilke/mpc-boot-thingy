@@ -4,9 +4,14 @@ export function bindScreen({ toast, useWs = true }) {
   const toggleBtn = document.getElementById("screen-toggle");
   const refreshBtn = document.getElementById("screen-refresh");
   const downloadBtn = document.getElementById("screen-download");
+  const fullscreenBtn = document.getElementById("screen-fullscreen");
+  const floatingFsBtn = document.getElementById("screen-floating-fs");
+  const popupBtn = document.getElementById("screen-popup");
   const stageEl = document.getElementById("screen-stage");
+  const bezelEl = stageEl.querySelector(".screen-bezel");
   const imgEl = document.getElementById("screen-img");
   const scaleBtns = document.querySelectorAll(".screen-scale-group button[data-scale]");
+  const isPopup = document.documentElement.dataset.popup === "screen";
 
   let active = false;
   let paused = false;
@@ -17,10 +22,89 @@ export function bindScreen({ toast, useWs = true }) {
   let latestBlob = null;
   let sourceName = "";
   let frameTimes = [];
+  let popupWin = null;
 
   const savedScale = localStorage.getItem("mpc-screen-scale");
-  if (savedScale && ["1", "2", "3", "fit"].includes(savedScale)) {
+  if (savedScale && ["1", "2", "3"].includes(savedScale)) {
     applyScale(savedScale);
+  }
+
+  function isFullscreen() {
+    return Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  function syncFullscreenAndPopupLayout() {
+    const fs = isFullscreen();
+    const fillViewport = fs || isPopup;
+    document.documentElement.classList.toggle("screen-is-fullscreen", fs);
+    if (fillViewport) {
+      stageEl.dataset.fullscreen = "true";
+      const vw = window.innerWidth || document.documentElement.clientWidth || 640;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 480;
+      const w = Math.min(vw, Math.floor((vh * 4) / 3));
+      const h = Math.min(vh, Math.floor((vw * 3) / 4));
+
+      stageEl.style.padding = "0";
+      stageEl.style.margin = "0";
+      stageEl.style.border = "none";
+      stageEl.style.borderRadius = "0";
+      stageEl.style.background = "#000";
+      stageEl.style.width = "100vw";
+      stageEl.style.height = "100vh";
+      stageEl.style.overflow = "hidden";
+
+      if (bezelEl) {
+        bezelEl.style.padding = "0";
+        bezelEl.style.margin = "0";
+        bezelEl.style.border = "none";
+        bezelEl.style.borderRadius = "0";
+        bezelEl.style.boxShadow = "none";
+        bezelEl.style.background = "#000";
+        bezelEl.style.width = "100vw";
+        bezelEl.style.height = "100vh";
+        bezelEl.style.display = "flex";
+        bezelEl.style.justifyContent = "center";
+        bezelEl.style.alignItems = "center";
+      }
+
+      imgEl.style.width = w + "px";
+      imgEl.style.height = h + "px";
+      imgEl.style.maxWidth = "none";
+      imgEl.style.maxHeight = "none";
+    } else {
+      delete stageEl.dataset.fullscreen;
+      stageEl.style.padding = "";
+      stageEl.style.margin = "";
+      stageEl.style.border = "";
+      stageEl.style.borderRadius = "";
+      stageEl.style.background = "";
+      stageEl.style.width = "";
+      stageEl.style.height = "";
+      stageEl.style.overflow = "";
+
+      if (bezelEl) {
+        bezelEl.style.padding = "";
+        bezelEl.style.margin = "";
+        bezelEl.style.border = "";
+        bezelEl.style.borderRadius = "";
+        bezelEl.style.boxShadow = "";
+        bezelEl.style.background = "";
+        bezelEl.style.width = "";
+        bezelEl.style.height = "";
+        bezelEl.style.display = "";
+        bezelEl.style.justifyContent = "";
+        bezelEl.style.alignItems = "";
+      }
+
+      imgEl.style.width = "";
+      imgEl.style.height = "";
+      imgEl.style.maxWidth = "";
+      imgEl.style.maxHeight = "";
+    }
+
+    const label = fs ? "Exit Fullscreen" : "Fullscreen";
+    if (fullscreenBtn) fullscreenBtn.textContent = label;
+    if (floatingFsBtn) floatingFsBtn.textContent = label;
   }
 
   function applyScale(scale) {
@@ -29,11 +113,61 @@ export function bindScreen({ toast, useWs = true }) {
       btn.classList.toggle("active", btn.dataset.scale === scale);
     });
     localStorage.setItem("mpc-screen-scale", scale);
+    syncFullscreenAndPopupLayout();
   }
 
   scaleBtns.forEach((btn) => {
     btn.addEventListener("click", () => applyScale(btn.dataset.scale));
   });
+
+  function scheduleLayoutSync() {
+    syncFullscreenAndPopupLayout();
+    requestAnimationFrame(syncFullscreenAndPopupLayout);
+    setTimeout(syncFullscreenAndPopupLayout, 60);
+    setTimeout(syncFullscreenAndPopupLayout, 180);
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (isFullscreen()) {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+      } else {
+        const target = isPopup ? document.documentElement : stageEl;
+        if (target.requestFullscreen) await target.requestFullscreen();
+        else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
+      }
+      scheduleLayoutSync();
+    } catch (e) {
+      toast(e.message || "Fullscreen is not available");
+    }
+  }
+
+  if (fullscreenBtn) fullscreenBtn.addEventListener("click", toggleFullscreen);
+  if (floatingFsBtn) floatingFsBtn.addEventListener("click", toggleFullscreen);
+  imgEl.addEventListener("dblclick", toggleFullscreen);
+  document.addEventListener("fullscreenchange", scheduleLayoutSync);
+  document.addEventListener("webkitfullscreenchange", scheduleLayoutSync);
+  window.addEventListener("resize", syncFullscreenAndPopupLayout);
+
+  if (popupBtn) {
+    popupBtn.addEventListener("click", () => {
+      if (popupWin && !popupWin.closed) {
+        popupWin.focus();
+        return;
+      }
+      const url = new URL(location.href);
+      url.searchParams.set("popup", "screen");
+      popupWin = window.open(
+        url.toString(),
+        "mpc-screen-popup",
+        "width=640,height=480,menubar=no,toolbar=no,location=no,status=no,resizable=yes"
+      );
+      if (!popupWin) {
+        toast("Pop-up blocked by browser — please allow pop-ups for this site");
+      }
+    });
+  }
 
   function setStatus(text, kind = "") {
     statusEl.textContent = text;
@@ -234,9 +368,10 @@ export function bindScreen({ toast, useWs = true }) {
     }
   });
 
-  return {
+  const api = {
     show() {
       active = true;
+      syncFullscreenAndPopupLayout();
       connectStream();
     },
     hide() {
@@ -253,5 +388,13 @@ export function bindScreen({ toast, useWs = true }) {
       }
     },
   };
-}
 
+  if (isPopup) {
+    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    document.getElementById("tab-screen").classList.add("active");
+    scheduleLayoutSync();
+    api.show();
+  }
+
+  return api;
+}

@@ -13,6 +13,10 @@
       var theme = saved === "light" || saved === "dark" ? saved
         : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
       document.documentElement.dataset.theme = theme;
+      if (new URLSearchParams(location.search).get("popup") === "screen") {
+        document.documentElement.dataset.popup = "screen";
+        document.title = "MPC Screen";
+      }
     })();
   </script>
 </head>
@@ -107,8 +111,9 @@
               <button class="btn secondary sm" type="button" data-scale="1">1×</button>
               <button class="btn secondary sm active" type="button" data-scale="2">2×</button>
               <button class="btn secondary sm" type="button" data-scale="3">3×</button>
-              <button class="btn secondary sm" type="button" data-scale="fit">Fit</button>
             </div>
+            <button class="btn secondary sm" id="screen-fullscreen" type="button">Fullscreen</button>
+            <button class="btn secondary sm" id="screen-popup" type="button">Pop-up</button>
             <button class="btn secondary sm" id="screen-toggle" type="button">Pause</button>
             <button class="btn secondary sm" id="screen-refresh" type="button">Capture Now</button>
             <button class="btn sm" id="screen-download" type="button">Download PNG</button>
@@ -118,6 +123,7 @@
           <div class="screen-bezel">
             <img id="screen-img" class="screen-img" width="320" height="240" alt="MPC Screen Capture" />
           </div>
+          <button class="btn secondary sm screen-floating-fs" id="screen-floating-fs" type="button">Fullscreen</button>
         </div>
       </div>
     </section>
