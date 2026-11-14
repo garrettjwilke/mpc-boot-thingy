@@ -10,6 +10,8 @@
 #include "boot_edit.h"
 #include "file_ops.h"
 #include "menu.h"
+#include "png.h"
+#include "screen_capture.h"
 #include "zip_writer.h"
 
 #include <arpa/inet.h>
@@ -314,6 +316,60 @@ static int selftest(void) {
       origin_ok("null", "mpc-sample.local:8080")) {
     fprintf(stderr, "mismatched origin accepted\n");
     return 1;
+  }
+  {
+    uint32_t *in_px =
+        malloc((size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t));
+    uint32_t *out_px =
+        malloc((size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t));
+    unsigned char *png_buf = NULL;
+    size_t png_len = 0;
+    char tmp_png[128];
+    if (!in_px || !out_px) {
+      free(in_px);
+      free(out_px);
+      return 1;
+    }
+    for (int i = 0; i < MPC_SCREEN_W * MPC_SCREEN_H; i++) {
+      in_px[i] = (uint32_t)(((i * 97) & 0xff) << 16) |
+                 (uint32_t)(((i * 31) & 0xff) << 8) | (uint32_t)(i & 0xff);
+    }
+    if (screen_encode_png(in_px, MPC_SCREEN_W, MPC_SCREEN_H, &png_buf,
+                          &png_len) != 0 ||
+        !png_buf || png_len < 64) {
+      fprintf(stderr, "screen_encode_png failed\n");
+      free(in_px);
+      free(out_px);
+      free(png_buf);
+      return 1;
+    }
+    snprintf(tmp_png, sizeof tmp_png, "/tmp/mpc-web-check-%d.png",
+             (int)getpid());
+    FILE *fp = fopen(tmp_png, "wb");
+    if (!fp || fwrite(png_buf, 1, png_len, fp) != png_len) {
+      if (fp)
+        fclose(fp);
+      unlink(tmp_png);
+      free(in_px);
+      free(out_px);
+      free(png_buf);
+      fprintf(stderr, "failed writing temp png\n");
+      return 1;
+    }
+    fclose(fp);
+    free(png_buf);
+    if (png_load_screen(tmp_png, out_px) != 0 ||
+        memcmp(in_px, out_px,
+               (size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t)) != 0) {
+      unlink(tmp_png);
+      free(in_px);
+      free(out_px);
+      fprintf(stderr, "screen png roundtrip mismatch\n");
+      return 1;
+    }
+    unlink(tmp_png);
+    free(in_px);
+    free(out_px);
   }
   puts("web-check ok");
   return 0;
@@ -2787,6 +2843,196 @@ static void handle_files_zip(int fd, struct io *io, int has_len,
   zip_stream_export(fd, count > 0 ? ptrs : NULL, (size_t)count);
 }
 
+static void handle_screen_png(int fd, const char *query) {
+  unsigned char *png_buf = NULL;
+  size_t png_len = 0;
+  char source[32] = {0};
+  char dl[16] = {0};
+  char hdr[512];
+  int hlen;
+
+  if (screen_capture_png(&png_buf, &png_len, source, sizeof source) != 0 ||
+      !png_buf || png_len == 0) {
+    free(png_buf);
+    send_err(fd, 500, "Internal Server Error", "could not capture screen");
+    return;
+  }
+
+  query_param(query, "download", dl, sizeof dl);
+  if (strcmp(dl, "1") == 0) {
+    hlen = snprintf(hdr, sizeof hdr,
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: image/png\r\n"
+                    "Content-Disposition: attachment; filename=\"mpc-screen.png\"\r\n"
+                    "X-Screen-Source: %s\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Connection: close\r\n"
+                    "Cache-Control: no-store\r\n"
+                    "\r\n",
+                    source[0] ? source : "unknown", png_len);
+  } else {
+    hlen = snprintf(hdr, sizeof hdr,
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: image/png\r\n"
+                    "X-Screen-Source: %s\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Connection: close\r\n"
+                    "Cache-Control: no-store\r\n"
+                    "\r\n",
+                    source[0] ? source : "unknown", png_len);
+  }
+
+  if (hlen > 0 && (size_t)hlen < sizeof hdr &&
+      write_full(fd, hdr, (size_t)hlen) == 0) {
+    write_full(fd, png_buf, png_len);
+  }
+  free(png_buf);
+}
+
+static void handle_screen_ws(int fd, struct io *io, const char *headers) {
+  char upgrade[64], connection[128], version[32], key[128], accept[64],
+      resp[256];
+  int n;
+  struct screen_capturer *cap = NULL;
+  uint32_t *cur_px = NULL;
+  uint32_t *prev_px = NULL;
+  char prev_source[32] = {0};
+  int force_send = 1;
+  int paused = 0;
+
+  if (header_value(headers, "Upgrade", upgrade, sizeof upgrade) != 0 ||
+      !contains_ci(upgrade, "websocket") ||
+      header_value(headers, "Connection", connection, sizeof connection) != 0 ||
+      !contains_ci(connection, "upgrade") ||
+      header_value(headers, "Sec-WebSocket-Version", version, sizeof version) !=
+          0 ||
+      strcmp(version, "13") != 0 ||
+      header_value(headers, "Sec-WebSocket-Key", key, sizeof key) != 0) {
+    send_err(fd, 400, "Bad Request", "websocket upgrade required");
+    return;
+  }
+  trim_inplace(key);
+  if (!key[0] || strlen(key) > 128) {
+    send_err(fd, 400, "Bad Request", "websocket upgrade required");
+    return;
+  }
+
+  cap = screen_capturer_open();
+  cur_px = malloc((size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t));
+  prev_px = malloc((size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t));
+  if (!cap || !cur_px || !prev_px) {
+    screen_capturer_close(cap);
+    free(cur_px);
+    free(prev_px);
+    send_err(fd, 500, "Internal Server Error", "out of memory");
+    return;
+  }
+
+  ws_accept(key, accept, sizeof accept);
+  n = snprintf(resp, sizeof resp,
+               "HTTP/1.1 101 Switching Protocols\r\n"
+               "Upgrade: websocket\r\n"
+               "Connection: Upgrade\r\n"
+               "Sec-WebSocket-Accept: %s\r\n"
+               "\r\n",
+               accept);
+  if (n < 0 || (size_t)n >= sizeof resp ||
+      write_full(fd, resp, (size_t)n) != 0) {
+    screen_capturer_close(cap);
+    free(cur_px);
+    free(prev_px);
+    return;
+  }
+
+  for (;;) {
+    if (!paused || force_send) {
+      char source[32] = {0};
+      if (screen_capturer_grab(cap, cur_px, source, sizeof source) == 0) {
+        if (strcmp(source, prev_source) != 0) {
+          char meta[128];
+          int mn = snprintf(meta, sizeof meta,
+                            "{\"source\":\"%s\",\"width\":%d,\"height\":%d}",
+                            source[0] ? source : "unknown", MPC_SCREEN_W,
+                            MPC_SCREEN_H);
+          if (mn > 0 && (size_t)mn < sizeof meta) {
+            if (ws_send(fd, 1, meta, (size_t)mn) != 0)
+              break;
+          }
+          snprintf(prev_source, sizeof prev_source, "%s", source);
+        }
+
+        if (force_send ||
+            memcmp(cur_px, prev_px,
+                   (size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t)) !=
+                0) {
+          unsigned char *png_buf = NULL;
+          size_t png_len = 0;
+          if (screen_encode_png(cur_px, MPC_SCREEN_W, MPC_SCREEN_H, &png_buf,
+                                &png_len) == 0 &&
+              png_buf && png_len > 0) {
+            int send_rc = ws_send(fd, 2, png_buf, png_len);
+            free(png_buf);
+            if (send_rc != 0)
+              break;
+            memcpy(prev_px, cur_px,
+                   (size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t));
+            force_send = 0;
+          } else {
+            free(png_buf);
+          }
+        }
+      }
+    }
+
+    struct pollfd pf;
+    pf.fd = fd;
+    pf.events = POLLIN;
+    pf.revents = 0;
+    int pr = poll(&pf, 1, paused ? 250 : 33);
+    if (pr < 0) {
+      if (errno == EINTR)
+        continue;
+      break;
+    }
+    if (pf.revents & POLLIN) {
+      int op = 0, fin = 0;
+      unsigned char *data = NULL;
+      size_t len = 0;
+      if (ws_read_frame(io, &op, &fin, &data, &len) != 0)
+        break;
+      if (op == 0x8) {
+        free(data);
+        break;
+      }
+      if (op == 0x9) {
+        if (ws_send(fd, 0xA, data, len) != 0) {
+          free(data);
+          break;
+        }
+        free(data);
+        continue;
+      }
+      if (op == 1 && data) {
+        if (strstr((char *)data, "refresh")) {
+          force_send = 1;
+        } else if (strstr((char *)data, "pause")) {
+          paused = 1;
+        } else if (strstr((char *)data, "resume")) {
+          paused = 0;
+          force_send = 1;
+        }
+      }
+      free(data);
+    } else if (pf.revents & (POLLHUP | POLLERR | POLLNVAL)) {
+      break;
+    }
+  }
+
+  screen_capturer_close(cap);
+  free(cur_px);
+  free(prev_px);
+}
+
 static void handle_client(int client) {
   struct io io;
   char method[16], uri[1024], path[1024];
@@ -2808,7 +3054,8 @@ static void handle_client(int client) {
     goto out;
   }
   needs_origin = strcmp(method, "POST") == 0 || strcmp(method, "DELETE") == 0 ||
-                 strcmp(path, "/ws/term") == 0;
+                 strcmp(path, "/ws/term") == 0 ||
+                 strcmp(path, "/ws/screen") == 0;
   if (needs_origin) {
     char origin[160], host[160];
     if (header_value(headers, "Origin", origin, sizeof origin) != 0) {
@@ -2827,6 +3074,14 @@ static void handle_client(int client) {
   }
   if (strcmp(method, "GET") == 0 && strcmp(path, "/ws/term") == 0) {
     handle_term(client, &io, headers);
+    goto out;
+  }
+  if (strcmp(method, "GET") == 0 && strcmp(path, "/ws/screen") == 0) {
+    handle_screen_ws(client, &io, headers);
+    goto out;
+  }
+  if (strcmp(method, "GET") == 0 && strcmp(path, "/api/screen.png") == 0) {
+    handle_screen_png(client, query);
     goto out;
   }
   if (strcmp(method, "GET") == 0 && strcmp(path, "/api/status") == 0) {

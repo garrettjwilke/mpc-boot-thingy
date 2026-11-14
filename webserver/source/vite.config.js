@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isZip, programError } from "./src/program.js";
@@ -436,6 +437,19 @@ async function handleMock(req, res, url, state) {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     ]);
     res.end(emptyZip);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/screen.png") {
+    const pngPath = path.resolve(here, "../../splash-screen.png");
+    const pngBuf = fs.readFileSync(pngPath);
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("X-Screen-Source", "mock");
+    res.setHeader("Cache-Control", "no-store");
+    if (url.searchParams.get("download") === "1") {
+      res.setHeader("Content-Disposition", `attachment; filename="mpc-screen.png"`);
+    }
+    res.end(pngBuf);
     return;
   }
   sendJson(res, 404, { error: "not found" });

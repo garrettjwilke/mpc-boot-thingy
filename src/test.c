@@ -7,6 +7,7 @@
 #include "input.h"
 #include "menu.h"
 #include "png.h"
+#include "screen_capture.h"
 #include "sd_check.h"
 #include "testapp.h"
 #include "theme.h"
@@ -1836,6 +1837,44 @@ int main(void) {
       assert(sum.installed == 1 && sum.failed == 0);
       assert(menu_load(&zm, card_zip) == 5);
     }
+  }
+
+  /* Screen capture & PNG encoding round-trip */
+  {
+    uint32_t *src_px =
+        malloc((size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t));
+    uint32_t *dec_px =
+        malloc((size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t));
+    unsigned char *png_buf = NULL;
+    size_t png_len = 0;
+    char source[32] = {0};
+    assert(src_px && dec_px);
+    for (int i = 0; i < MPC_SCREEN_W * MPC_SCREEN_H; i++) {
+      src_px[i] = (uint32_t)(((i * 73) & 0xff) << 16) |
+                  (uint32_t)(((i * 19) & 0xff) << 8) |
+                  (uint32_t)((i * 251) & 0xff);
+    }
+    assert(screen_encode_png(src_px, MPC_SCREEN_W, MPC_SCREEN_H, &png_buf,
+                             &png_len) == 0);
+    assert(png_buf && png_len > 64);
+
+    snprintf(path, sizeof path, "%s/screen-roundtrip.png", dir);
+    FILE *fp = fopen(path, "wb");
+    assert(fp);
+    assert(fwrite(png_buf, 1, png_len, fp) == png_len);
+    fclose(fp);
+    free(png_buf);
+    png_buf = NULL;
+
+    assert(png_load_screen(path, dec_px) == 0);
+    assert(memcmp(src_px, dec_px,
+                  (size_t)MPC_SCREEN_W * MPC_SCREEN_H * sizeof(uint32_t)) == 0);
+
+    assert(screen_capture_png(&png_buf, &png_len, source, sizeof source) == 0);
+    assert(png_buf && png_len > 64 && source[0] != 0);
+    free(png_buf);
+    free(src_px);
+    free(dec_px);
   }
 
   puts("selftest ok");

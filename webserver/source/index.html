@@ -32,6 +32,7 @@
     <button class="active" type="button" data-tab="boot">Boot</button>
     <button type="button" data-tab="files">Files</button>
     <button type="button" data-tab="terminal">Terminal</button>
+    <button type="button" data-tab="screen">Screen</button>
   </nav>
   <main>
     <section id="tab-boot" class="tab active">
@@ -89,6 +90,34 @@
         </div>
         <div class="term-wrap">
           <div id="term"></div>
+        </div>
+      </div>
+    </section>
+    <section id="tab-screen" class="tab">
+      <div class="card screen-card">
+        <div class="row screen-header-row">
+          <div>
+            <h3>MPC Screen</h3>
+            <span class="muted">Live 320×240 display capture from the MPC.</span>
+          </div>
+          <div class="row screen-controls">
+            <span id="screen-status" class="badge">idle</span>
+            <span id="screen-meta" class="badge">320×240</span>
+            <div class="screen-scale-group" role="group" aria-label="Display scale">
+              <button class="btn secondary sm" type="button" data-scale="1">1×</button>
+              <button class="btn secondary sm active" type="button" data-scale="2">2×</button>
+              <button class="btn secondary sm" type="button" data-scale="3">3×</button>
+              <button class="btn secondary sm" type="button" data-scale="fit">Fit</button>
+            </div>
+            <button class="btn secondary sm" id="screen-toggle" type="button">Pause</button>
+            <button class="btn secondary sm" id="screen-refresh" type="button">Capture Now</button>
+            <button class="btn sm" id="screen-download" type="button">Download PNG</button>
+          </div>
+        </div>
+        <div class="screen-stage" id="screen-stage" data-scale="2">
+          <div class="screen-bezel">
+            <img id="screen-img" class="screen-img" width="320" height="240" alt="MPC Screen Capture" />
+          </div>
         </div>
       </div>
     </section>
