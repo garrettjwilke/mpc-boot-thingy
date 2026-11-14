@@ -545,6 +545,7 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
   color: #fff;
 }
 .screen-stage {
+  position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -570,27 +571,124 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
   aspect-ratio: 4 / 3;
   user-select: none;
 }
-.screen-stage[data-scale="1"] .screen-img {
+.screen-floating-fs {
+  display: none;
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 50;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: rgba(15, 17, 21, 0.82);
+  color: #e6edf3;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(4px);
+}
+.screen-stage:not([data-fullscreen="true"])[data-scale="1"] .screen-img {
   width: 320px;
   height: 240px;
 }
-.screen-stage[data-scale="2"] .screen-img {
+.screen-stage:not([data-fullscreen="true"])[data-scale="2"] .screen-img {
   width: 640px;
   height: 480px;
   max-width: 100%;
   height: auto;
 }
-.screen-stage[data-scale="3"] .screen-img {
+.screen-stage:not([data-fullscreen="true"])[data-scale="3"] .screen-img {
   width: 960px;
   height: 720px;
   max-width: 100%;
   height: auto;
 }
-.screen-stage[data-scale="fit"] .screen-bezel {
-  width: 100%;
-  max-width: 960px;
+.screen-stage[data-fullscreen="true"],
+:root.screen-is-fullscreen .screen-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: #000 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  overflow: hidden !important;
 }
-.screen-stage[data-scale="fit"] .screen-img {
-  width: 100%;
-  height: auto;
+.screen-stage[data-fullscreen="true"] .screen-bezel,
+:root.screen-is-fullscreen .screen-bezel {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: #000 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  display: flex !important;
+  justify-content: center;
+  align-items: center;
+}
+.screen-stage[data-fullscreen="true"] .screen-img,
+:root.screen-is-fullscreen .screen-img {
+  width: min(100vw, calc(100vh * 4 / 3)) !important;
+  height: min(100vh, calc(100vw * 3 / 4)) !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: contain;
+}
+.screen-stage[data-fullscreen="true"] .screen-floating-fs,
+:root.screen-is-fullscreen .screen-floating-fs {
+  display: inline-flex;
+}
+.screen-stage[data-fullscreen="true"]:hover .screen-floating-fs,
+:root.screen-is-fullscreen .screen-stage:hover .screen-floating-fs {
+  opacity: 1;
+}
+:root[data-popup="screen"],
+:root[data-popup="screen"] body {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+}
+:root[data-popup="screen"] header,
+:root[data-popup="screen"] nav,
+:root[data-popup="screen"] .tab:not(#tab-screen),
+:root[data-popup="screen"] .screen-header-row {
+  display: none !important;
+}
+:root[data-popup="screen"] main,
+:root[data-popup="screen"] #tab-screen,
+:root[data-popup="screen"] .screen-card,
+:root[data-popup="screen"] .screen-stage,
+:root[data-popup="screen"] .screen-bezel {
+  display: flex !important;
+  justify-content: center;
+  align-items: center;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: #000 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  overflow: hidden !important;
+}
+:root[data-popup="screen"] .screen-img {
+  width: min(100vw, calc(100vh * 4 / 3)) !important;
+  height: min(100vh, calc(100vw * 3 / 4)) !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: contain;
+  background: #000;
+}
+:root[data-popup="screen"] .screen-floating-fs {
+  display: inline-flex;
+}
+:root[data-popup="screen"] body:hover .screen-floating-fs {
+  opacity: 1;
 }
