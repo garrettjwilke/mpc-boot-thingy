@@ -18,7 +18,7 @@ export function bindScreen({ toast, useWs = true }) {
   let popupWin = null;
 
   const savedScale = localStorage.getItem("mpc-screen-scale");
-  if (savedScale && ["1", "2", "3"].includes(savedScale)) {
+  if (savedScale && ["1", "2", "3", "4"].includes(savedScale)) {
     applyScale(savedScale);
   }
 
