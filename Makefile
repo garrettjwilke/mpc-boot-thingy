@@ -9,7 +9,7 @@ DEV_SRC = src/main.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/pn
 INSTALLER_SRC = src/usb_installer.c src/theme.c src/sd_check.c src/format_sd.c \
 	$(UI)/ui.c $(UI)/widgets.c $(UI)/input.c $(UI)/screen.c $(UI)/surface.c
 HOST_SRC = src/test.c src/menu.c src/boot_edit.c src/theme.c src/boot_ui.c src/png.c src/sd_check.c src/format_sd.c src/testapp.c src/app_install.c src/usb_apps.c \
-	webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c \
+	webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c webserver/screen_capture.c \
 	$(UI)/ui.c $(UI)/widgets.c $(UI)/usb_sd.c $(UI)/input.c
 
 .PHONY: all test clean web-host package
@@ -43,14 +43,14 @@ build/loader-test: menu-patch/loader.c
 	mkdir -p build
 	cc -std=c11 -D_DEFAULT_SOURCE -DMPC_LOADER_TEST -g $(WARN) -o $@ menu-patch/loader.c
 
-build/mpc-boot-web: webserver/server.c webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c src/menu.c src/boot_edit.c src/app_install.c inc/menu.h inc/boot_edit.h inc/unzip.h inc/app_install.h webserver/file_ops.h webserver/zip_writer.h
+build/mpc-boot-web: webserver/server.c webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c webserver/screen_capture.c src/menu.c src/boot_edit.c src/app_install.c src/png.c inc/menu.h inc/boot_edit.h inc/unzip.h inc/app_install.h inc/png.h webserver/file_ops.h webserver/zip_writer.h webserver/screen_capture.h
 	mkdir -p build
-	zig cc -target aarch64-linux-musl -static -O2 -s $(WARN) -Iinc -Iwebserver \
-	  -o $@ webserver/server.c webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c src/menu.c src/boot_edit.c src/app_install.c
+	zig cc -target aarch64-linux-musl -static -O2 -s $(WARN) $(INC) \
+	  -o $@ webserver/server.c webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c webserver/screen_capture.c src/menu.c src/boot_edit.c src/app_install.c src/png.c
 
-build/mpc-boot-web-host: webserver/server.c webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c src/menu.c src/boot_edit.c src/app_install.c inc/menu.h inc/boot_edit.h inc/unzip.h inc/app_install.h webserver/file_ops.h webserver/zip_writer.h
+build/mpc-boot-web-host: webserver/server.c webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c webserver/screen_capture.c src/menu.c src/boot_edit.c src/app_install.c src/png.c inc/menu.h inc/boot_edit.h inc/unzip.h inc/app_install.h inc/png.h webserver/file_ops.h webserver/zip_writer.h webserver/screen_capture.h
 	mkdir -p build
-	cc -D_DARWIN_C_SOURCE -D_GNU_SOURCE -g $(WARN) -Iinc -Iwebserver -o $@ webserver/server.c webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c src/menu.c src/boot_edit.c src/app_install.c
+	cc -D_DARWIN_C_SOURCE -D_GNU_SOURCE -g $(WARN) $(INC) -o $@ webserver/server.c webserver/unzip.c webserver/file_ops.c webserver/zip_writer.c webserver/screen_capture.c src/menu.c src/boot_edit.c src/app_install.c src/png.c
 
 web-host: build/mpc-boot-web-host
 

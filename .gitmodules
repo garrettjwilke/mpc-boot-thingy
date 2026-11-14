@@ -4,3 +4,6 @@
 [submodule "deps/js-fileexplorer"]
 	path = deps/js-fileexplorer
 	url = https://github.com/cubiclesoft/js-fileexplorer.git
+[submodule "deps/lodepng"]
+	path = deps/lodepng
+	url = https://github.com/lvandeve/lodepng.git

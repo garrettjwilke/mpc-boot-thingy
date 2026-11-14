@@ -7,6 +7,7 @@ import { bindReboot } from "./device.js";
 import { bindTerminal } from "./terminal.js";
 import { bindTheme } from "./theme.js";
 import { bindFiles } from "./files.js";
+import { bindScreen } from "./screen.js";
 
 const hdrDefault = document.getElementById("hdr-default");
 document.getElementById("hdr-link").textContent = location.host;
@@ -46,10 +47,15 @@ const files = bindFiles({ toast });
 const terminal = bindTerminal({
   connect: !import.meta.env.DEV || import.meta.env.MODE === "live"
 });
+const screen = bindScreen({
+  toast,
+  useWs: !import.meta.env.DEV || import.meta.env.MODE === "live"
+});
 
 document.getElementById("refresh").addEventListener("click", () => {
   refreshStatus().catch((e) => toast(e.message));
   files.refresh();
+  screen.refresh();
 });
 
 document.querySelectorAll("nav button").forEach((btn) => {
@@ -60,6 +66,8 @@ document.querySelectorAll("nav button").forEach((btn) => {
     document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
     if (btn.dataset.tab === "terminal") terminal.show();
     if (btn.dataset.tab === "files") files.show();
+    if (btn.dataset.tab === "screen") screen.show();
+    else screen.hide();
   });
 });
 
