@@ -10,9 +10,12 @@
 #define MENU_ID 288
 #define MENU_PATCHES 768
 
-/* The web page sends this to /api/boot-now to open the menu.
-   It is not a menu row and cannot be saved as the default. */
+/* The web page sends this to /api/boot-now to open the menu. It is not a
+   menu row. Saved as the default, power-on opens the menu instead of an app. */
 #define MENU_BOOT_THINGY_ID "boot-thingy"
+
+/* menu_default_index result when the saved default is MENU_BOOT_THINGY_ID. */
+#define MENU_DEFAULT_BOOT_THINGY (-1)
 
 struct menu_entry {
     char title[MENU_TITLE];
@@ -22,6 +25,7 @@ struct menu_entry {
     char id[MENU_ID];     /* "stock", "app:<folder>", or "entry:<file>" */
     char patches[MENU_PATCHES]; /* comma-separated catalog ids, when boot_ac50 */
     char dirs[MENU_PATCHES]; /* card package: space-separated card-root dirs to remove */
+    char icon[MENU_PATH]; /* PNG drawn as this row's tile, or "" for a generated tile */
     int stock;
     int boot_ac50; /* run is a Boot Edit script; launch hands off like Stock */
     int card_pkg;  /* run is a card-root script (e.g. WaveGrid/start.sh); launch hands off like Stock */
@@ -40,7 +44,14 @@ struct menu {
    autorun/autorun.json or autorun/autorun.sh. Its title is the folder name
    and its run is autorun/<script>. A file without both title and run is skipped.
    A missing card yields Stock only.
-   Each row gets an id: "stock", "app:<folder>", or "entry:<file>". */
+   Each row gets an id: "stock", "app:<folder>", or "entry:<file>".
+   icon is the first regular file of: the icon= key (joined to base unless it
+   starts with /), <folder>/icon.png, <folder>/autorun/icon.png, then for an
+   app the shallowest launch picture up to three directories below <folder>:
+   splash-screen.png, else a .png/.ppm/.pgm named *splash*, else a *splash*.raw
+   of one 320x240 screen. An entry row uses <name>.png beside <name>.entry,
+   then a launch picture under each card-root directory in its dirs= key.
+   Stock uses card/autorun/system/stock.png. */
 int menu_load(struct menu *m, const char *card);
 
 /* Parse a single .entry file into e. Returns 0 on success, -1 on failure. */
@@ -66,11 +77,23 @@ int menu_nested_run(const char *app_dir, char *run, size_t n);
 int menu_autorun_kind(const char *script_path);
 
 /* Index of the id saved in card/autorun/system/boot-default.
-   A missing file, a blank line, "stock", or an unknown id returns 0. */
+   A missing file, a blank line, "stock", or an unknown id returns 0.
+   MENU_BOOT_THINGY_ID returns MENU_DEFAULT_BOOT_THINGY (-1): the menu itself. */
 int menu_default_index(const struct menu *m, const char *card);
 
 /* Writes id and a newline to card/autorun/system/boot-default. 0 on success. */
 int menu_set_default(const char *card, const char *id);
+
+/* How the apps screen draws its rows: a list of names, or a grid of tiles. */
+enum { MENU_VIEW_LIST = 0, MENU_VIEW_GRID = 1 };
+
+/* card/autorun/system/boot-view holds "list" or "grid". A missing or unknown
+   file is the list. */
+int menu_view_load(const char *card);
+
+/* Writes the view's name and a newline to card/autorun/system/boot-view.
+   0 on success. */
+int menu_view_save(const char *card, int view);
 
 /* Split args on spaces into out[0..). Copies into buf, which must stay alive.
    Returns the number of words. */

@@ -100,6 +100,23 @@ there are other enhancements this provides, but ehh...they're there... :)
 3. click the "install app" button
 4. choose your app zip
 
+### app icons
+
+the boot menu lists apps by name. Settings > Apps view switches it to a grid
+of tiles, one picture per app. to give your app a picture, put a
+PNG named `icon.png` in the app's `autorun/` folder (so it ships inside the
+zip), or in the app folder itself (`autorun/apps/<name>/icon.png`). a
+`boot.entry` can also name any file with `icon=path/to/picture.png`. for a
+`autorun/boot-menu/<name>.entry` file, put `<name>.png` next to it. an app
+with no icon uses its launch screen shrunk to fit the tile: boot thingy looks
+up to three folders deep inside the app for `splash-screen.png`, then any
+`.png`/`.ppm`/`.pgm` with "splash" in its name, then a `*splash*.raw` that is
+one 320x240 framebuffer dump. a card package is searched the same way in the
+folders its entry names. an app with no picture at all gets a colored tile
+with its initials. any size works and transparency is kept; the picture is
+scaled to fit 48x48, so a square 96x96 or 48x48 PNG looks best.
+`autorun/system/stock.png` replaces the built-in Stock tile.
+
 ### manual app install via SD card
 
 1. download the app/mod you want...do no extract the zip

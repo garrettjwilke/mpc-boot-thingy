@@ -1,10 +1,12 @@
 #include "boot_ui.h"
 #include "font.h"
+#include "icon.h"
 #include "input.h"
 #include "theme.h"
 #include "usb_sd.h"
 
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -239,6 +241,262 @@ static struct ui_list_style list_style(const struct boot_theme *th) {
   return st;
 }
 
+/* ---- apps screen: a grid of tiles ------------------------------------- */
+
+enum {
+  APPS_COLS = 4,
+  APPS_CELL_H = 80,
+  APPS_SCROLL_W = 6,
+  APPS_LABEL_LINES = 2,
+};
+
+/* Picture for row i, decoded on first use. NULL when the row has no PNG or
+   it could not be read, so the caller draws a generated tile. */
+static const struct boot_icon *row_icon(struct boot_ui *s, int i) {
+  if (!s->menu || i < 0 || i >= MENU_MAX)
+    return NULL;
+  const struct menu_entry *e = &s->menu->items[i];
+  struct boot_icon *ic = &s->icons[i];
+  if (!e->icon[0]) {
+    ic->path[0] = 0;
+    ic->ok = 0;
+    return NULL;
+  }
+  if (strcmp(ic->path, e->icon) != 0) {
+    snprintf(ic->path, sizeof ic->path, "%s", e->icon);
+    ic->ok = icon_load(e->icon, ic->px, BOOT_ICON_PX) == 0;
+  }
+  return ic->ok ? ic : NULL;
+}
+
+/* Tile color for a title without a picture. The same title always gets the
+   same color. */
+static uint32_t tile_color(const char *title) {
+  static const uint32_t palette[] = {0xd9534f, 0xe08a2e, 0xb8a32c, 0x4caf50,
+                                     0x2bb3a3, 0x3b82c4, 0x7a5cc9, 0xd05aa0};
+  unsigned h = 5381;
+  for (const unsigned char *p = (const unsigned char *)title; p && *p; p++)
+    h = h * 33 + *p;
+  return palette[h % (sizeof palette / sizeof palette[0])];
+}
+
+static uint32_t text_on(uint32_t fill) {
+  unsigned r = (fill >> 16) & 255, g = (fill >> 8) & 255, b = fill & 255;
+  unsigned luma = (r * 299 + g * 587 + b * 114) / 1000;
+  return luma > 150 ? 0x101014 : 0xf4f4f4;
+}
+
+static int is_word_sep(char c) {
+  return c == ' ' || c == '-' || c == '_' || c == '.' || c == '/';
+}
+
+/* Up to two capital letters: the first letter of the first two words, or
+   the first two letters of a single word. */
+static void initials(const char *title, char *out) {
+  int n = 0;
+  int at_word = 1;
+  int words = 0;
+  for (const char *p = title; p && *p && n < 2; p++) {
+    if (is_word_sep(*p)) {
+      at_word = 1;
+      continue;
+    }
+    if (at_word) {
+      words++;
+      at_word = 0;
+      if (words >= 2 || n == 0) {
+        out[n++] = (char)toupper((unsigned char)*p);
+        continue;
+      }
+    }
+  }
+  if (n < 2) {
+    /* One word: take its first two letters. */
+    n = 0;
+    for (const char *p = title; p && *p && n < 2; p++) {
+      if (is_word_sep(*p))
+        continue;
+      out[n++] = (char)toupper((unsigned char)*p);
+    }
+  }
+  if (n == 0)
+    out[n++] = '?';
+  out[n] = 0;
+}
+
+/* A colored square with the title's initials. */
+static void draw_placeholder_tile(struct ui *u, int x, int y, const char *title) {
+  uint32_t fill = tile_color(title);
+  struct ui_paint paint = {.fill_set = 1, .fill = fill};
+  ui_box(u, x, y, BOOT_ICON_PX, BOOT_ICON_PX, paint);
+  char ini[3];
+  initials(title, ini);
+  int tw = (int)strlen(ini) * FONT_L_W * 2;
+  int th = FONT_L_H * 2;
+  ui_text(u, x + (BOOT_ICON_PX - tw) / 2, y + (BOOT_ICON_PX - th) / 2, ini,
+          text_on(fill), 2);
+}
+
+/* Stock: the 4x4 pad bank. */
+static void draw_stock_tile(struct ui *u, int x, int y,
+                            const struct boot_theme *th) {
+  struct ui_paint paint = {.fill_set = 1,
+                           .fill = th->box,
+                           .border_set = 1,
+                           .border = th->border,
+                           .border_px = 1};
+  ui_box(u, x, y, BOOT_ICON_PX, BOOT_ICON_PX, paint);
+  const int pad = 9, gap = 2, inset = 3;
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      struct ui_paint p = {.fill_set = 1, .fill = th->dim};
+      if (r == 3 && c == 0)
+        p.fill = th->hl;
+      ui_box(u, x + inset + c * (pad + gap), y + inset + r * (pad + gap), pad,
+             pad, p);
+    }
+  }
+}
+
+/* Break title into up to APPS_LABEL_LINES lines of at most width chars,
+   on word boundaries when possible. Lines are NUL terminated. */
+static int wrap_label(const char *title, int width,
+                      char lines[APPS_LABEL_LINES][MENU_TITLE]) {
+  int nlines = 0;
+  const char *p = title ? title : "";
+  if (width < 1)
+    width = 1;
+  if (width >= MENU_TITLE)
+    width = MENU_TITLE - 1;
+  while (*p && nlines < APPS_LABEL_LINES) {
+    while (*p == ' ')
+      p++;
+    if (!*p)
+      break;
+    int len = (int)strlen(p);
+    int take = len;
+    if (take > width) {
+      take = width;
+      if (nlines + 1 < APPS_LABEL_LINES) {
+        /* Break after a separator. Prefer the latest break whose remainder
+           still fits on the next line; otherwise the latest break at all. */
+        int latest = -1, fitting = -1;
+        for (int i = take; i > 0; i--) {
+          int ok = p[i] == ' ' || is_word_sep(p[i - 1]);
+          if (!ok)
+            continue;
+          if (latest < 0)
+            latest = i;
+          /* The next line skips a space at the cut. */
+          int rest = len - i - (p[i] == ' ' ? 1 : 0);
+          if (rest <= width) {
+            fitting = i;
+            break;
+          }
+        }
+        if (fitting > 0)
+          take = fitting;
+        else if (latest > 0)
+          take = latest;
+      }
+    }
+    memcpy(lines[nlines], p, (size_t)take);
+    lines[nlines][take] = 0;
+    /* Trim trailing spaces. */
+    int t = take;
+    while (t > 0 && lines[nlines][t - 1] == ' ')
+      lines[nlines][--t] = 0;
+    nlines++;
+    p += take;
+  }
+  return nlines;
+}
+
+/* Draws every row as a tile in a grid. The cursor is ls->cursor. Returns
+   the row chosen with the encoder press, or -1. */
+static int apps_grid(struct ui *u, struct boot_ui *s, int x, int y, int w,
+                     int h, int n, const struct boot_theme *th,
+                     const struct input *in, struct ui_list_state *ls) {
+  if (n < 0)
+    n = 0;
+  if (n == 0)
+    ls->cursor = 0;
+  else
+    ls->cursor = clamp_index(ls->cursor, n);
+  int hit = -1;
+  if (in && n > 0 && in->encoder_press && !in->shift)
+    hit = ls->cursor;
+
+  int rows = h / APPS_CELL_H;
+  if (rows < 1)
+    rows = 1;
+  int total_rows = (n + APPS_COLS - 1) / APPS_COLS;
+  int reserve = total_rows > rows ? APPS_SCROLL_W : 0;
+  int cell_w = (w - reserve) / APPS_COLS;
+  int cur_row = ls->cursor / APPS_COLS;
+  int first_row = cur_row >= rows ? cur_row - rows + 1 : 0;
+  int label_chars = (cell_w - 4) / FONT_S_W;
+
+  for (int i = first_row * APPS_COLS; i < n && i < (first_row + rows) * APPS_COLS;
+       i++) {
+    int col = i % APPS_COLS;
+    int row = i / APPS_COLS - first_row;
+    int cx = x + col * cell_w;
+    int cy = y + row * APPS_CELL_H;
+    uint32_t bg = th->bg;
+    if (i == ls->cursor) {
+      bg = th->bar;
+      struct ui_paint sel = {.fill_set = 1, .fill = th->bar};
+      ui_box(u, cx, cy, cell_w, APPS_CELL_H, sel);
+      ui_highlight(u, cx, cy, cell_w, APPS_CELL_H, th->hl, 2);
+    }
+    const struct menu_entry *e = &s->menu->items[i];
+    int ix = cx + (cell_w - BOOT_ICON_PX) / 2;
+    int iy = cy + 4;
+    const struct boot_icon *ic = row_icon(s, i);
+    if (ic)
+      icon_blit(u, ix, iy, ic->px, BOOT_ICON_PX, bg);
+    else if (e->stock)
+      draw_stock_tile(u, ix, iy, th);
+    else
+      draw_placeholder_tile(u, ix, iy, e->title);
+    if (i == s->default_index) {
+      /* Default badge in the top-right corner of the picture. */
+      struct ui_paint badge = {.fill_set = 1,
+                               .fill = th->hl,
+                               .border_set = 1,
+                               .border = bg,
+                               .border_px = 1};
+      ui_box(u, ix + BOOT_ICON_PX - 7, iy - 3, 10, 10, badge);
+    }
+    char lines[APPS_LABEL_LINES][MENU_TITLE];
+    int nl = wrap_label(e->title, label_chars, lines);
+    for (int l = 0; l < nl; l++) {
+      int tw = (int)strlen(lines[l]) * FONT_S_W;
+      int tx = cx + (cell_w - tw) / 2;
+      ui_text(u, tx, iy + BOOT_ICON_PX + 2 + l * FONT_S_H, lines[l], th->text,
+              1);
+    }
+  }
+
+  if (reserve) {
+    int bx = x + w - 4;
+    struct ui_paint track = {.fill_set = 1, .fill = th->box};
+    ui_box(u, bx, y, 4, h, track);
+    int thumb_h = h * rows / total_rows;
+    if (thumb_h < 8)
+      thumb_h = h < 8 ? h : 8;
+    int max_first = total_rows - rows;
+    int travel = h - thumb_h;
+    int ty = y;
+    if (max_first > 0 && travel > 0)
+      ty = y + travel * first_row / max_first;
+    struct ui_paint thumb = {.fill_set = 1, .fill = th->hl};
+    ui_box(u, bx, ty, 4, thumb_h, thumb);
+  }
+  return hit;
+}
+
 static struct ui_usb_sd_style usb_style(const struct boot_theme *th) {
   struct ui_usb_sd_style st = {
       .bg = th->bg,
@@ -296,13 +554,24 @@ static int run_usb_apps(struct ui *u, struct boot_ui *s,
   return 1;
 }
 
+/* index MENU_DEFAULT_BOOT_THINGY makes the menu itself the default. */
 static void note_default(struct boot_ui *s, int index) {
-  if (!s->menu || index < 0 || index >= s->menu->n)
+  if (!s->menu || index >= s->menu->n)
+    return;
+  if (index < 0 && index != MENU_DEFAULT_BOOT_THINGY)
     return;
   s->action = BOOT_ACT_SET_DEFAULT;
   s->action_index = index;
   s->default_index = index;
-  snprintf(s->action_id, sizeof s->action_id, "%s", s->menu->items[index].id);
+  snprintf(s->action_id, sizeof s->action_id, "%s",
+           index < 0 ? MENU_BOOT_THINGY_ID : s->menu->items[index].id);
+}
+
+/* Row of the default-app list that holds the current default. The menu
+   itself is the row after the last app. */
+static int default_row(const struct boot_ui *s) {
+  int n = s->menu ? s->menu->n : 0;
+  return s->default_index >= 0 && s->default_index < n ? s->default_index : n;
 }
 
 static void trim(char *s) {
@@ -416,11 +685,21 @@ void boot_ui_init(struct boot_ui *ui, const struct menu *menu, int theme,
   ui->saved_theme = theme;
   ui->theme_ls.cursor = theme;
   ui->default_index = default_index;
-  ui->default_ls.cursor = default_index;
+  ui->default_ls.cursor = default_row(ui);
   snprintf(ui->format_label, sizeof ui->format_label, "MPC-Sample");
   int n = menu ? menu->n : 0;
   int sel = (default_index >= 0 && default_index < n) ? default_index : 0;
   ui->apps_ls.cursor = sel;
+}
+
+void boot_ui_set_view(struct boot_ui *ui, int view) {
+  if (!ui)
+    return;
+  ui->view = view == MENU_VIEW_GRID ? MENU_VIEW_GRID : MENU_VIEW_LIST;
+}
+
+static const char *view_row_label(const struct boot_ui *s) {
+  return s->view == MENU_VIEW_GRID ? "Apps view: Grid" : "Apps view: List";
 }
 
 void boot_ui_set_card(struct boot_ui *ui, const char *card) {
@@ -622,13 +901,13 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   int n = s->menu ? s->menu->n : 0;
   int shown_n = n > MENU_MAX ? MENU_MAX : n;
   if (screen == BOOT_SCREEN_SETTINGS)
-    move_cursor(&s->settings_ls, 4, &ev);
+    move_cursor(&s->settings_ls, 5, &ev);
   else if (screen == BOOT_SCREEN_APPS)
     move_cursor(&s->apps_ls, shown_n, &ev);
   else if (screen == BOOT_SCREEN_USB)
     move_cursor(&s->usb_ls, 2, &ev);
   else if (screen == BOOT_SCREEN_DEFAULT)
-    move_cursor(&s->default_ls, n, &ev);
+    move_cursor(&s->default_ls, n + 1, &ev); /* apps, then the menu itself */
   else if (screen == BOOT_SCREEN_THEME) {
     move_cursor(&s->theme_ls, theme_count(), &ev);
     s->theme = s->theme_ls.cursor;
@@ -731,14 +1010,20 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     if (screen == BOOT_SCREEN_SETTINGS) {
       if (s->settings_ls.cursor == 0) {
         s->screen = BOOT_SCREEN_DEFAULT;
-        s->default_ls.cursor = s->default_index;
+        s->default_ls.cursor = default_row(s);
       } else if (s->settings_ls.cursor == 1) {
         s->screen = BOOT_SCREEN_THEME;
         s->theme = s->saved_theme;
         s->theme_ls.cursor = s->saved_theme;
       } else if (s->settings_ls.cursor == 2) {
-        s->action = BOOT_ACT_RELOAD;
+        /* Toggle the apps view and save it. */
+        boot_ui_set_view(s, s->view == MENU_VIEW_GRID ? MENU_VIEW_LIST
+                                                       : MENU_VIEW_GRID);
+        s->action = BOOT_ACT_SAVE_VIEW;
+        s->action_index = s->view;
       } else if (s->settings_ls.cursor == 3) {
+        s->action = BOOT_ACT_RELOAD;
+      } else if (s->settings_ls.cursor == 4) {
         s->screen = BOOT_SCREEN_FORMAT_CONFIRM;
         s->format_confirm_ls.cursor = 0;
       }
@@ -768,7 +1053,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
       }
       ev.encoder_press = 0;
     } else if (screen == BOOT_SCREEN_DEFAULT) {
-      note_default(s, n > 0 ? wrap(s->default_ls.cursor, n) : 0);
+      int row = wrap(s->default_ls.cursor, n + 1);
+      note_default(s, row < n ? row : MENU_DEFAULT_BOOT_THINGY);
       s->screen = BOOT_SCREEN_SETTINGS;
       ev.encoder_press = 0;
     } else if (screen == BOOT_SCREEN_THEME) {
@@ -833,8 +1119,10 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   char title_buf[48];
   if (s->screen == BOOT_SCREEN_SETTINGS)
     title = "Settings";
-  else if (s->screen == BOOT_SCREEN_DEFAULT)
+  else if (s->screen == BOOT_SCREEN_DEFAULT) {
     title = "Default app";
+    hint = "starts when SHIFT is not held";
+  }
   else if (s->screen == BOOT_SCREEN_THEME)
     title = "Theme";
   else if (s->screen == BOOT_SCREEN_POWER) {
@@ -896,8 +1184,8 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
   }
 
   int list_y;
-  if (is_apps && shift_held)
-    list_y = 76;
+  if (is_apps && s->view == MENU_VIEW_GRID)
+    list_y = 72; /* two rows of tiles */
   else
     list_y = hint[0] ? 76 : 60;
   int list_h = UI_H - list_y - 8;
@@ -906,15 +1194,21 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     n = MENU_MAX;
 
   if (s->screen == BOOT_SCREEN_APPS) {
-    char text[MENU_MAX][48];
-    const char *rows[MENU_MAX];
-    for (int i = 0; i < shown_n; i++) {
-      row_label(text[i], sizeof text[i], s->menu->items[i].title,
-                i == s->default_index);
-      rows[i] = text[i];
+    int hit;
+    if (s->view == MENU_VIEW_GRID) {
+      hit = apps_grid(u, s, 8, list_y, 304, list_h, shown_n, th, widget_in,
+                      &s->apps_ls);
+    } else {
+      char text[MENU_MAX][48];
+      const char *rows[MENU_MAX];
+      for (int i = 0; i < shown_n; i++) {
+        row_label(text[i], sizeof text[i], s->menu->items[i].title,
+                  i == s->default_index);
+        rows[i] = text[i];
+      }
+      hit = ui_list(u, 8, list_y, 304, list_h, rows, shown_n, rows_st,
+                    widget_in, &s->apps_ls);
     }
-    int hit = ui_list(u, 8, list_y, 304, list_h, rows, shown_n, rows_st,
-                      widget_in, &s->apps_ls);
     if (hit >= 0 && hit < shown_n) {
       s->action = BOOT_ACT_LAUNCH;
       s->action_index = hit;
@@ -936,9 +1230,9 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     else if (hit == 2)
       s->screen = BOOT_SCREEN_APPS;
   } else if (s->screen == BOOT_SCREEN_SETTINGS) {
-    const char *rows[] = {"Set default app", "Set theme", "Reload menu & SD",
-                          "Format SD Card"};
-    ui_list(u, 8, list_y, 304, list_h, rows, 4, rows_st, widget_in,
+    const char *rows[] = {"Set default app", "Set theme", view_row_label(s),
+                          "Reload menu & SD", "Format SD Card"};
+    ui_list(u, 8, list_y, 304, list_h, rows, 5, rows_st, widget_in,
             &s->settings_ls);
   } else if (s->screen == BOOT_SCREEN_FORMAT_CONFIRM) {
     const char *rows[] = {"No, cancel", "Yes, erase and format"};
@@ -972,14 +1266,17 @@ int boot_frame(struct ui *u, const struct input *in, void *state) {
     ui_text(u, 28, 144, "Do not turn off power.", th->dim, 1);
     ui_text(u, 28, 164, "System will reboot automatically.", th->dim, 1);
   } else if (s->screen == BOOT_SCREEN_DEFAULT) {
-    char text[MENU_MAX][48];
-    const char *rows[MENU_MAX];
+    char text[MENU_MAX + 1][48];
+    const char *rows[MENU_MAX + 1];
     for (int i = 0; i < n; i++) {
       row_label(text[i], sizeof text[i], s->menu->items[i].title,
                 i == s->default_index);
       rows[i] = text[i];
     }
-    ui_list(u, 8, list_y, 304, list_h, rows, n, rows_st, widget_in,
+    row_label(text[n], sizeof text[n], "Boot thingy menu",
+              s->default_index == MENU_DEFAULT_BOOT_THINGY);
+    rows[n] = text[n];
+    ui_list(u, 8, list_y, 304, list_h, rows, n + 1, rows_st, widget_in,
             &s->default_ls);
   } else if (s->screen == BOOT_SCREEN_THEME) {
     const char *rows[8];
