@@ -46,6 +46,10 @@ there are other enhancements this provides, but ehh...they're there... :)
    - synth engines
    - multisamples
    - dj mode, fx sends, bounce in place, chord mode, mastering console, etc
+* [Lightfoot](https://github.com/Dyldog/Lightfoot)
+   - guitar hero clone on your MPC Sample!
+   - intuitive controls and great gameplay
+   - crisp and smooth graphics
 * [beat train](https://github.com/drose030/beat-train-mpc-sample)
    - drum/rhythm game for the mpc sample.
    - import your own music to play!
