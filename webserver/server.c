@@ -1128,7 +1128,8 @@ static void handle_status(int fd) {
   fprintf(fp, ",\"sd_total_bytes\":%" PRIu64 ",\"sd_free_bytes\":%" PRIu64,
           total, freeb);
   fputs(",\"default_id\":", fp);
-  json_escape_print(fp, menu.items[def].id);
+  json_escape_print(fp, def >= 0 && def < menu.n ? menu.items[def].id
+                                                 : MENU_BOOT_THINGY_ID);
   fputs(",\"apps\":[", fp);
   for (int i = 0; i < menu.n; i++) {
     if (i)
@@ -1572,6 +1573,8 @@ static void handle_default(int fd, struct io *io, int has_len,
     return;
   }
   menu_load(&menu, g_card);
+  if (strcmp(id, MENU_BOOT_THINGY_ID) == 0)
+    found = 1;
   for (int i = 0; i < menu.n; i++) {
     if (strcmp(menu.items[i].id, id) == 0)
       found = 1;

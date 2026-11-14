@@ -1,6 +1,7 @@
 import { bootNow, postDefault, removeApp } from "./api.js";
 
-/* Same value as MENU_BOOT_THINGY_ID in inc/menu.h. The device menu never lists it. */
+/* Same value as MENU_BOOT_THINGY_ID in inc/menu.h. The device menu never lists
+   it as an app, but it can be the default: then power-on opens the menu. */
 const BOOT_THINGY_ID = "boot-thingy";
 
 export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
@@ -9,7 +10,7 @@ export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
   appsEl.textContent = "";
   hdrDefault.textContent = "Default: " + (defaultId || "stock");
   hdrDefault.className = "badge ok";
-  appsEl.appendChild(bootThingyRow(toast));
+  appsEl.appendChild(bootThingyRow(defaultId, toast, refresh));
   for (const app of apps) {
     const row = document.createElement("div");
     row.className = "app";
@@ -75,7 +76,7 @@ export function renderApps(apps, defaultId, { toast, refresh, onEdit }) {
   }
 }
 
-function bootThingyRow(toast) {
+function bootThingyRow(defaultId, toast, refresh) {
   const row = document.createElement("div");
   row.className = "app";
 
@@ -95,13 +96,31 @@ function bootThingyRow(toast) {
   const title = document.createElement("strong");
   title.textContent = app.title;
   info.appendChild(title);
+  if (defaultId === BOOT_THINGY_ID) {
+    const mark = document.createElement("span");
+    mark.className = "badge ok";
+    mark.textContent = "Default";
+    info.appendChild(mark);
+  }
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent = "Opens the menu on the MPC";
   info.appendChild(meta);
   main.appendChild(info);
 
+  const actions = document.createElement("div");
+  actions.className = "row";
+  if (defaultId !== BOOT_THINGY_ID) {
+    const setBtn = document.createElement("button");
+    setBtn.className = "btn secondary sm";
+    setBtn.type = "button";
+    setBtn.textContent = "Set default";
+    setBtn.addEventListener("click", () => changeDefault(app, toast, refresh));
+    actions.appendChild(setBtn);
+  }
+
   row.appendChild(main);
+  row.appendChild(actions);
   return row;
 }
 
@@ -125,7 +144,8 @@ async function onBootNow(app, toast, btn) {
 async function changeDefault(app, toast, refresh) {
   try {
     await postDefault(app.id);
-    toast(app.title + " starts on the next boot if SHIFT is not held.");
+    if (app.id === BOOT_THINGY_ID) toast("The menu opens on the next boot.");
+    else toast(app.title + " starts on the next boot if SHIFT is not held.");
     await refresh();
   } catch (e) {
     toast(e.message);

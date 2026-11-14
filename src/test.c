@@ -4,6 +4,7 @@
 #include "boot_ui.h"
 #include "file_ops.h"
 #include "format_sd.h"
+#include "icon.h"
 #include "input.h"
 #include "menu.h"
 #include "png.h"
@@ -140,6 +141,214 @@ int main(void) {
   assert(menu_default_index(&m, dir) == 0);
   assert(menu_default_index(NULL, dir) == 0);
 
+  /* Tile pictures. A 4x4 solid #123456 PNG. */
+  static const unsigned char tile_png[] = {
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+      0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04,
+      0x08, 0x06, 0x00, 0x00, 0x00, 0xa9, 0xf1, 0x9e, 0x7e, 0x00, 0x00, 0x00,
+      0x12, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x10, 0x32, 0x09, 0xfb,
+      0x8f, 0x8c, 0x19, 0x48, 0x17, 0x00, 0x00, 0x52, 0x89, 0x19, 0xb1, 0x95,
+      0x3a, 0x06, 0x50, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+      0x42, 0x60, 0x82};
+  {
+    /* No PNG anywhere: every row draws a generated tile. */
+    assert(m.items[0].icon[0] == 0);
+    assert(m.items[1].icon[0] == 0);
+    assert(m.items[2].icon[0] == 0);
+
+    /* icon.png inside the app folder. */
+    char icon_path[512];
+    snprintf(icon_path, sizeof icon_path, "%s/icon.png", lab);
+    FILE *f = fopen(icon_path, "wb");
+    assert(f);
+    assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+    fclose(f);
+    /* <name>.png beside <name>.entry. */
+    char snake_png[512];
+    snprintf(snake_png, sizeof snake_png,
+             "%s/autorun/boot-menu/30-snake.png", dir);
+    f = fopen(snake_png, "wb");
+    assert(f);
+    assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+    fclose(f);
+    assert(menu_load(&m, dir) == 3);
+    assert(strcmp(m.items[1].icon, icon_path) == 0);
+    assert(strcmp(m.items[2].icon, snake_png) == 0);
+
+    /* Without icon.png, the package's launch screen is the tile. icon.png
+       wins when both exist. */
+    char splash[512];
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab/autorun", dir);
+    mkdir_p(path);
+    snprintf(splash, sizeof splash,
+             "%s/autorun/apps/20-lab/autorun/splash-screen.png", dir);
+    f = fopen(splash, "wb");
+    assert(f);
+    assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+    fclose(f);
+    assert(menu_load(&m, dir) == 3);
+    assert(strcmp(m.items[1].icon, icon_path) == 0);
+    unlink(icon_path);
+    assert(menu_load(&m, dir) == 3);
+    assert(strcmp(m.items[1].icon, splash) == 0);
+    unlink(splash);
+    snprintf(splash, sizeof splash, "%s/autorun/apps/20-lab/splash-screen.png",
+             dir);
+    f = fopen(splash, "wb");
+    assert(f);
+    assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+    fclose(f);
+    assert(menu_load(&m, dir) == 3);
+    assert(strcmp(m.items[1].icon, splash) == 0);
+    unlink(splash);
+    f = fopen(icon_path, "wb");
+    assert(f);
+    assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+    fclose(f);
+    assert(menu_load(&m, dir) == 3);
+    assert(strcmp(m.items[1].icon, icon_path) == 0);
+
+    /* Launch screens in other formats. A binary PPM is read by its header;
+       a headerless 320x240 XRGB dump by its size. */
+    {
+      char ppm_path[512], raw_path[512], deep[512];
+      snprintf(path, sizeof path, "%s/autorun/apps/20-lab/autorun", dir);
+      mkdir_p(path);
+      snprintf(ppm_path, sizeof ppm_path,
+               "%s/autorun/apps/20-lab/autorun/splash1.ppm", dir);
+      f = fopen(ppm_path, "wb");
+      assert(f);
+      fputs("P6\n2 2\n255\n", f);
+      for (int i = 0; i < 4; i++)
+        assert(fwrite("\x12\x34\x56", 1, 3, f) == 3);
+      fclose(f);
+      static uint32_t tile2[BOOT_ICON_PX * BOOT_ICON_PX];
+      assert(icon_load(ppm_path, tile2, BOOT_ICON_PX) == 0);
+      assert(tile2[0] == 0xff123456);
+
+      snprintf(raw_path, sizeof raw_path,
+               "%s/autorun/apps/20-lab/autorun/qol-splash.raw", dir);
+      f = fopen(raw_path, "wb");
+      assert(f);
+      for (int i = 0; i < 320 * 240; i++)
+        assert(fwrite("\x56\x34\x12\x00", 1, 4, f) == 4); /* B G R X */
+      fclose(f);
+      assert(icon_load(raw_path, tile2, BOOT_ICON_PX) == 0);
+      assert((tile2[0] >> 24) == 0);               /* letterbox bar */
+      assert(tile2[6 * BOOT_ICON_PX] == 0xff123456); /* picture */
+
+      /* A wrong-size .raw is not a launch picture. */
+      snprintf(path, sizeof path, "%s/autorun/apps/20-lab/autorun/a-splash.raw",
+               dir);
+      write_file(path, "short");
+
+      /* With no icon.png: splash-screen.png is not there, so the sorted
+         scan of autorun/ picks qol-splash.raw before splash1.ppm. */
+      unlink(icon_path);
+      assert(menu_load(&m, dir) == 3);
+      assert(strcmp(m.items[1].icon, raw_path) == 0);
+      unlink(raw_path);
+      assert(menu_load(&m, dir) == 3);
+      assert(strcmp(m.items[1].icon, ppm_path) == 0);
+      /* A shallower picture wins over a deeper one. */
+      snprintf(path, sizeof path, "%s/autorun/apps/20-lab/my-splash.png", dir);
+      f = fopen(path, "wb");
+      assert(f);
+      assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+      fclose(f);
+      assert(menu_load(&m, dir) == 3);
+      assert(strcmp(m.items[1].icon, path) == 0);
+      unlink(path);
+      unlink(ppm_path);
+      snprintf(path, sizeof path, "%s/autorun/apps/20-lab/autorun/a-splash.raw",
+               dir);
+      unlink(path);
+      assert(menu_load(&m, dir) == 3);
+      assert(m.items[1].icon[0] == 0);
+
+      /* A card package: dirs= names card-root folders, searched three deep. */
+      snprintf(path, sizeof path, "%s/autorun/boot-menu/45-grid.entry", dir);
+      write_file(path, "title=Grid\nrun=Grid/start.sh\ncard=1\ndirs=Grid\n");
+      snprintf(path, sizeof path, "%s/Grid/releases/abc", dir);
+      mkdir_p(path);
+      snprintf(deep, sizeof deep, "%s/Grid/releases/abc/splash.png", dir);
+      f = fopen(deep, "wb");
+      assert(f);
+      assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+      fclose(f);
+      assert(menu_load(&m, dir) == 4);
+      assert(strcmp(m.items[3].title, "Grid") == 0);
+      assert(strcmp(m.items[3].icon, deep) == 0);
+      snprintf(path, sizeof path, "%s/autorun/boot-menu/45-grid.entry", dir);
+      unlink(path);
+      unlink(deep);
+      assert(menu_load(&m, dir) == 3);
+
+      f = fopen(icon_path, "wb");
+      assert(f);
+      assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+      fclose(f);
+      assert(menu_load(&m, dir) == 3);
+      assert(strcmp(m.items[1].icon, icon_path) == 0);
+    }
+
+    /* A wide picture is fitted: full width, centered, transparent bars. */
+    {
+      static uint32_t fit[BOOT_ICON_PX * BOOT_ICON_PX];
+      assert(icon_load("splash-screen.png", fit, BOOT_ICON_PX) == 0);
+      assert((fit[0] >> 24) == 0);                                 /* bar */
+      assert((fit[(BOOT_ICON_PX - 1) * BOOT_ICON_PX] >> 24) == 0); /* bar */
+      assert((fit[6 * BOOT_ICON_PX] >> 24) == 255);  /* 48x36 picture */
+      assert((fit[41 * BOOT_ICON_PX + 47] >> 24) == 255);
+      assert((fit[5 * BOOT_ICON_PX] >> 24) == 0);
+      assert((fit[42 * BOOT_ICON_PX] >> 24) == 0);
+    }
+
+    /* icon= names a file relative to the app folder. A missing file falls
+       back to icon.png. */
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab/boot.entry", dir);
+    write_file(path,
+               "title=Lab firmware\nrun=mpcfw\nargs=--demo one\nicon=art/x.png\n");
+    assert(menu_load(&m, dir) == 3);
+    assert(strcmp(m.items[1].icon, icon_path) == 0);
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab/art", dir);
+    mkdir_p(path);
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab/art/x.png", dir);
+    f = fopen(path, "wb");
+    assert(f);
+    assert(fwrite(tile_png, 1, sizeof tile_png, f) == sizeof tile_png);
+    fclose(f);
+    assert(menu_load(&m, dir) == 3);
+    assert(strcmp(m.items[1].icon, path) == 0);
+    unlink(path);
+    snprintf(path, sizeof path, "%s/autorun/apps/20-lab/boot.entry", dir);
+    write_file(path, "title=Lab firmware\nrun=mpcfw\nargs=--demo one\n");
+    assert(menu_load(&m, dir) == 3);
+    assert(strcmp(m.items[1].icon, icon_path) == 0);
+
+    /* Decoding fills the square with the picture, straight alpha. */
+    static uint32_t tile[BOOT_ICON_PX * BOOT_ICON_PX];
+    assert(icon_load(icon_path, tile, BOOT_ICON_PX) == 0);
+    assert(tile[0] == 0xff123456);
+    assert(tile[BOOT_ICON_PX * BOOT_ICON_PX - 1] == 0xff123456);
+    assert(icon_load(path, tile, BOOT_ICON_PX) != 0); /* boot.entry is not a PNG */
+    assert(icon_load("/no/such/icon.png", tile, BOOT_ICON_PX) != 0);
+    assert(icon_load(NULL, tile, BOOT_ICON_PX) != 0);
+
+    /* Blit composites alpha over the background. */
+    static uint32_t fb[UI_W * UI_H];
+    struct ui blit_ui = {.px = fb};
+    uint32_t half[4] = {0x80ff0000, 0x00ff0000, 0xff00ff00, 0x80ff0000};
+    ui_clear(&blit_ui, 0x000000);
+    icon_blit(&blit_ui, 0, 0, half, 2, 0x000000);
+    assert(fb[0] == 0x800000);
+    assert(fb[1] == 0x000000);
+    assert(fb[UI_W] == 0x00ff00);
+    /* Off-screen pixels are skipped. */
+    icon_blit(&blit_ui, UI_W - 1, UI_H - 1, half, 2, 0x000000);
+    assert(fb[UI_W * UI_H - 1] == 0x800000);
+  }
+
   /* card package entry: card=1 and dirs= are parsed and cleaned up */
   snprintf(path, sizeof path, "%s/autorun/boot-menu/40-card.entry", dir);
   write_file(path, "title=Card\nrun=WaveGrid/start.sh\ncard=1\ndirs=WaveGrid\n");
@@ -197,6 +406,12 @@ int main(void) {
   struct menu empty;
   assert(menu_load(&empty, NULL) == 1 && empty.items[0].stock);
   assert(strcmp(empty.items[0].id, "stock") == 0);
+  /* The menu itself can be the default. */
+  assert(menu_set_default(dir, MENU_BOOT_THINGY_ID) == 0);
+  assert(menu_default_index(&m, dir) == MENU_DEFAULT_BOOT_THINGY);
+  assert(menu_set_default(dir, "stock") == 0);
+  assert(menu_default_index(&m, dir) == 0);
+
   assert(menu_default_index(&empty, NULL) == 0);
   assert(menu_load(&empty, "/no/such/boot-menu") == 1 && empty.items[0].stock);
   assert(menu_default_index(&empty, "/no/such/boot-menu") == 0);
@@ -225,15 +440,52 @@ int main(void) {
   write_file(path, "  blue\n");
   assert(theme_load(dir) == 1);
 
+  /* Apps view preference. The list is the default. */
+  assert(menu_view_load(dir) == MENU_VIEW_LIST);
+  assert(menu_view_load(NULL) == MENU_VIEW_LIST);
+  assert(menu_view_save(dir, MENU_VIEW_GRID) == 0);
+  assert(menu_view_load(dir) == MENU_VIEW_GRID);
+  assert(menu_view_save(dir, 7) != 0);
+  assert(menu_view_save(NULL, MENU_VIEW_LIST) != 0);
+  snprintf(path, sizeof path, "%s/autorun/system/boot-view", dir);
+  write_file(path, "nope\n");
+  assert(menu_view_load(dir) == MENU_VIEW_LIST);
+  assert(menu_view_save(dir, MENU_VIEW_LIST) == 0);
+  assert(menu_view_load(dir) == MENU_VIEW_LIST);
+
   static uint32_t px[UI_W * UI_H];
   struct ui view = {.px = px};
   struct boot_ui boot;
   boot_ui_init(&boot, &m, 0, 0);
   assert(boot.apps_ls.cursor == 0);
+  assert(boot.view == MENU_VIEW_LIST); /* the list is the default view */
   struct input in;
   input_begin(&in, 0);
   boot_frame(&view, &in, &boot);
   assert(boot.screen == BOOT_SCREEN_APPS);
+
+  /* List view: row 0 reads "Stock (default)" on the current-row fill at
+     list y 76 with 20px rows, and no tile picture is drawn. */
+  {
+    static uint32_t ref_px[UI_W * UI_H];
+    struct ui ref = {.px = ref_px};
+    ui_clear(&ref, theme_at(0)->bg);
+    struct ui_paint bar = {.fill_set = 1, .fill = theme_at(0)->bar};
+    ui_box(&ref, 8, 76, 304, 20, bar);
+    ui_text(&ref, 16, 80, "Stock (default)", theme_at(0)->text, 1);
+    for (int y = 80; y < 92; y++)
+      for (int x = 16; x < 16 + 15 * 6; x++) /* 6px glyphs */
+        assert(px[y * UI_W + x] == ref_px[y * UI_W + x]);
+    int cell_w = 304 / 4;
+    int lab_x = 8 + 1 * cell_w + (cell_w - BOOT_ICON_PX) / 2;
+    assert(px[(72 + 4 + 10) * UI_W + lab_x + 10] != 0x123456);
+  }
+
+  /* The rest of the apps-screen checks use the grid. */
+  boot_ui_set_view(&boot, MENU_VIEW_GRID);
+  assert(boot.view == MENU_VIEW_GRID);
+  input_begin(&in, 0);
+  boot_frame(&view, &in, &boot);
 
   /* Main screen header shows "mpc-boot-thingy  |  v" APP_VERSION at (12, 40) */
   {
@@ -247,6 +499,29 @@ int main(void) {
         assert(px[y * UI_W + x] == ref_px[y * UI_W + x]);
       }
     }
+  }
+
+  /* The apps screen is a grid of tiles, four to a row, from y 72. Lab (row 1)
+     draws its icon.png; Stock and Snake draw generated tiles. */
+  {
+    int cell_w = 304 / 4;
+    int lab_x = 8 + 1 * cell_w + (cell_w - BOOT_ICON_PX) / 2;
+    int tile_y = 72 + 4;
+    assert(px[(tile_y + 10) * UI_W + lab_x + 10] == 0x123456);
+    assert(px[(tile_y + BOOT_ICON_PX - 1) * UI_W + lab_x + BOOT_ICON_PX - 1] ==
+           0x123456);
+    assert(boot.icons[1].ok);
+    assert(strcmp(boot.icons[1].path, m.items[1].icon) == 0);
+    /* Snake has a PNG beside its entry file too. */
+    int snake_x = 8 + 2 * cell_w + (cell_w - BOOT_ICON_PX) / 2;
+    assert(px[(tile_y + 10) * UI_W + snake_x + 10] == 0x123456);
+    /* Stock's tile is drawn from theme colors, not the background. */
+    int stock_x = 8 + (cell_w - BOOT_ICON_PX) / 2;
+    assert(px[(tile_y + 1) * UI_W + stock_x + 1] == theme_at(0)->box);
+    assert(!boot.icons[0].ok);
+    /* The first row is selected and framed with the highlight color. */
+    assert(px[72 * UI_W + 8] == theme_at(0)->hl);
+    assert(px[(72 + 2) * UI_W + 8 + 2] == theme_at(0)->bar);
   }
 
   /* Scrolling up at the top row clamps instead of wrapping. */
@@ -434,6 +709,55 @@ int main(void) {
   assert(strcmp(boot.action_id, "entry:30-snake.entry") == 0);
   assert(boot.screen == BOOT_SCREEN_SETTINGS);
 
+  /* The row after the last app is the menu itself. Choosing it saves
+     MENU_BOOT_THINGY_ID and no app carries the default mark. */
+  boot.action = BOOT_ACT_NONE;
+  input_begin(&in, 0);
+  in.encoder_press = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.screen == BOOT_SCREEN_DEFAULT);
+  assert(boot.default_ls.cursor == 2); /* opens on the current default */
+  input_begin(&in, 0);
+  in.encoder = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.default_ls.cursor == m.n);
+  input_begin(&in, 0);
+  in.encoder = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.default_ls.cursor == m.n); /* clamps at the menu row */
+  input_begin(&in, 0);
+  in.encoder_press = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.action == BOOT_ACT_SET_DEFAULT);
+  assert(boot.action_index == MENU_DEFAULT_BOOT_THINGY);
+  assert(boot.default_index == MENU_DEFAULT_BOOT_THINGY);
+  assert(strcmp(boot.action_id, MENU_BOOT_THINGY_ID) == 0);
+  assert(boot.screen == BOOT_SCREEN_SETTINGS);
+  /* Reopening the list lands on the menu row. */
+  boot.action = BOOT_ACT_NONE;
+  input_begin(&in, 0);
+  in.encoder_press = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.screen == BOOT_SCREEN_DEFAULT);
+  assert(boot.default_ls.cursor == m.n);
+  /* Back to an app default so the rest of the test is unchanged. */
+  input_begin(&in, 0);
+  in.encoder = -1;
+  boot_frame(&view, &in, &boot);
+  input_begin(&in, 0);
+  in.encoder_press = 1;
+  boot_frame(&view, &in, &boot);
+  assert(strcmp(boot.action_id, "entry:30-snake.entry") == 0);
+  assert(boot.default_index == 2);
+  assert(boot.screen == BOOT_SCREEN_SETTINGS);
+  /* A fresh UI with the menu as default puts the app cursor on Stock. */
+  {
+    struct boot_ui fresh;
+    boot_ui_init(&fresh, &m, 0, MENU_DEFAULT_BOOT_THINGY);
+    assert(fresh.apps_ls.cursor == 0);
+    assert(fresh.default_ls.cursor == m.n);
+  }
+
   /* Test USB storage from the dedicated USB screen. */
   ui_usb_sd_set_mock(1, 0);
   boot.action = BOOT_ACT_NONE;
@@ -546,6 +870,28 @@ int main(void) {
   in.encoder = 2;
   boot_frame(&view, &in, &boot);
   assert(boot.settings_ls.cursor == 2);
+  /* Row 2 toggles the apps view and asks to save it. The UI was
+     re-initialized above, so it is back on the list. */
+  assert(boot.view == MENU_VIEW_LIST);
+  input_begin(&in, 0);
+  in.encoder_press = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.action == BOOT_ACT_SAVE_VIEW);
+  assert(boot.action_index == MENU_VIEW_GRID);
+  assert(boot.view == MENU_VIEW_GRID);
+  assert(boot.screen == BOOT_SCREEN_SETTINGS);
+  boot.action = BOOT_ACT_NONE;
+  input_begin(&in, 0);
+  in.encoder_press = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.action == BOOT_ACT_SAVE_VIEW);
+  assert(boot.action_index == MENU_VIEW_LIST);
+  assert(boot.view == MENU_VIEW_LIST);
+  boot.action = BOOT_ACT_NONE;
+  input_begin(&in, 0);
+  in.encoder = 1;
+  boot_frame(&view, &in, &boot);
+  assert(boot.settings_ls.cursor == 3);
   input_begin(&in, 0);
   in.encoder_press = 1;
   boot_frame(&view, &in, &boot);
@@ -1340,7 +1686,7 @@ int main(void) {
 
   /* Navigate Settings -> Format SD Card */
   ui_fmt.screen = BOOT_SCREEN_SETTINGS;
-  ui_fmt.settings_ls.cursor = 3;
+  ui_fmt.settings_ls.cursor = 4;
   struct input in_press = {.encoder_press = 1};
   struct ui ui_test = {.px = px};
   boot_frame(&ui_test, &in_press, &ui_fmt);
