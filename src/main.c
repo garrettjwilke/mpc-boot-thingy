@@ -1273,12 +1273,29 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
     }
   }
   int st = 0;
-  while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {
+  int testapp_handoff = 0;
+  for (;;) {
+    pid_t wr = waitpid(pid, &st, WNOHANG);
+    if (wr == pid)
+      break;
+    if (wr < 0 && errno != EINTR)
+      break;
     if (g_reload_requested || g_boot_now_requested) {
       kill(-pid, SIGTERM);
       usleep(20000);
       kill(-pid, SIGKILL);
+      waitpid(pid, &st, 0);
+      break;
     }
+    if (testapp_request_pending()) {
+      kill(-pid, SIGTERM);
+      usleep(20000);
+      kill(-pid, SIGKILL);
+      waitpid(pid, &st, 0);
+      testapp_handoff = 1;
+      break;
+    }
+    usleep(25 * 1000);
   }
   g_running_child_pid = -1;
   unlink("/run/mpc-boot-app.pid");
@@ -1286,16 +1303,25 @@ static int launch(struct surface *midi, struct screen *scr, const char *card,
   while (waitpid(-pid, NULL, WNOHANG) > 0) {
   }
 
+  if (!testapp_handoff && testapp_request_pending())
+    testapp_handoff = 1;
+
   int code = -1;
   if (WIFEXITED(st))
     code = WEXITSTATUS(st);
   else if (WIFSIGNALED(st))
     code = 128 + WTERMSIG(st);
-  if (code != 0) {
+  if (code != 0 && !testapp_handoff) {
     app_log("exit %d\n", code);
     sd_check_repair(card);
   }
   flush_and_drop_caches(card);
+  if (testapp_handoff) {
+    int handed = handoff_testapp(midi, scr);
+    if (handed < 0)
+      return 1;
+    return 2;
+  }
   return 0;
 }
 
@@ -1638,6 +1664,11 @@ static void install_testapp_wrapper(void) {
       "  [ -n \"$pgid\" ] && kill -9 \"-$pgid\" 2>/dev/null || true\n"
       "fi\n"
       "killall -9 \"MPC Sample\" 2>/dev/null || true\n"
+      "if [ -f \"$PIDFILE\" ]; then\n"
+      "  bpid=$(cat \"$PIDFILE\" 2>/dev/null || true)\n"
+      "  [ -n \"$bpid\" ] && kill -9 \"$bpid\" 2>/dev/null || true\n"
+      "fi\n"
+      "killall -9 mpc-boot-thingy 2>/dev/null || true\n"
       "exec \"$REAL\" \"$@\"\n";
   FILE *out;
   if (access(src, F_OK) != 0)
@@ -1816,9 +1847,9 @@ int main(int argc, char **argv) {
           free(front);
           return 1;
         }
-        parser = (struct parser){0};
-        dev = (struct input_dev){0};
       }
+      parser = (struct parser){0};
+      dev = (struct input_dev){0};
     }
   } else if (!held && def != MENU_DEFAULT_BOOT_THINGY && !g_reload_requested &&
              !g_boot_now_requested) {
@@ -1850,9 +1881,9 @@ int main(int argc, char **argv) {
         free(front);
         return 1;
       }
-      parser = (struct parser){0};
-      dev = (struct input_dev){0};
     }
+    parser = (struct parser){0};
+    dev = (struct input_dev){0};
   }
 
   struct boot_ui ui;
@@ -1932,9 +1963,9 @@ int main(int argc, char **argv) {
           if (ran != 2) {
             if (reopen_after_app(&midi, &scr) != 0)
               break;
-            parser = (struct parser){0};
-            dev = (struct input_dev){0};
           }
+          parser = (struct parser){0};
+          dev = (struct input_dev){0};
           flush_and_drop_caches(card);
           menu_load(&menu, card);
           npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
@@ -1993,9 +2024,9 @@ int main(int argc, char **argv) {
       if (ran != 2) {
         if (reopen_after_app(&midi, &scr) != 0)
           break;
-        parser = (struct parser){0};
-        dev = (struct input_dev){0};
       }
+      parser = (struct parser){0};
+      dev = (struct input_dev){0};
       flush_and_drop_caches(card);
       menu_load(&menu, card);
       npatches = boot_edit_list(card, catalog, BOOT_PATCH_MAX);
