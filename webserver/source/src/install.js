@@ -206,10 +206,14 @@ export function bindInstall({ toast, refresh }) {
     setBusy(true);
     showError("");
     try {
-      await installProgram({ title, args, name, file });
+      const result = await installProgram({ title, args, name, file });
       setBusy(false);
       close();
-      toast("Installed " + title + ".");
+      if (result && result.installer) {
+        toast("Started boot thingy installer.");
+      } else {
+        toast("Installed " + title + ".");
+      }
       await refresh();
     } catch (e) {
       setBusy(false);

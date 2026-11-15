@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static void set_err(char *err, size_t err_n, const char *msg) {
@@ -436,6 +437,13 @@ int app_install_pending_zips(const char *card,
       free(names[i]);
       continue;
     }
+    if (app_install_is_boot_installer_zip(zip_path)) {
+      /* Boot-thingy installer zips are handled by the installer, not the
+         app installer. Do not install them to the SD card. */
+      unlink(zip_path);
+      free(names[i]);
+      continue;
+    }
     title_from_zip_name(names[i], title, sizeof title);
     if (app_install_slug(title, slug, sizeof slug) != 0)
       snprintf(slug, sizeof slug, "app");
@@ -465,5 +473,186 @@ int app_install_pending_zips(const char *card,
   }
   free(names);
   return 0;
+}
+
+int app_install_is_boot_installer_zip(const char *zip_path) {
+  /* alias entry */
+  const char *base;
+  char lower[256];
+  size_t i;
+  if (!zip_path || !zip_path[0])
+    return 0;
+
+  base = strrchr(zip_path, '/');
+  base = base ? base + 1 : zip_path;
+  i = 0;
+  while (base[i] && i + 1 < sizeof lower) {
+    unsigned char c = (unsigned char)base[i];
+    if (c >= 'A' && c <= 'Z')
+      c = (unsigned char)(c - 'A' + 'a');
+    lower[i++] = (char)c;
+  }
+  lower[i] = 0;
+  if (strstr(lower, "mpc-boot-thingy") != NULL)
+    return 1;
+
+  {
+    FILE *f = fopen(zip_path, "rb");
+    unsigned char chunk[8192];
+    unsigned char tail[64];
+    size_t tail_n = 0;
+    const char *needle = "usb_installer_testapp";
+    size_t needle_n = strlen(needle);
+    if (f) {
+      for (;;) {
+        size_t got = fread(chunk, 1, sizeof chunk, f);
+        /* search across chunk + tail */
+        unsigned char buf[sizeof chunk + 64];
+        size_t buf_n = tail_n + got;
+        if (buf_n > sizeof buf)
+          buf_n = sizeof buf;
+        memcpy(buf, tail, tail_n);
+        if (got > 0)
+          memcpy(buf + tail_n, chunk, got > sizeof chunk ? sizeof chunk : got);
+        /* simple search */
+        for (size_t j = 0; j + needle_n <= buf_n; j++) {
+          if (memcmp(buf + j, needle, needle_n) == 0) {
+            fclose(f);
+            return 1;
+          }
+        }
+        if (got == 0)
+          break;
+        /* keep tail */
+        if (buf_n >= needle_n - 1) {
+          size_t keep = needle_n - 1;
+          if (keep > sizeof tail)
+            keep = sizeof tail;
+          if (buf_n >= keep)
+            memcpy(tail, buf + buf_n - keep, keep);
+          else
+            memcpy(tail, buf, buf_n);
+          tail_n = buf_n < keep ? buf_n : keep;
+        } else {
+          memcpy(tail, buf, buf_n);
+          tail_n = buf_n;
+        }
+        if (got < sizeof chunk)
+          break;
+      }
+      fclose(f);
+    }
+  }
+  return 0;
+}
+
+static int run_unzip(const char *zip_path, const char *dest) {
+  pid_t pid = fork();
+  if (pid < 0)
+    return -1;
+  if (pid == 0) {
+    char *const argv[] = {"unzip", "-q", "-o", (char *)zip_path, "-d",
+                          (char *)dest, NULL};
+    execvp(argv[0], argv);
+    _exit(127);
+  }
+  int st = 0;
+  while (waitpid(pid, &st, 0) < 0) {
+    if (errno != EINTR)
+      return -1;
+  }
+  return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+int app_install_run_boot_installer_zip(const char *zip_path) {
+  char tmpdir[PATH_MAX];
+  char binary[PATH_MAX];
+  struct stat st;
+  pid_t pid;
+
+  if (!app_install_is_boot_installer_zip(zip_path))
+    return -1;
+
+  if (snprintf(tmpdir, sizeof tmpdir, "/tmp/mpc-boot-installer-XXXXXX") >=
+      (int)sizeof tmpdir)
+    return -1;
+  if (!mkdtemp(tmpdir))
+    return -1;
+
+  if (run_unzip(zip_path, tmpdir) != 0)
+    return -1;
+
+  if (snprintf(binary, sizeof binary, "%s/usb_installer_testapp", tmpdir) >=
+      (int)sizeof binary)
+    return -1;
+  if (stat(binary, &st) != 0)
+    return -1;
+  chmod(binary, 0755);
+
+  pid = fork();
+  if (pid < 0)
+    return -1;
+  if (pid == 0) {
+    setsid();
+    if (chdir(tmpdir) != 0)
+      _exit(127);
+    execl("./usb_installer_testapp", "./usb_installer_testapp", (char *)NULL);
+    _exit(127);
+  }
+  return 0;
+}
+
+int app_install_run_staged_boot_installer(const char *card) {
+  char apps[PATH_MAX];
+  DIR *d;
+  struct dirent *de;
+  if (!card || !card[0])
+    return -1;
+  if (snprintf(apps, sizeof apps, "%s/autorun/apps", card) >= (int)sizeof apps)
+    return -1;
+  d = opendir(apps);
+  if (!d)
+    return -1;
+  while ((de = readdir(d)) != NULL) {
+    char full[PATH_MAX];
+    struct stat st;
+    size_t n;
+    if (de->d_name[0] == '.')
+      continue;
+    n = strlen(de->d_name);
+    if (n <= 4)
+      continue;
+    {
+      const char *ext = de->d_name + n - 4;
+      if (!(ext[0] == '.' && (ext[1] == 'z' || ext[1] == 'Z') &&
+            (ext[2] == 'i' || ext[2] == 'I') &&
+            (ext[3] == 'p' || ext[3] == 'P')))
+        continue;
+    }
+    if (snprintf(full, sizeof full, "%s/%s", apps, de->d_name) >=
+        (int)sizeof full)
+      continue;
+    if (lstat(full, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode))
+      continue;
+    if (app_install_is_boot_installer_zip(full)) {
+      int rc = app_install_run_boot_installer_zip(full);
+      closedir(d);
+      return rc;
+    }
+  }
+  closedir(d);
+  return -1;
+}
+
+int app_install_is_boot_installer(const char *zip_path) {
+  return app_install_is_boot_installer_zip(zip_path);
+}
+
+int app_install_is_installer_zip(const char *zip_path) {
+  return app_install_is_boot_installer_zip(zip_path);
+}
+
+int app_install_is_boot_thingy_zip(const char *zip_path) {
+  return app_install_is_boot_installer_zip(zip_path);
 }
 

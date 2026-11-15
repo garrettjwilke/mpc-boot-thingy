@@ -38,3 +38,18 @@ int app_install_pending_zips(const char *card,
                              app_install_progress_fn progress, void *userdata,
                              struct app_install_summary *summary);
 
+/* Return 1 if zip_path is an mpc-boot-thingy installer package rather than an
+   ordinary app zip. */
+int app_install_is_boot_installer_zip(const char *zip_path);
+int app_install_is_boot_installer(const char *zip_path);
+int app_install_is_installer_zip(const char *zip_path);
+int app_install_is_boot_thingy_zip(const char *zip_path);
+
+/* Extract and launch the boot-thingy installer contained in zip_path.
+   Returns 0 after launching it in the background, -1 on failure. */
+int app_install_run_boot_installer_zip(const char *zip_path);
+
+/* If a boot-thingy installer zip is staged under card/autorun/apps, extract
+   and launch it. Returns 0 after launching, -1 if none or on failure. */
+int app_install_run_staged_boot_installer(const char *card);
+
