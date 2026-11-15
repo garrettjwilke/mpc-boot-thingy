@@ -1508,6 +1508,9 @@ static void install_pending_apps(const char *card, struct screen *scr,
     notice_out[0] = 0;
   if (!card || !card[0] || !has_autorun_dir(card))
     return;
+  if (app_install_run_staged_boot_installer(card) == 0) {
+    _exit(0);
+  }
   app_install_pending_zips(card, on_app_install_progress, &ctx, &sum);
   if (sum.installed > 0 || sum.failed > 0)
     flush_and_drop_caches(card);
@@ -2110,6 +2113,9 @@ int main(int argc, char **argv) {
                    collect_err[0] ? collect_err : "USB app import failed");
         } else {
           flush_and_drop_caches(card);
+          if (app_install_run_staged_boot_installer(card) == 0) {
+            _exit(0);
+          }
           install_pending_apps(card, &scr, back, front, &midi, theme,
                                install_notice, sizeof install_notice);
           if (!install_notice[0] && copied == 0)

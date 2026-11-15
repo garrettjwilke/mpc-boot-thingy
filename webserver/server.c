@@ -1339,6 +1339,18 @@ static void handle_upload(int fd, struct io *io, int has_len,
                  "could not store the program");
         return;
       }
+      if (app_install_is_boot_installer_zip(part)) {
+        if (app_install_run_boot_installer_zip(part) != 0) {
+          unlink(part);
+          send_err(fd, 500, "Internal Server Error",
+                   "could not start the boot thingy installer");
+          return;
+        }
+        unlink(part);
+        snprintf(resp, sizeof resp, "{\"ok\":true,\"installer\":true}\n");
+        send_json(fd, 200, "OK", resp);
+        return;
+      }
       irc = app_install_zip(g_card, part, slug, title, args, out_id,
                             sizeof out_id, err, sizeof err);
       unlink(part);

@@ -35,6 +35,10 @@ there are other enhancements this provides, but ehh...they're there... :)
    - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
    - lots of custom workflows and updated UI.
    - chord mode, key scale of sample, step sequencer update, search, resample fixes.
+* [RHYTHMER OS](https://github.com/jazzyrhythmer/mpc-sample-rhythmer-os/releases)
+   - VST3 synths
+   - built in kits
+   - acid GEN and Break performance
 * [GRIDZILLA](https://www.thesoundfactorynj.com/gridzilla)
    - modern daw-like sequencing UI/UX...super custom workflow.
 * [mpc-minimod](https://github.com/ioma8/mpc-minimod)
