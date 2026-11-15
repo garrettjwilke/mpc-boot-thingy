@@ -12,7 +12,7 @@ there are other enhancements this provides, but ehh...they're there... :)
 **how to install apps:**
 > make sure boot thingy is installed. You can install apps in a few ways:
 >
-> **Option 1: USB
+> **Option 1: USB**
 > plug in your MPC SAMPLE to your computer via USB
 > in the boot thingy menu, press the `B1` button and select "Install App"...it will mount an empty drive called `MPC-APPS` to your computer
 > drag and drop the app zip into the `MPC-APPS` directory and then press `Exit` on the MPC Sample.
