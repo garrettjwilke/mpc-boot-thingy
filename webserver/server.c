@@ -37,7 +37,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-#define MAX_UPLOAD (64u * 1024u * 1024u)
+#define MAX_UPLOAD (128u * 1024u * 1024u)
 #define WS_MAX (256u * 1024u)
 #define WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -2183,7 +2183,7 @@ static int read_request(struct io *io, char *method, char *uri,
     }
     if (v > MAX_UPLOAD) {
       send_err(io->fd, 413, "Payload Too Large",
-               "program is larger than 64 MiB");
+               "program is larger than 128 MiB");
       return -1;
     }
     *has_len = 1;
