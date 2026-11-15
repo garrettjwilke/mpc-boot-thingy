@@ -10,16 +10,21 @@ there are other enhancements this provides, but ehh...they're there... :)
 ## apps you can try now
 
 **how to install apps:**
-> make sure boot thingy is installed. You can install apps in two ways:
+> make sure boot thingy is installed. You can install apps in a few ways:
 >
-> **Option 1: SD card drag-and-drop (no web server needed)**
-> 1. copy your app `.zip` file(s) directly into `autorun/apps/` on the SD card (using an SD card reader or Boot Thingy's `USB storage (SD card)` mode).
-> 2. boot up your MPC (or exit USB storage / reload the menu) — Boot Thingy installs the `.zip` files automatically and removes them once installed.
+> **Option 1: USB
+> plug in your MPC SAMPLE to your computer via USB
+> in the boot thingy menu, press the `B1` button and select "Install App"...it will mount an empty drive called `MPC-APPS` to your computer
+> drag and drop the app zip into the `MPC-APPS` directory and then press `Exit` on the MPC Sample.
 >
 > **Option 2: Web tool (over USB)**
 > plug in your MPC Sample to your computer via USB and install your app from the boot thingy web tool:
 > - [http://mpc-sample.local:8080](http://mpc-sample.local:8080)
 > - [http://192.168.155.1:8080](http://192.168.155.1:8080)
+>
+> **Option 3: SD card drag-and-drop (no web server needed)**
+> 1. copy your app `.zip` file(s) directly into `autorun/apps/` on the SD card (using an SD card reader or Boot Thingy's `USB storage (SD card)` mode).
+> 2. boot up your MPC (or exit USB storage / reload the menu) — Boot Thingy installs the `.zip` files automatically and removes them once installed.
 
 * [melodee-sample](https://github.com/keremimo/melodee-sample)
    - 16 track groovebox
