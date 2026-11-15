@@ -50,7 +50,6 @@ there are other enhancements this provides, but ehh...they're there... :)
 * [Henry Skillz HS Tools](https://github.com/Holla-Back-Entertainment/henryskillz-mpc-sample-mod-kit)
    - SEQ desk with LUFS meters (momentary, short-term, integrated, peak hold)
    - key and BPM tags on the previewed sample in the browser
-   - runs on the stock app, no SampQOL needed. get `henryskillz-mpc-sample-hs-tools-boot-thingy.zip` from the [release](https://github.com/Holla-Back-Entertainment/henryskillz-mpc-sample-mod-kit/releases/tag/v0.7.1)
 * [MaiaOS](https://github.com/rosen-wav/MaiaOS---Mpc-Sample-CFW)
    - synth engines
    - multisamples
