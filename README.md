@@ -66,10 +66,6 @@ there are other enhancements this provides, but ehh...they're there... :)
    - guitar hero clone on your MPC Sample!
    - intuitive controls and great gameplay
    - crisp and smooth graphics
-* [RHYTHMER-OS](https://github.com/jazzyrhythmer/rhythmer-os)
-   - Melodee-derived full OS for MPC Sample
-   - native synth engines, Rhythmer Kit, generator, break tools
-   - ships external Rhythmer/ and Samples/ directories
 * [beat train](https://github.com/drose030/beat-train-mpc-sample)
    - drum/rhythm game for the mpc sample.
    - import your own music to play!
