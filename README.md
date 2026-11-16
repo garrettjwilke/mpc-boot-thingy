@@ -39,10 +39,11 @@ there are other enhancements this provides, but ehh...they're there... :)
    - step sequencer on pads, chords, typing names, per-pad EQ, Opto compressor, and more.
    - lots of custom workflows and updated UI.
    - chord mode, key scale of sample, step sequencer update, search, resample fixes.
-* [RHYTHMER OS](https://github.com/jazzyrhythmer/mpc-sample-rhythmer-os/releases)
-   - VST3 synths
-   - built in kits
-   - acid GEN and Break performance
+* [RHYTHMER OS](https://jazzyrhythmer.github.io/mpc-sample/)
+   - Groovebox OS for Jungle, Techno, House and IDM.
+   - 20 sound engines, including FM-106 pads, FMini-1 basses, Aphex synths and Sophie percussion.
+   - Rhythmer Kit with 16 independently assigned engine voices per track and 36 kit presets.
+   - Dedicated Acid Generator, recordable Break Manipulator performances and track FX.
 * [GRIDZILLA](https://www.thesoundfactorynj.com/gridzilla)
    - modern daw-like sequencing UI/UX...super custom workflow.
 * [mpc-minimod](https://github.com/ioma8/mpc-minimod)
