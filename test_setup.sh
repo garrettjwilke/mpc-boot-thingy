@@ -697,6 +697,13 @@ if [ -f "ignore/am-mod-r27r.zip" ]; then
   grep -q 'takeover=1' "$empty/autorun/apps/am-mod-r27r/boot.entry" || fail "am-mod-r27r missing takeover=1"
 fi
 
+if [ -f "ignore/MPC-Simple-1.0-Beta-1.zip" ]; then
+  ./setup.sh --SD "$empty" --add "ignore/MPC-Simple-1.0-Beta-1.zip" --title "MPC Simple" >/tmp/mpc-boot-out
+  grep -q 'Installed MPC Simple' /tmp/mpc-boot-out
+  grep -q 'dirs=MPC-Simple' "$empty/autorun/apps/mpc-simple/boot.entry" || fail "MPC Simple missing dirs=MPC-Simple"
+  test -f "$empty/MPC-Simple/Models/spleeter-4stems.mpcsnn" || fail "MPC-Simple Models missing"
+fi
+
 python3 - "$work/slip.zip" <<'PY'
 import sys, zipfile
 z = zipfile.ZipFile(sys.argv[1], "w")

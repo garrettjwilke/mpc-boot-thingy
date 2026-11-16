@@ -2005,6 +2005,11 @@ int main(void) {
         "    z.writestr('autorun/autorun.json', "
         "'{\"value0\":{\"scripts\":[{\"path\":\"autorun.sh\"}]}}')\n"
         "    z.writestr('autorun/autorun.sh', '#!/bin/sh\\necho bt\\n')\n"
+        "elif kind == 'mpcsimple':\n"
+        "    z.writestr('MPC-Simple/Models/spleeter-4stems.mpcsnn', 'model\\n')\n"
+        "    z.writestr('autorun/autorun.json', "
+        "'{\"value0\":{\"scripts\":[{\"path\":\"launcher.sh\"}]}}')\n"
+        "    z.writestr('autorun/launcher.sh', '#!/bin/sh\\necho ms\\n')\n"
         "z.close()\n");
     write_file(path, script);
 
@@ -2020,6 +2025,10 @@ int main(void) {
     snprintf(cmd, sizeof cmd, "python3 '%s/mkdrop.py' bt '%s'", dir, zpath);
     assert(system(cmd) == 0);
 
+    snprintf(zpath, sizeof zpath, "%s/MPC-Simple.zip", apps_dir);
+    snprintf(cmd, sizeof cmd, "python3 '%s/mkdrop.py' mpcsimple '%s'", dir, zpath);
+    assert(system(cmd) == 0);
+
     snprintf(zpath, sizeof zpath, "%s/._My Cool App.zip", apps_dir);
     write_file(zpath, "appledouble");
     snprintf(zpath, sizeof zpath, "%s/broken.zip", apps_dir);
@@ -2028,7 +2037,7 @@ int main(void) {
     write_file(zpath, "old failure");
 
     assert(app_install_pending_zips(card_zip, NULL, NULL, &sum) == 0);
-    assert(sum.installed == 3);
+    assert(sum.installed == 4);
     assert(sum.failed == 1);
     assert(strcmp(sum.last_failed_name, "broken.zip") == 0);
 
@@ -2037,6 +2046,8 @@ int main(void) {
     snprintf(path, sizeof path, "%s/Gridzilla - V1.zip", apps_dir);
     assert(access(path, F_OK) != 0);
     snprintf(path, sizeof path, "%s/bt.zip", apps_dir);
+    assert(access(path, F_OK) != 0);
+    snprintf(path, sizeof path, "%s/MPC-Simple.zip", apps_dir);
     assert(access(path, F_OK) != 0);
 
     snprintf(path, sizeof path, "%s/._My Cool App.zip", apps_dir);
@@ -2057,7 +2068,17 @@ int main(void) {
       assert(strstr(body, "takeover=1\n") != NULL);
       free(body);
     }
+    snprintf(path, sizeof path, "%s/mpc-simple/boot.entry", apps_dir);
+    {
+      char *body = read_all(path);
+      assert(strstr(body, "title=MPC-Simple\n") != NULL);
+      assert(strstr(body, "dirs=MPC-Simple\n") != NULL);
+      assert(strstr(body, "run=autorun/launcher.sh\n") != NULL);
+      free(body);
+    }
     snprintf(path, sizeof path, "%s/BeatTrain/Songs/song1.txt", card_zip);
+    assert(access(path, F_OK) == 0);
+    snprintf(path, sizeof path, "%s/MPC-Simple/Models/spleeter-4stems.mpcsnn", card_zip);
     assert(access(path, F_OK) == 0);
     snprintf(path, sizeof path, "%s/WaveGrid/start.sh", card_zip);
     assert(access(path, F_OK) == 0);
@@ -2073,7 +2094,7 @@ int main(void) {
     }
 
     struct menu zm;
-    assert(menu_load(&zm, card_zip) == 4);
+    assert(menu_load(&zm, card_zip) == 5);
 
     /* Dropping the same zip again updates in place cleanly */
     snprintf(zpath, sizeof zpath, "%s/My Cool App.zip", apps_dir);
@@ -2082,7 +2103,7 @@ int main(void) {
     assert(app_install_pending_zips(card_zip, NULL, NULL, &sum) == 0);
     assert(sum.installed == 1 && sum.failed == 0);
     assert(access(zpath, F_OK) != 0);
-    assert(menu_load(&zm, card_zip) == 4);
+    assert(menu_load(&zm, card_zip) == 5);
 
     /* USB App Drop UI flow & zip collection tests */
     {
@@ -2181,7 +2202,7 @@ int main(void) {
 
       assert(app_install_pending_zips(card_zip, NULL, NULL, &sum) == 0);
       assert(sum.installed == 1 && sum.failed == 0);
-      assert(menu_load(&zm, card_zip) == 5);
+      assert(menu_load(&zm, card_zip) == 6);
     }
   }
 
