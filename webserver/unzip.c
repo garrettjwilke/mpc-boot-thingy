@@ -12,9 +12,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define ZIP_MAX_BYTES (128u * 1024u * 1024u)
-#define ZIP_MAX_ENTRY (32u * 1024u * 1024u)
-#define ZIP_MAX_TOTAL (256u * 1024u * 1024u)
+#define ZIP_MAX_BYTES (512u * 1024u * 1024u)
+#define ZIP_MAX_ENTRY (512u * 1024u * 1024u)
+#define ZIP_MAX_TOTAL (1024u * 1024u * 1024u)
 #define ZIP_MAX_ENTRIES 4096
 #define HUFF_BITS 15
 
@@ -1022,7 +1022,8 @@ static int extract_sibling_dirs(const unsigned char *buf, size_t n,
         }
 
         if (!allow_all && strcasecmp(top, "BeatTrain") != 0 &&
-            strcasecmp(top, "Rhythmer") != 0 && strcasecmp(top, "Samples") != 0)
+            strcasecmp(top, "Rhythmer") != 0 && strcasecmp(top, "Samples") != 0 &&
+            strcasecmp(top, "MPC-Simple") != 0)
             continue;
 
         if (is_dir) {

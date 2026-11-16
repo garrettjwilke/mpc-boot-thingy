@@ -344,8 +344,8 @@ install_autorun_package() {
 import os, re, shutil, stat, sys, zipfile
 
 sd, src, dest, title = sys.argv[1:]
-CAP = 64 * 1024 * 1024
-ENTRY_CAP = 32 * 1024 * 1024
+CAP = 512 * 1024 * 1024
+ENTRY_CAP = 512 * 1024 * 1024
 
 def die(msg):
     sys.stderr.write("ERROR: %s\n" % msg)
@@ -636,7 +636,7 @@ def card_dirs_dir(wrapper, sd, allow_all=True):
     for entry in sorted(os.listdir(wrapper)):
         if entry == "autorun" or entry == "__MACOSX":
             continue
-        if not allow_all and entry.lower() != "beattrain":
+        if not allow_all and entry.lower() not in ("beattrain", "rhythmer", "samples", "mpc-simple"):
             continue
         full = os.path.join(wrapper, entry)
         if os.path.islink(full):
@@ -671,7 +671,7 @@ def card_dirs_zip(root, wrapper, sd, allow_all=True):
             if "/" not in rel and not is_dir:
                 continue
             top = rel.split("/")[0]
-            if not allow_all and top.lower() != "beattrain":
+            if not allow_all and top.lower() not in ("beattrain", "rhythmer", "samples", "mpc-simple"):
                 continue
             mode = (info.external_attr >> 16) & 0xFFFF
             if stat.S_ISLNK(mode):

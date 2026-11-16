@@ -26,6 +26,10 @@ there are other enhancements this provides, but ehh...they're there... :)
 > 1. copy your app `.zip` file(s) directly into `autorun/apps/` on the SD card (using an SD card reader or Boot Thingy's `USB storage (SD card)` mode).
 > 2. boot up your MPC (or exit USB storage / reload the menu) — Boot Thingy installs the `.zip` files automatically and removes them once installed.
 
+* [MPC-Simple](https://mpcsimple.com/#get)
+   - old school MPC workflow
+   - stem separation
+   - import project files from legacy MPCs
 * [melodee-sample](https://github.com/keremimo/melodee-sample)
    - 16 track groovebox
    - pads are tracks. tracks can be: drumkit/sample, VST, or MIDI track out.
