@@ -270,12 +270,18 @@ int app_install_zip(const char *card, const char *zip_path, const char *slug,
   }
 
   {
-    char mod_launcher[PATH_MAX];
+    char mod_launcher[PATH_MAX], stems_bin[PATH_MAX];
     int takeover = 0;
     if (snprintf(mod_launcher, sizeof mod_launcher, "%s/autorun/mod-launcher.sh",
                  stage) < (int)sizeof mod_launcher &&
         access(mod_launcher, F_OK) == 0) {
       takeover = 1;
+    }
+    if (snprintf(stems_bin, sizeof stems_bin,
+                 "%s/autorun/melodee/stems/melodee-stems", stage) <
+            (int)sizeof stems_bin &&
+        access(stems_bin, F_OK) == 0) {
+      chmod(stems_bin, 0755);
     }
     bn = snprintf(body, sizeof body, "title=%s\nrun=%s\n%s%s%s%s%s%s%s",
                   title, run, safe_args[0] ? "args=" : "",

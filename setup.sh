@@ -755,6 +755,30 @@ try:
         dirs = card_dirs_zip(root, wrapper, sd, allow_all=False)
     rel = script_of(pkg)
     os.chmod(os.path.join(pkg, *rel.split("/")), 0o755)
+    stems_bin = os.path.join(pkg, "melodee", "stems", "melodee-stems")
+    if os.path.isfile(stems_bin):
+        os.chmod(stems_bin, 0o755)
+        run_file = os.path.join(pkg, *rel.split("/"))
+        if os.path.isfile(run_file):
+            try:
+                with open(run_file, "r", encoding="utf-8", errors="replace") as rf:
+                    content = rf.read()
+                if "MELODEE_STEMS_ENGINE" not in content and "sd-boot.sh" in content:
+                    dropin_snippet = (
+                        'mkdir -p /run/systemd/system/sample-base.service.d\n'
+                        'cat > /run/systemd/system/sample-base.service.d/stems.conf <<CONF\n'
+                        '[Service]\n'
+                        'Environment="MELODEE_STEMS_ENGINE=$D/melodee/stems/melodee-stems"\n'
+                        'Environment="MELODEE_STEMS_MODEL=$D/melodee/stems/spleeter-4stems.f16"\n'
+                        'CONF\n'
+                    )
+                    idx = content.find('/bin/sh "$D/melodee/sd-boot.sh"')
+                    if idx >= 0:
+                        content = content[:idx] + dropin_snippet + content[idx:]
+                        with open(run_file, "w", encoding="utf-8") as wf:
+                            wf.write(content)
+            except Exception:
+                pass
     takeover = os.path.isfile(os.path.join(pkg, "mod-launcher.sh"))
     with open(os.path.join(stage, "boot.entry"), "w") as f:
         if dirs:
@@ -1055,7 +1079,7 @@ EOF
 set -eu
 D=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 card=$(CDPATH= cd -- "$(dirname -- "$D")" && pwd)
-if mount -o remount,exec "$card"; then
+if mount -o remount,exec,symfollow "$card" 2>/dev/null || mount -o remount,exec "$card"; then
   echo "remount exec $card"
 else
   echo "WARN: could not remount exec $card"
@@ -1228,7 +1252,7 @@ exec >> "$RAM/web.log" 2>&1
 echo 'MPC_BOOT_WEB_START'
 remount_card() {
   card=$(CDPATH= cd -- "$(dirname -- "$A")" && pwd)
-  if mount -o remount,exec "$card"; then
+  if mount -o remount,exec,symfollow "$card" 2>/dev/null || mount -o remount,exec "$card"; then
     echo "remount exec $card"
   else
     echo "WARN: could not remount exec $card"

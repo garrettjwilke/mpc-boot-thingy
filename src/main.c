@@ -578,6 +578,9 @@ static int remount_exec(const char *card) {
   char target[512];
   if (mount_point(card, target, sizeof target) != 0)
     return -1;
+  char *argv_sym[] = {"mount", "-o", "remount,exec,symfollow", target, NULL};
+  if (run_cmd(argv_sym) == 0)
+    return 0;
   char *argv[] = {"mount", "-o", "remount,exec", target, NULL};
   return run_cmd(argv);
 }
@@ -1090,6 +1093,34 @@ static int launch_autorun(struct surface *midi, struct screen *scr,
   surface_all_off(midi);
   surface_close(midi);
   screen_close(scr);
+
+  /* Configure sample-base environment if the app provides melodee stems */
+  const char *slash = strrchr(script, '/');
+  if (slash && slash != script) {
+    char app_dir[512], stems_bin[512], stems_model[512];
+    size_t dlen = (size_t)(slash - script);
+    if (dlen < sizeof app_dir) {
+      memcpy(app_dir, script, dlen);
+      app_dir[dlen] = 0;
+      if (snprintf(stems_bin, sizeof stems_bin, "%s/melodee/stems/melodee-stems",
+                   app_dir) < (int)sizeof stems_bin &&
+          access(stems_bin, F_OK) == 0) {
+        chmod(stems_bin, 0755);
+        mkdir("/run/systemd", 0755);
+        mkdir("/run/systemd/system", 0755);
+        mkdir("/run/systemd/system/sample-base.service.d", 0755);
+        FILE *f = fopen("/run/systemd/system/sample-base.service.d/stems.conf", "w");
+        if (f) {
+          snprintf(stems_model, sizeof stems_model,
+                   "%s/melodee/stems/spleeter-4stems.f16", app_dir);
+          fprintf(f, "[Service]\nEnvironment=\"MELODEE_STEMS_ENGINE=%s\"\n"
+                     "Environment=\"MELODEE_STEMS_MODEL=%s\"\n",
+                  stems_bin, stems_model);
+          fclose(f);
+        }
+      }
+    }
+  }
 
   if (kind == 0) {
     if (queue_handoff(script) != 0) {
